@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Graphfly</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand__name">Graphfly</div>
+          <div class="brand__tag">Code Intelligence Graph</div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav__item" data-route="onboarding">Onboarding</button>
+          <button class="nav__item" data-route="graph">Graph Explorer</button>
+          <button class="nav__item" data-route="docs">Docs</button>
+        </nav>
+
+        <div class="sidebar__footer">
+          <div class="meta">
+            <div class="meta__label">Mode</div>
+            <select id="modeSelect" class="select">
+              <option value="default">Default</option>
+              <option value="support_safe">Support-safe</option>
+            </select>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar__title" id="pageTitle">Onboarding</div>
+          <div class="topbar__right">
+            <span class="pill">No code bodies by default</span>
+          </div>
+        </header>
+
+        <section class="page" id="page"></section>
+      </main>
+    </div>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
+

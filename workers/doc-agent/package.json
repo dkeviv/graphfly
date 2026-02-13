@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/doc-agent-worker",
+  "private": true,
+  "type": "module"
+}
+

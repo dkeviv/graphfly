@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/github-webhooks",
+  "private": true,
+  "type": "module"
+}
+

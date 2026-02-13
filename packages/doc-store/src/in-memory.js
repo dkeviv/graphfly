@@ -1,0 +1,84 @@
+import { hashString } from '../../cig/src/types.js';
+
+function repoKey({ tenantId, repoId }) {
+  return `${tenantId}::${repoId}`;
+}
+
+export class InMemoryDocStore {
+  constructor() {
+    this._blocks = new Map(); // repoKey -> Map(blockId -> block)
+    this._evidence = new Map(); // repoKey -> Map(blockId -> evidence[])
+    this._prRuns = new Map(); // repoKey -> Map(prRunId -> prRun)
+  }
+
+  upsertBlock({ tenantId, repoId, docFile, blockAnchor, blockType, content, status = 'fresh' }) {
+    const rk = repoKey({ tenantId, repoId });
+    if (!this._blocks.has(rk)) this._blocks.set(rk, new Map());
+    const id = hashString(`${docFile}::${blockAnchor}`);
+    const block = {
+      id,
+      tenantId,
+      repoId,
+      docFile,
+      blockAnchor,
+      blockType,
+      status,
+      content,
+      contentHash: hashString(content),
+      updatedAt: Date.now()
+    };
+    this._blocks.get(rk).set(id, block);
+    if (!this._evidence.has(rk)) this._evidence.set(rk, new Map());
+    if (!this._evidence.get(rk).has(id)) this._evidence.get(rk).set(id, []);
+    return block;
+  }
+
+  listBlocks({ tenantId, repoId, status = null } = {}) {
+    const rk = repoKey({ tenantId, repoId });
+    const blocks = Array.from(this._blocks.get(rk)?.values() ?? []);
+    return status ? blocks.filter((b) => b.status === status) : blocks;
+  }
+
+  getBlock({ tenantId, repoId, blockId }) {
+    const rk = repoKey({ tenantId, repoId });
+    return this._blocks.get(rk)?.get(blockId) ?? null;
+  }
+
+  setEvidence({ tenantId, repoId, blockId, evidence }) {
+    const rk = repoKey({ tenantId, repoId });
+    if (!this._evidence.has(rk)) this._evidence.set(rk, new Map());
+    this._evidence.get(rk).set(blockId, evidence ?? []);
+  }
+
+  getEvidence({ tenantId, repoId, blockId }) {
+    const rk = repoKey({ tenantId, repoId });
+    return Array.from(this._evidence.get(rk)?.get(blockId) ?? []);
+  }
+
+  markBlocksStaleForSymbolUids({ tenantId, repoId, symbolUids }) {
+    const rk = repoKey({ tenantId, repoId });
+    const blocks = this._blocks.get(rk);
+    if (!blocks) return 0;
+    const s = new Set(symbolUids ?? []);
+    let count = 0;
+    for (const b of blocks.values()) {
+      if (b.status === 'locked') continue;
+      const ev = this.getEvidence({ tenantId, repoId, blockId: b.id });
+      if (ev.some((e) => s.has(e.symbolUid))) {
+        b.status = 'stale';
+        count++;
+      }
+    }
+    return count;
+  }
+
+  createPrRun({ tenantId, repoId, triggerSha, status = 'pending' }) {
+    const rk = repoKey({ tenantId, repoId });
+    if (!this._prRuns.has(rk)) this._prRuns.set(rk, new Map());
+    const id = hashString(`${triggerSha}:${Date.now()}:${Math.random()}`);
+    const pr = { id, tenantId, repoId, triggerSha, status, createdAt: Date.now() };
+    this._prRuns.get(rk).set(id, pr);
+    return pr;
+  }
+}
+

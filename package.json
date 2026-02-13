@@ -1,0 +1,18 @@
+{
+  "name": "graphfly",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "dev:api": "node apps/api/src/server.js",
+    "dev:web": "node apps/web/dev-server.js",
+    "index:mock": "node workers/indexer/src/mock-indexer.js",
+    "ingest:mock": "node workers/indexer/src/mock-index-and-ingest.js"
+  }
+}
+

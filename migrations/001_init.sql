@@ -1,0 +1,315 @@
+-- Graphfly initial schema (spec-aligned)
+-- Source of truth: docs/03_TECHNICAL_SPEC.md
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "vector";
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- ORGS / REPOS
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS orgs (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name            TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS repos (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id         UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    full_name         TEXT NOT NULL, -- "org/repo"
+    default_branch    TEXT NOT NULL DEFAULT 'main',
+    github_repo_id    BIGINT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, full_name)
+);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- GRAPH NODES (Code Intelligence Graph + Public Contract Graph)
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    node_key        TEXT NOT NULL,  -- legacy/deterministic per-indexer key
+
+    -- Robust identity
+    symbol_uid      TEXT NOT NULL,
+    qualified_name  TEXT,
+
+    name            TEXT,
+    node_type       TEXT NOT NULL,
+    language        TEXT,
+    file_path       TEXT,
+    line_start      INTEGER,
+    line_end        INTEGER,
+    visibility      TEXT
+                    CHECK (visibility IN ('public','internal','private')),
+
+    -- Contract-first (no code bodies)
+    signature       TEXT,
+    signature_hash  TEXT,
+    declaration     TEXT,
+    docstring       TEXT,
+    type_annotation TEXT,
+    return_type     TEXT,
+    parameters      JSONB,
+    contract        JSONB,
+    constraints     JSONB,
+    allowable_values JSONB,
+    external_ref    JSONB,
+
+    -- Semantic search (pgvector)
+    embedding       vector(384),
+    embedding_text  TEXT,
+
+    first_seen_sha  TEXT NOT NULL,
+    last_seen_sha   TEXT NOT NULL,
+    indexed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    UNIQUE (tenant_id, repo_id, symbol_uid),
+    UNIQUE (tenant_id, repo_id, node_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gn_repo ON graph_nodes(tenant_id, repo_id);
+CREATE INDEX IF NOT EXISTS idx_gn_file ON graph_nodes(tenant_id, repo_id, file_path);
+CREATE INDEX IF NOT EXISTS idx_gn_type ON graph_nodes(tenant_id, repo_id, node_type);
+CREATE INDEX IF NOT EXISTS idx_gn_name ON graph_nodes(tenant_id, repo_id, name);
+CREATE INDEX IF NOT EXISTS idx_gn_uid ON graph_nodes(tenant_id, repo_id, symbol_uid);
+CREATE INDEX IF NOT EXISTS idx_gn_embedding_hnsw ON graph_nodes
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- GRAPH EDGES + EDGE OCCURRENCES
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    source_node_id  UUID NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    target_node_id  UUID NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    edge_type       TEXT NOT NULL,
+    metadata        JSONB,
+    first_seen_sha  TEXT NOT NULL,
+    last_seen_sha   TEXT NOT NULL,
+    indexed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, source_node_id, target_node_id, edge_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ge_source ON graph_edges(tenant_id, source_node_id);
+CREATE INDEX IF NOT EXISTS idx_ge_target ON graph_edges(tenant_id, target_node_id);
+CREATE INDEX IF NOT EXISTS idx_ge_repo_type ON graph_edges(tenant_id, repo_id, edge_type);
+CREATE INDEX IF NOT EXISTS idx_ge_repo_source_type ON graph_edges(tenant_id, repo_id, source_node_id, edge_type);
+CREATE INDEX IF NOT EXISTS idx_ge_repo_target_type ON graph_edges(tenant_id, repo_id, target_node_id, edge_type);
+
+CREATE TABLE IF NOT EXISTS graph_edge_occurrences (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    edge_id         UUID NOT NULL REFERENCES graph_edges(id) ON DELETE CASCADE,
+    file_path       TEXT NOT NULL,
+    line_start      INTEGER NOT NULL,
+    line_end        INTEGER NOT NULL,
+    occurrence_kind TEXT NOT NULL
+                    CHECK (occurrence_kind IN ('call','import','inherit','use','dataflow','route_map','other')),
+    sha             TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, edge_id, file_path, line_start, line_end)
+);
+
+CREATE INDEX IF NOT EXISTS idx_geo_edge ON graph_edge_occurrences(tenant_id, repo_id, edge_id);
+CREATE INDEX IF NOT EXISTS idx_geo_file ON graph_edge_occurrences(tenant_id, repo_id, file_path);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- FLOW ENTRYPOINTS
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS flow_entrypoints (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    entrypoint_key  TEXT NOT NULL,
+    entrypoint_type TEXT NOT NULL,
+    method          TEXT,
+    path            TEXT,
+    symbol_uid      TEXT,
+    file_path       TEXT,
+    line_start      INTEGER,
+    line_end        INTEGER,
+    indexed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, entrypoint_key)
+);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- DEPENDENCY & MANIFEST INTELLIGENCE
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS dependency_manifests (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    manifest_type TEXT NOT NULL,
+    file_path     TEXT NOT NULL,
+    sha           TEXT NOT NULL,
+    parsed        JSONB,
+    parsed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, file_path, sha)
+);
+
+CREATE TABLE IF NOT EXISTS packages (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ecosystem     TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    source        TEXT,
+    homepage      TEXT,
+    license       TEXT,
+    UNIQUE (ecosystem, name)
+);
+
+CREATE TABLE IF NOT EXISTS declared_dependencies (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    manifest_id   UUID NOT NULL REFERENCES dependency_manifests(id) ON DELETE CASCADE,
+    package_id    UUID NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+    scope         TEXT NOT NULL
+                  CHECK (scope IN ('prod','dev','optional','peer','build','test','unknown')),
+    version_range TEXT,
+    metadata      JSONB,
+    UNIQUE (tenant_id, repo_id, manifest_id, package_id, scope)
+);
+
+CREATE TABLE IF NOT EXISTS observed_dependencies (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    package_id    UUID NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+    source_node_id UUID REFERENCES graph_nodes(id) ON DELETE SET NULL,
+    evidence      JSONB,
+    first_seen_sha TEXT NOT NULL,
+    last_seen_sha  TEXT NOT NULL,
+    UNIQUE (tenant_id, repo_id, package_id, source_node_id)
+);
+
+CREATE TABLE IF NOT EXISTS dependency_mismatches (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    mismatch_type TEXT NOT NULL
+                  CHECK (mismatch_type IN ('declared_not_observed','observed_not_declared','version_conflict')),
+    package_id    UUID REFERENCES packages(id) ON DELETE SET NULL,
+    details       JSONB NOT NULL,
+    sha           TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- DOC BLOCKS + EVIDENCE + PR RUNS (docs repo output)
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS doc_blocks (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    doc_file        TEXT NOT NULL,
+    block_anchor    TEXT NOT NULL,
+    block_type      TEXT NOT NULL
+                    CHECK (block_type IN (
+                        'overview', 'function', 'class', 'flow',
+                        'module', 'api_endpoint', 'schema', 'package'
+                    )),
+    status          TEXT NOT NULL DEFAULT 'fresh'
+                    CHECK (status IN ('fresh','stale','locked','error')),
+    content         TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    last_index_sha  TEXT,
+    last_pr_id      UUID,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, doc_file, block_anchor)
+);
+
+CREATE TABLE IF NOT EXISTS doc_evidence (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    doc_block_id    UUID NOT NULL REFERENCES doc_blocks(id) ON DELETE CASCADE,
+    node_id         UUID REFERENCES graph_nodes(id) ON DELETE SET NULL,
+    symbol_uid      TEXT NOT NULL,
+    qualified_name  TEXT,
+    file_path       TEXT,
+    line_start      INTEGER,
+    line_end        INTEGER,
+    sha             TEXT NOT NULL,
+    contract_hash   TEXT,
+    evidence_kind   TEXT NOT NULL DEFAULT 'contract_location'
+                    CHECK (evidence_kind IN ('contract_location','flow','dependency','other')),
+    evidence_weight NUMERIC(3,2) DEFAULT 1.0
+);
+
+CREATE INDEX IF NOT EXISTS idx_de_node_block ON doc_evidence(node_id, doc_block_id);
+CREATE INDEX IF NOT EXISTS idx_de_symbol_uid ON doc_evidence(symbol_uid);
+CREATE INDEX IF NOT EXISTS idx_de_block ON doc_evidence(doc_block_id);
+CREATE INDEX IF NOT EXISTS idx_de_tenant ON doc_evidence(tenant_id);
+
+CREATE TABLE IF NOT EXISTS pr_runs (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id        UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id          UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    trigger_sha      TEXT NOT NULL,
+    trigger_pr_num   INTEGER,
+    status           TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','running','success','failure','skipped')),
+    docs_branch      TEXT,
+    docs_pr_number   INTEGER,
+    docs_pr_url      TEXT,
+    blocks_updated   INTEGER DEFAULT 0,
+    blocks_created   INTEGER DEFAULT 0,
+    blocks_unchanged INTEGER DEFAULT 0,
+    trigger_node_ids UUID[],
+    agent_session_id TEXT,
+    error_message    TEXT,
+    started_at       TIMESTAMPTZ,
+    completed_at     TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pr_repo ON pr_runs(tenant_id, repo_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pr_status ON pr_runs(tenant_id, status);
+
+ALTER TABLE doc_blocks
+    ADD CONSTRAINT IF NOT EXISTS fk_last_pr
+    FOREIGN KEY (last_pr_id) REFERENCES pr_runs(id) ON DELETE SET NULL;
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- ROW-LEVEL SECURITY (tenant-scoped tables)
+-- ═══════════════════════════════════════════════════════════════════════
+ALTER TABLE repos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
+
+-- RLS policy pattern (replicate per table)
+DROP POLICY IF EXISTS tenant_isolation_repos ON repos;
+CREATE POLICY tenant_isolation_repos ON repos
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_graph_nodes ON graph_nodes;
+CREATE POLICY tenant_isolation_graph_nodes ON graph_nodes
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_graph_edges ON graph_edges;
+CREATE POLICY tenant_isolation_graph_edges ON graph_edges
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_doc_blocks ON doc_blocks;
+CREATE POLICY tenant_isolation_doc_blocks ON doc_blocks
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_doc_evidence ON doc_evidence;
+CREATE POLICY tenant_isolation_doc_evidence ON doc_evidence
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_pr_runs ON pr_runs;
+CREATE POLICY tenant_isolation_pr_runs ON pr_runs
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
