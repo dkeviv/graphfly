@@ -8,13 +8,30 @@ function slugify(key) {
 }
 
 function filterEntrypoints(entrypoints, allowedKeys) {
-  if (!allowedKeys || allowedKeys.size === 0) return entrypoints;
+  if (!allowedKeys) return entrypoints;
+  if (allowedKeys.size === 0) return [];
   return entrypoints.filter((ep) => allowedKeys.has(ep.entrypoint_key));
 }
 
-function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha, entrypointKeys }) {
+function filterPublicNodes(nodes, allowedSymbolUids) {
+  if (!allowedSymbolUids) return nodes;
+  return nodes.filter((n) => allowedSymbolUids.has(n.symbol_uid));
+}
+
+function blockTypeFromNodeType(nodeType) {
+  const t = String(nodeType ?? '').toLowerCase();
+  if (t === 'function') return 'function';
+  if (t === 'class') return 'class';
+  if (t === 'apiendpoint') return 'api_endpoint';
+  if (t === 'module' || t === 'file') return 'module';
+  if (t === 'package') return 'package';
+  return 'overview';
+}
+
+function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha, entrypointKeys, symbolUids }) {
   let callCount = 0;
   let cachedEntrypoints = null;
+  let cachedPublicNodes = null;
 
   return async ({ body }) => {
     callCount++;
@@ -30,6 +47,12 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
               type: 'function_call',
               name: 'flows_entrypoints_list',
               call_id: 'call_entrypoints',
+              arguments: JSON.stringify({})
+            },
+            {
+              type: 'function_call',
+              name: 'public_nodes_list',
+              call_id: 'call_public_nodes',
               arguments: JSON.stringify({})
             }
           ]
@@ -51,6 +74,8 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
     if (callCount === 2) {
       const entrypoints = outputsByCallId.get('call_entrypoints') ?? [];
       cachedEntrypoints = entrypoints;
+      const publicNodes = outputsByCallId.get('call_public_nodes') ?? [];
+      cachedPublicNodes = publicNodes;
       const calls = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const ep = entrypoints[i];
@@ -58,14 +83,26 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
         calls.push({
           type: 'function_call',
           name: 'contracts_get',
-          call_id: `call_contracts_${i}`,
+          call_id: `call_contracts_flow_${i}`,
           arguments: JSON.stringify({ symbolUid })
         });
         calls.push({
           type: 'function_call',
           name: 'flows_trace',
-          call_id: `call_trace_${i}`,
+          call_id: `call_trace_flow_${i}`,
           arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 })
+        });
+      }
+
+      for (let i = 0; i < publicNodes.length; i++) {
+        const n = publicNodes[i];
+        const symbolUid = n.symbol_uid ?? n.symbolUid;
+        if (!symbolUid) continue;
+        calls.push({
+          type: 'function_call',
+          name: 'contracts_get',
+          call_id: `call_contracts_public_${i}`,
+          arguments: JSON.stringify({ symbolUid })
         });
       }
       return { status: 200, text: '', json: { id: 'resp_2', output: calls } };
@@ -73,12 +110,13 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
 
     if (callCount === 3) {
       const entrypoints = cachedEntrypoints ?? (await store.listFlowEntrypoints({ tenantId, repoId }));
+      const publicNodes = cachedPublicNodes ?? [];
       const calls = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const ep = entrypoints[i];
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
-        const contractPayload = outputsByCallId.get(`call_contracts_${i}`);
-        const tracePayload = outputsByCallId.get(`call_trace_${i}`);
+        const contractPayload = outputsByCallId.get(`call_contracts_flow_${i}`);
+        const tracePayload = outputsByCallId.get(`call_trace_flow_${i}`);
         if (!contractPayload) throw new Error('local_openclaw_missing_contract_payload');
 
         const md =
@@ -104,8 +142,40 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
         calls.push({
           type: 'function_call',
           name: 'docs_upsert_block',
-          call_id: `call_docs_${i}`,
+          call_id: `call_docs_flow_${i}`,
           arguments: JSON.stringify({ docFile, blockAnchor, blockType: 'flow', content: md, evidence })
+        });
+      }
+
+      for (let i = 0; i < publicNodes.length; i++) {
+        const contractPayload = outputsByCallId.get(`call_contracts_public_${i}`);
+        if (!contractPayload) continue;
+        const md = renderContractDocBlock(contractPayload);
+        const v = validateDocBlockMarkdown(md);
+        if (!v.ok) throw new Error(`doc_block_invalid:${v.reason}`);
+
+        const symbolUid = contractPayload.symbolUid;
+        const qualifiedName = contractPayload.qualifiedName ?? symbolUid;
+        const nodeType = contractPayload.nodeType ?? null;
+        const blockType = blockTypeFromNodeType(nodeType);
+        const docFile = `contracts/${blockType}/${slugify(qualifiedName)}.md`;
+        const blockAnchor = `## ${qualifiedName}`;
+        const evidence = [
+          {
+            symbolUid,
+            filePath: contractPayload?.location?.filePath ?? null,
+            lineStart: contractPayload?.location?.lineStart ?? null,
+            lineEnd: contractPayload?.location?.lineEnd ?? null,
+            sha: triggerSha,
+            evidenceKind: 'contract_location'
+          }
+        ];
+
+        calls.push({
+          type: 'function_call',
+          name: 'docs_upsert_block',
+          call_id: `call_docs_public_${i}`,
+          arguments: JSON.stringify({ docFile, blockAnchor, blockType, content: md, evidence })
         });
       }
 
@@ -113,12 +183,10 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
     }
 
     if (callCount === 4) {
-      const entrypoints = cachedEntrypoints ?? (await store.listFlowEntrypoints({ tenantId, repoId }));
       const files = [];
-      for (let i = 0; i < entrypoints.length; i++) {
-        const upsertResult = outputsByCallId.get(`call_docs_${i}`);
-        if (!upsertResult?.docFile || !upsertResult?.content) continue;
-        files.push({ path: upsertResult.docFile, content: upsertResult.content });
+      for (const out of outputsByCallId.values()) {
+        if (!out?.docFile || !out?.content) continue;
+        files.push({ path: out.docFile, content: out.content });
       }
 
       return {
@@ -165,6 +233,7 @@ export async function runDocPrWithOpenClaw({
   triggerSha,
   prRunId = null,
   entrypointKeys = null,
+  symbolUids = null,
   openclaw = null
 }) {
   if (!docStore) throw new Error('docStore is required');
@@ -185,6 +254,39 @@ export async function runDocPrWithOpenClaw({
       }
     },
     {
+      name: 'public_nodes_list',
+      description: 'Lists documentable public contract nodes (no code bodies).',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          nodeTypes: { type: 'array', items: { type: 'string' } }
+        },
+        required: []
+      },
+      handler: async ({ nodeTypes = null } = {}) => {
+        const allowTypes = Array.isArray(nodeTypes) && nodeTypes.length > 0 ? new Set(nodeTypes) : null;
+        const nodes = await store.listNodes({ tenantId, repoId });
+        const docTypes = new Set(['ApiEndpoint', 'Function', 'Class', 'Package', 'Module', 'File']);
+        const filtered = nodes.filter((n) => {
+          if (n?.visibility !== 'public') return false;
+          const t = String(n?.node_type ?? '');
+          if (allowTypes && !allowTypes.has(t)) return false;
+          return docTypes.has(t);
+        });
+        const allowed = symbolUids ? new Set(symbolUids) : null;
+        const out = filterPublicNodes(filtered, allowed);
+        return out.map((n) => ({
+          symbol_uid: n.symbol_uid,
+          qualified_name: n.qualified_name ?? null,
+          node_type: n.node_type ?? null,
+          file_path: n.file_path ?? null,
+          line_start: n.line_start ?? null,
+          line_end: n.line_end ?? null
+        }));
+      }
+    },
+    {
       name: 'contracts_get',
       description: 'Fetches Public Contract Graph data for a symbol (no code bodies).',
       parameters: {
@@ -199,6 +301,9 @@ export async function runDocPrWithOpenClaw({
         return {
           symbolUid: n.symbol_uid,
           qualifiedName: n.qualified_name,
+          nodeType: n.node_type ?? null,
+          symbolKind: n.symbol_kind ?? null,
+          visibility: n.visibility ?? null,
           signature: n.signature ?? null,
           contract: n.contract ?? null,
           constraints: n.constraints ?? null,
@@ -329,7 +434,8 @@ export async function runDocPrWithOpenClaw({
           store,
           docsRepoFullName,
           triggerSha,
-          entrypointKeys: entrypointKeys ? new Set(entrypointKeys) : null
+          entrypointKeys: entrypointKeys ? new Set(entrypointKeys) : null,
+          symbolUids: symbolUids ? new Set(symbolUids) : null
         }));
 
   const instructions = [
@@ -341,8 +447,9 @@ export async function runDocPrWithOpenClaw({
   ].join('\n');
 
   const input = [
-    'Create/update documentation for current flow entrypoints as individual files under flows/.',
-    'For each entrypoint: fetch contract, trace derived flow, upsert a single doc block for it.',
+    'Create/update documentation for flow entrypoints (flows/) and public contracts (contracts/).',
+    'For each flow entrypoint: fetch contract, trace derived flow, upsert a single doc block for it.',
+    'For each public contract node (API endpoints, exported functions/classes): fetch contract and upsert a single doc block for it.',
     'Finally, open a PR in the docs repo with the generated files.'
   ].join('\n');
 

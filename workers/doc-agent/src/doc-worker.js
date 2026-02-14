@@ -24,21 +24,40 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
 
       try {
         // Surgical regeneration: if there are stale blocks, only regenerate those.
-        let entrypointKeys = null;
+        let entrypointKeys = null; // null => all; [] => none
+        let symbolUids = null; // null => all; [] => none
         if (docStore?.listBlocks && docStore?.getEvidence) {
           const stale = await docStore.listBlocks({ tenantId, repoId, status: 'stale' });
           if (Array.isArray(stale) && stale.length > 0) {
             const keySet = new Set();
+            const symbolSet = new Set();
             const byDocFile = new Map(entrypoints.map((ep) => [docPathByEntrypointKey.get(ep.entrypoint_key), ep.entrypoint_key]));
             for (const b of stale) {
-              const k = byDocFile.get(b.doc_file ?? b.docFile);
-              if (k) keySet.add(k);
+              const docFile = b.doc_file ?? b.docFile;
+              const k = byDocFile.get(docFile);
+              if (k) {
+                keySet.add(k);
+              } else if (docFile) {
+                const ev = await docStore.getEvidence({ tenantId, repoId, blockId: b.id });
+                const first = Array.isArray(ev) ? ev[0] : null;
+                const uid = first?.symbol_uid ?? first?.symbolUid ?? null;
+                if (typeof uid === 'string' && uid.length > 0) symbolSet.add(uid);
+              }
             }
-            if (keySet.size > 0) entrypointKeys = Array.from(keySet);
+            entrypointKeys = Array.from(keySet);
+            symbolUids = Array.from(symbolSet);
           }
         }
 
-        const processedCount = entrypointKeys ? entrypointKeys.length : entrypoints.length;
+        const docTypes = new Set(['ApiEndpoint', 'Function', 'Class', 'Package', 'Module', 'File']);
+        const publicNodesCount = (await store.listNodes({ tenantId, repoId })).filter(
+          (n) => n?.visibility === 'public' && docTypes.has(String(n?.node_type ?? ''))
+        ).length;
+
+        const processedCount =
+          entrypointKeys !== null || symbolUids !== null
+            ? (entrypointKeys?.length ?? 0) + (symbolUids?.length ?? 0)
+            : entrypoints.length + publicNodesCount;
         const plan = await Promise.resolve(entitlements.getPlan(tenantId));
         const limits = limitsForPlan(plan);
         const allow = await usage.consumeDocBlocksOrDeny({ tenantId, limitPerMonth: limits.docBlocksPerMonth, amount: processedCount });
@@ -63,7 +82,8 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
           docsRepoFullName,
           triggerSha,
           prRunId: prRun?.id ?? null,
-          entrypointKeys
+          entrypointKeys,
+          symbolUids
         });
 
         if (prRun && docStore?.updatePrRun) {
