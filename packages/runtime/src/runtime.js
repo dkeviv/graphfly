@@ -6,11 +6,13 @@ import { makeGitHubWebhookHandler } from '../../../apps/api/src/github-webhook.j
 import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker.js';
 import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../github-service/src/docs-writer.js';
+import { LocalDocsWriter } from '../../github-service/src/local-docs-writer.js';
 import { InMemoryRepoRegistry } from './repo-registry.js';
 
 export function createRuntime({
   githubWebhookSecret,
   docsRepoFullName = 'org/docs',
+  docsRepoPath = null,
   store = null,
   docStore = null,
   indexQueue = null,
@@ -23,7 +25,11 @@ export function createRuntime({
   const iq = indexQueue ?? new InMemoryQueue('index');
   const dq = docQueue ?? new InMemoryQueue('doc');
   const registry = repoRegistry ?? new InMemoryRepoRegistry();
-  const writer = docsWriter ?? new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName });
+  const writer =
+    docsWriter ??
+    (docsRepoPath
+      ? new LocalDocsWriter({ configuredDocsRepoFullName: docsRepoFullName, docsRepoPath })
+      : new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName }));
 
   const indexer = createIndexerWorker({ store: graphStore, docQueue: dq, docStore: docsStore });
   const docWorker = createDocWorker({ store: graphStore, docsWriter: writer, docStore: docsStore });
@@ -63,4 +69,3 @@ export function createRuntime({
     runToIdle
   };
 }
-

@@ -118,3 +118,20 @@ Restore drills should be run periodically and documented (steps, expected timing
 - Schema migrations: run forward-only migrations with rollback plans for critical tables.
 - Secret rotation: rotate GitHub app keys and webhook secrets with documented procedure.
 - Dependency upgrades: cadence (weekly/biweekly) with smoke tests on representative repos.
+
+---
+
+## 8. Local Development (No-Network Mode)
+
+This repository includes a local/test mode that avoids external dependencies and network calls while still exercising the end-to-end pipeline.
+
+**Key environment variables**
+- `SOURCE_REPO_ROOT`: local filesystem path to the **source repo** to index (read-only). Default: `fixtures/sample-repo`.
+- `DOCS_REPO_FULL_NAME`: configured docs repo identifier (string). Default: `org/docs`.
+- `DOCS_REPO_PATH`: local filesystem path to a **separate docs git repository**. When set, docs updates are written by creating a new branch + commit (simulating a PR) and never touch the source repo.
+- `GITHUB_WEBHOOK_SECRET`: secret used to verify GitHub `push` webhooks (HMAC-SHA256).
+- `STRIPE_WEBHOOK_SECRET`: secret used to verify Stripe webhook signatures.
+
+**Operational guardrails (must hold in all environments)**
+- Documentation writes are denied unless the target repo matches the configured docs repo.
+- Doc generation must not include source code bodies/snippets (contract-first blocks only).

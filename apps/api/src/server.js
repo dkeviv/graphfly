@@ -19,6 +19,7 @@ import { InMemoryQueue } from '../../../packages/queue/src/in-memory.js';
 import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker.js';
 import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
+import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 
 const store = new InMemoryGraphStore();
 const docStore = new InMemoryDocStore();
@@ -31,7 +32,11 @@ const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 // In-memory job plumbing (no external deps). In production this is BullMQ + Redis.
 const indexQueue = new InMemoryQueue('index');
 const docQueue = new InMemoryQueue('doc');
-const docsWriter = new GitHubDocsWriter({ configuredDocsRepoFullName: process.env.DOCS_REPO_FULL_NAME ?? 'org/docs' });
+const docsRepoFullName = process.env.DOCS_REPO_FULL_NAME ?? 'org/docs';
+const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
+const docsWriter = docsRepoPath
+  ? new LocalDocsWriter({ configuredDocsRepoFullName: docsRepoFullName, docsRepoPath })
+  : new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName });
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
 const docWorker = createDocWorker({ store, docsWriter, docStore });
 
@@ -52,7 +57,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
       sha: push.sha,
       changedFiles: push.changedFiles,
       removedFiles: push.removedFiles,
-      docsRepoFullName: process.env.DOCS_REPO_FULL_NAME ?? 'org/docs'
+      docsRepoFullName
     });
     await drainOnce();
   }

@@ -966,6 +966,8 @@ export const DOC_AGENT_TOOLS: Tool[] = [
 ];
 ```
 
+**Implementation note (dev/test mode):** In environments without GitHub network access, the `github.create_pr` tool may be backed by a local docs writer that operates on a user-provided **docs git repo path** (create branch → write files → commit). This must still enforce “docs repo only” targeting and must never write to source repos.
+
 ---
 
 ## 3. REST API Specification
