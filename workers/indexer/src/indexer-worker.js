@@ -17,7 +17,7 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
         const impact = await computeImpact({ store, tenantId, repoId, changedFiles, depth: 2 });
-        store.addIndexDiagnostic({
+        await store.addIndexDiagnostic({
           tenantId,
           repoId,
           diagnostic: {

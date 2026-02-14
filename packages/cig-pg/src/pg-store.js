@@ -692,15 +692,33 @@ export class PgGraphStore {
       : [];
   }
 
-  addIndexDiagnostic({ tenantId, repoId, diagnostic }) {
-    const repoKey = this._rk({ tenantId, repoId });
-    if (!this._indexDiagnosticsByKey.has(repoKey)) this._indexDiagnosticsByKey.set(repoKey, []);
-    this._indexDiagnosticsByKey.get(repoKey).push(diagnostic);
+  async addIndexDiagnostic({ tenantId, repoId, diagnostic }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const d = diagnostic ?? {};
+    const sha = String(d.sha ?? 'mock');
+    const mode = String(d.mode ?? 'full');
+    await this._c.query(
+      `INSERT INTO index_diagnostics (tenant_id, repo_id, sha, mode, diagnostic)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (tenant_id, repo_id, sha, mode) DO UPDATE SET
+         diagnostic=EXCLUDED.diagnostic,
+         created_at=now()`,
+      [tenantId, repoId, sha, mode, d]
+    );
   }
 
-  listIndexDiagnostics({ tenantId, repoId }) {
-    const repoKey = this._rk({ tenantId, repoId });
-    return Array.from(this._indexDiagnosticsByKey.get(repoKey) ?? []);
+  async listIndexDiagnostics({ tenantId, repoId, limit = 50 } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 50;
+    const res = await this._c.query(
+      `SELECT diagnostic
+       FROM index_diagnostics
+       WHERE tenant_id=$1 AND repo_id=$2
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [tenantId, repoId, n]
+    );
+    return Array.isArray(res.rows) ? res.rows.map((r) => r.diagnostic).filter(Boolean) : [];
   }
 
   async upsertFlowGraph({ tenantId, repoId, flowGraph }) {

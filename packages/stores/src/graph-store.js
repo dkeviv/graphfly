@@ -73,14 +73,17 @@ export class PgGraphStorePool {
   }
 
   async addIndexDiagnostic({ tenantId, repoId, diagnostic }) {
-    // Not persisted yet in SQL schema; keep in-memory path for now.
-    void repoId;
-    void diagnostic;
-    return withTenantClient({ pool: this._pool, tenantId }, async () => ({ ok: true }));
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.addIndexDiagnostic({ tenantId, repoId, diagnostic });
+    });
   }
 
-  async listIndexDiagnostics() {
-    return [];
+  async listIndexDiagnostics({ tenantId, repoId, limit = 50 } = {}) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listIndexDiagnostics({ tenantId, repoId, limit });
+    });
   }
 
   async listDependencyMismatches({ tenantId, repoId }) {

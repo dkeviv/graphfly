@@ -237,6 +237,22 @@ CREATE TABLE IF NOT EXISTS dependency_mismatches (
 );
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- INDEX DIAGNOSTICS (Incremental correctness transparency)
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS index_diagnostics (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id   UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id     UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    sha         TEXT NOT NULL,
+    mode        TEXT NOT NULL
+                CHECK (mode IN ('full','incremental')),
+    diagnostic  JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, sha, mode)
+);
+CREATE INDEX IF NOT EXISTS idx_idxdiag_repo ON index_diagnostics(tenant_id, repo_id, created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- DOC BLOCKS + EVIDENCE + PR RUNS (docs repo output)
 -- ═══════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS doc_blocks (
@@ -328,6 +344,7 @@ ALTER TABLE dependency_manifests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE declared_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE observed_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dependency_mismatches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE index_diagnostics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
@@ -379,6 +396,10 @@ CREATE POLICY tenant_isolation_observed_dependencies ON observed_dependencies
 
 DROP POLICY IF EXISTS tenant_isolation_dependency_mismatches ON dependency_mismatches;
 CREATE POLICY tenant_isolation_dependency_mismatches ON dependency_mismatches
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_index_diagnostics ON index_diagnostics;
+CREATE POLICY tenant_isolation_index_diagnostics ON index_diagnostics
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_doc_blocks ON doc_blocks;
