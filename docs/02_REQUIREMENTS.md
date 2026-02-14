@@ -338,7 +338,7 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 |--------|--------|-------------|
 | Graph node lookup | <10ms p99 | PostgreSQL indexed query |
 | Blast radius query (2-hop) | <100ms p99 | JOIN query with indexes |
-| Semantic search (top-10) | <50ms p99 | pgvector IVFFlat |
+| Semantic search (top-10) | <50ms p99 | pgvector HNSW |
 | Incremental index (50 files) | <60s | End-to-end wall clock |
 | Full index (1,000 files) | <300s | End-to-end wall clock |
 | Doc agent run (10 blocks) | <120s | End-to-end including LLM calls |

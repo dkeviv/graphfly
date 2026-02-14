@@ -20,6 +20,7 @@ import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker
 import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
+import { createStripeClient, createCheckoutSession, createCustomerPortalSession } from '../../../packages/stripe-service/src/stripe.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -81,6 +82,51 @@ const handleStripeWebhook = makeStripeWebhookHandler({
 
 router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
   return handleStripeWebhook({ headers, rawBody });
+});
+
+router.get('/billing/summary', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const plan = entitlements.getPlan(tenantId);
+  return { status: 200, body: { tenantId, plan } };
+});
+
+router.post('/billing/checkout', async (req) => {
+  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const plan = req.body?.plan ?? 'pro';
+  // For this repo: org billing persistence is not wired yet; use env for customer + price.
+  const apiKey = process.env.STRIPE_SECRET_KEY ?? '';
+  const customerId = process.env.STRIPE_CUSTOMER_ID ?? '';
+  const priceId =
+    plan === 'enterprise' ? process.env.STRIPE_ENTERPRISE_PRICE_ID ?? '' : process.env.STRIPE_PRO_PRICE_ID ?? '';
+  const successUrl = process.env.STRIPE_SUCCESS_URL ?? 'http://localhost/success';
+  const cancelUrl = process.env.STRIPE_CANCEL_URL ?? 'http://localhost/cancel';
+
+  if (!apiKey || !customerId || !priceId) {
+    return { status: 501, body: { error: 'stripe_not_configured', tenantId, missing: { apiKey: !apiKey, customerId: !customerId, priceId: !priceId } } };
+  }
+  const stripe = await createStripeClient({ apiKey });
+  const session = await createCheckoutSession({
+    stripe,
+    customerId,
+    priceId,
+    successUrl,
+    cancelUrl,
+    metadata: { tenantId, plan }
+  });
+  return { status: 200, body: { url: session.url } };
+});
+
+router.post('/billing/portal', async (req) => {
+  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const apiKey = process.env.STRIPE_SECRET_KEY ?? '';
+  const customerId = process.env.STRIPE_CUSTOMER_ID ?? '';
+  const returnUrl = process.env.STRIPE_RETURN_URL ?? 'http://localhost/billing';
+  if (!apiKey || !customerId) {
+    return { status: 501, body: { error: 'stripe_not_configured', tenantId, missing: { apiKey: !apiKey, customerId: !customerId } } };
+  }
+  const stripe = await createStripeClient({ apiKey });
+  const session = await createCustomerPortalSession({ stripe, customerId, returnUrl });
+  return { status: 200, body: { url: session.url } };
 });
 
 router.post('/webhooks/github', async ({ headers, rawBody }) => {

@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/stripe-service",
+  "private": true,
+  "type": "module"
+}
+
