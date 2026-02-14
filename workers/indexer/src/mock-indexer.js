@@ -206,6 +206,7 @@ export function mockIndexRepo({
   const packageToSymbol = new Map(); // package_key -> symbol_uid
   const declaredPackages = new Set(); // package_key
   const observedPackages = new Map(); // package_key -> Set(file_path)
+  const declaredRanges = new Map(); // package_key -> Map(version_range -> Set(manifest_file_path))
 
   for (const absFile of sourceFiles) {
     const filePath = rel(absRoot, absFile);
@@ -241,6 +242,9 @@ export function mockIndexRepo({
     for (const d of declared) {
       const packageKey = `npm:${d.name}`;
       declaredPackages.add(packageKey);
+      if (!declaredRanges.has(packageKey)) declaredRanges.set(packageKey, new Map());
+      if (!declaredRanges.get(packageKey).has(d.range)) declaredRanges.get(packageKey).set(d.range, new Set());
+      declaredRanges.get(packageKey).get(d.range).add(filePath);
 
       emit({
         type: 'declared_dependency',
@@ -268,6 +272,25 @@ export function mockIndexRepo({
         }
       });
     }
+  }
+
+  // Emit version conflict mismatches across manifests (monorepo) without assuming which side is correct.
+  for (const [packageKey, ranges] of declaredRanges.entries()) {
+    if (ranges.size <= 1) continue;
+    const details = {
+      package_key: packageKey,
+      version_ranges: Array.from(ranges.keys()).sort(),
+      manifests: Array.from(ranges.entries()).map(([range, files]) => ({ version_range: range, files: Array.from(files).sort() }))
+    };
+    emit({
+      type: 'dependency_mismatch',
+      data: {
+        mismatch_type: 'version_conflict',
+        package_key: packageKey,
+        details,
+        sha
+      }
+    });
   }
 
   for (const absFile of sourceFiles) {

@@ -23,5 +23,5 @@ test('mock indexer emits flow entrypoints, declared/observed deps, and mismatche
 
   const mismatches = store.listDependencyMismatches({ tenantId: 't-1', repoId: 'r-1' });
   assert.ok(mismatches.some((m) => m.package_key === 'npm:vitest' && m.mismatch_type === 'declared_not_observed'));
+  assert.ok(mismatches.some((m) => m.package_key === 'npm:express' && m.mismatch_type === 'version_conflict'));
 });
-
