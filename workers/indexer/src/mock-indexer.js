@@ -83,6 +83,178 @@ function safeJsonParse(text) {
   }
 }
 
+function findJsDocBlock(lines, i) {
+  // Find the closest /** ... */ immediately above line i (0-based), within a small window.
+  const maxLookback = 40;
+  let end = -1;
+  for (let j = i - 1; j >= 0 && i - j <= maxLookback; j--) {
+    if (lines[j].includes('*/')) {
+      end = j;
+      break;
+    }
+    if (lines[j].trim() !== '' && !lines[j].trim().startsWith('*') && !lines[j].trim().startsWith('//')) {
+      break;
+    }
+  }
+  if (end < 0) return null;
+
+  let start = -1;
+  for (let j = end; j >= 0 && i - j <= maxLookback; j--) {
+    if (lines[j].includes('/**')) {
+      start = j;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  return lines.slice(start, end + 1);
+}
+
+function parseJsDoc(jsdocLines) {
+  if (!Array.isArray(jsdocLines) || jsdocLines.length === 0) return null;
+  const clean = jsdocLines
+    .map((l) => l.trim().replace(/^\/\*\*\s?/, '').replace(/\*\/\s?$/, '').replace(/^\*\s?/, '').trim())
+    .filter((l) => l.length > 0);
+
+  const params = new Map(); // name -> { type, optional, description }
+  const constraints = Object.create(null); // name -> { min,max,pattern }
+  const allowableValues = Object.create(null); // name -> array
+  let returnsType = null;
+  const descLines = [];
+
+  for (const line of clean) {
+    if (line.startsWith('@param')) {
+      const m = line.match(/^@param\s+\{([^}]+)\}\s+(\[[^\]]+\]|[A-Za-z0-9_$]+)(?:\s*-\s*(.*))?$/);
+      if (m) {
+        const type = m[1].trim();
+        let name = m[2].trim();
+        const optional = name.startsWith('[') && name.endsWith(']');
+        if (optional) name = name.slice(1, -1);
+        const description = (m[3] ?? '').trim() || null;
+        params.set(name, { type, optional, description });
+
+        const values = [];
+        for (const mm of type.matchAll(/'([^']+)'|\"([^\"]+)\"/g)) {
+          const v = mm[1] ?? mm[2];
+          if (v) values.push(v);
+        }
+        if (values.length > 0) allowableValues[name] = values;
+      }
+      continue;
+    }
+    if (line.startsWith('@returns')) {
+      const m = line.match(/^@returns\s+\{([^}]+)\}/);
+      if (m) returnsType = m[1].trim();
+      continue;
+    }
+    if (line.startsWith('@min') || line.startsWith('@max') || line.startsWith('@pattern')) {
+      const m = line.match(/^@(min|max|pattern)\s+([A-Za-z0-9_$]+)\s+(.+?)\s*$/);
+      if (m) {
+        const kind = m[1];
+        const name = m[2];
+        const value = m[3];
+        if (!constraints[name]) constraints[name] = {};
+        if (kind === 'min' || kind === 'max') {
+          const n = Number(value);
+          if (Number.isFinite(n)) constraints[name][kind] = n;
+        } else {
+          constraints[name].pattern = value;
+        }
+      }
+      continue;
+    }
+    if (!line.startsWith('@')) descLines.push(line);
+  }
+
+  const description = descLines.length > 0 ? descLines.join(' ').trim() : null;
+  const out = { description, params, returnsType, constraints, allowableValues };
+  return out;
+}
+
+function parseParamNames(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return [];
+  return s
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .map((p) => p.replace(/=.*$/g, '').trim())
+    .map((p) => p.replace(/^\.\.\./, '').trim())
+    .filter((p) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(p));
+}
+
+function parseExportedDecls(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fm = line.match(/^\s*export\s+function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/);
+    if (fm) {
+      out.push({
+        kind: 'function',
+        name: fm[1],
+        paramsRaw: fm[2],
+        line: i + 1,
+        jsdoc: parseJsDoc(findJsDocBlock(lines, i))
+      });
+      continue;
+    }
+    const cm = line.match(/^\s*export\s+class\s+([A-Za-z0-9_$]+)/);
+    if (cm) {
+      out.push({
+        kind: 'class',
+        name: cm[1],
+        paramsRaw: '',
+        line: i + 1,
+        jsdoc: parseJsDoc(findJsDocBlock(lines, i))
+      });
+    }
+  }
+  return out;
+}
+
+function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language = 'js' }) {
+  const qualifiedName = `${filePath}::${name}`;
+  const paramNames = params.length > 0 ? params : Array.from(jsdoc?.params?.keys?.() ?? []);
+  const signature = kind === 'class' ? `class ${name}` : `function ${name}(${paramNames.join(', ')})`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language, qualifiedName, signatureHash });
+
+  const parameters = paramNames.map((p) => {
+    const info = jsdoc?.params?.get?.(p) ?? null;
+    return { name: p, type: info?.type ?? null, optional: Boolean(info?.optional) || undefined, description: info?.description ?? null };
+  });
+
+  const contract =
+    kind === 'class'
+      ? { kind: 'class', name, constructor: { parameters } }
+      : { kind: 'function', name, parameters, returns: jsdoc?.returnsType ? { type: jsdoc.returnsType } : null, description: jsdoc?.description ?? null };
+
+  const constraints = jsdoc?.constraints && Object.keys(jsdoc.constraints).length > 0 ? jsdoc.constraints : null;
+  const allowableValues = jsdoc?.allowableValues && Object.keys(jsdoc.allowableValues).length > 0 ? jsdoc.allowableValues : null;
+  const embeddingText = `${qualifiedName} ${signature} ${jsdoc?.description ?? ''}`.trim();
+
+  return {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name,
+    node_type: kind === 'class' ? 'Class' : 'Function',
+    file_path: filePath,
+    line_start: line,
+    line_end: line,
+    language,
+    visibility: 'public',
+    signature,
+    signature_hash: signatureHash,
+    parameters,
+    contract,
+    constraints,
+    allowable_values: allowableValues,
+    embedding_text: embeddingText,
+    embedding: embedText384(embeddingText),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
+}
+
 function makePackageNode({ ecosystem, name, sha }) {
   const qualifiedName = `${ecosystem}:${name}`;
   const signature = `package ${qualifiedName}`;
@@ -212,6 +384,7 @@ export function mockIndexRepo({
 
   const fileToSymbol = new Map(); // file_path -> symbol_uid
   const packageToSymbol = new Map(); // package_key -> symbol_uid
+  const exportedByFile = new Map(); // file_path -> Map(exported_name -> symbol_uid)
   const declaredPackages = new Set(); // package_key
   const observedPackages = new Map(); // package_key -> Set(file_path)
   const declaredRanges = new Map(); // package_key -> Map(version_range -> Set(manifest_file_path))
@@ -307,6 +480,43 @@ export function mockIndexRepo({
     const filePath = rel(absRoot, absFile);
     const sourceUid = fileToSymbol.get(filePath);
     const lines = fs.readFileSync(absFile, 'utf8').split('\n');
+
+    const decls = parseExportedDecls(lines);
+    if (decls.length > 0) {
+      const byName = new Map();
+      for (const d of decls) {
+        const params = parseParamNames(d.paramsRaw);
+        const node = makeExportedSymbolNode({ kind: d.kind, name: d.name, params, jsdoc: d.jsdoc, filePath, line: d.line, sha, language });
+        byName.set(d.name, node.symbol_uid);
+        emit({ type: 'node', data: node });
+
+        emit({
+          type: 'edge',
+          data: {
+            source_symbol_uid: sourceUid,
+            target_symbol_uid: node.symbol_uid,
+            edge_type: 'Defines',
+            metadata: { kind: d.kind },
+            first_seen_sha: sha,
+            last_seen_sha: sha
+          }
+        });
+        emit({
+          type: 'edge_occurrence',
+          data: {
+            source_symbol_uid: sourceUid,
+            target_symbol_uid: node.symbol_uid,
+            edge_type: 'Defines',
+            file_path: filePath,
+            line_start: d.line,
+            line_end: d.line,
+            occurrence_kind: 'other',
+            sha
+          }
+        });
+      }
+      exportedByFile.set(filePath, byName);
+    }
 
     for (const r of parseExpressRoutes(lines)) {
       const epNode = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha });
@@ -457,13 +667,15 @@ export function mockIndexRepo({
       if (!targetUid) continue;
 
       for (const name of imp.names ?? []) {
+        const resolvedExports = exportedByFile.get(resolved);
+        const callTargetUid = resolvedExports?.get(name) ?? targetUid;
         const re = new RegExp(`\\b${name}\\s*\\(`);
         if (lines.some((l) => re.test(l))) {
           emit({
             type: 'edge',
             data: {
               source_symbol_uid: sourceUid,
-              target_symbol_uid: targetUid,
+              target_symbol_uid: callTargetUid,
               edge_type: 'Calls',
               metadata: { callee: name },
               first_seen_sha: sha,
