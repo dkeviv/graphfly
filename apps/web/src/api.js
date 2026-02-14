@@ -23,6 +23,12 @@ export class ApiClient {
     );
   }
 
+  neighborhood({ symbolUid, direction = 'both', limitEdges = 200 }) {
+    return this.getJson(
+      `/graph/neighborhood?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&symbolUid=${encodeURIComponent(symbolUid)}&direction=${encodeURIComponent(direction)}&limitEdges=${encodeURIComponent(String(limitEdges))}&mode=${encodeURIComponent(this.mode)}`
+    );
+  }
+
   contractsGet({ symbolUid }) {
     return this.getJson(
       `/contracts/get?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&symbolUid=${encodeURIComponent(symbolUid)}`

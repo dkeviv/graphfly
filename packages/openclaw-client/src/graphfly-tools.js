@@ -61,7 +61,26 @@ export function makeGraphflyTools({ apiUrl, tenantId, repoId }) {
         if (status !== 200) throw new Error(`graph_blast_radius failed: HTTP ${status}`);
         return json;
       }
+    },
+    {
+      name: 'graph_semantic_search',
+      description: 'Semantic search over Code Intelligence Graph nodes (contract-first, no code bodies).',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 } },
+        required: ['query']
+      },
+      handler: async ({ query, limit = 10 }) => {
+        const { status, json } = await httpGetJson(
+          new URL(
+            `/graph/search?tenantId=${encodeURIComponent(tenantId)}&repoId=${encodeURIComponent(repoId)}&q=${encodeURIComponent(query)}&mode=semantic&limit=${encodeURIComponent(String(limit))}`,
+            apiUrl
+          ).toString()
+        );
+        if (status !== 200) throw new Error(`graph_semantic_search failed: HTTP ${status}`);
+        return json;
+      }
     }
   ];
 }
-

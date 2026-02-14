@@ -12,6 +12,11 @@ export function renderGraphPage({ state, pageEl }) {
     el('div', { class: 'small' }, ['Select a node to view contract and location metadata.'])
   ]);
 
+  const focusEl = el('div', { class: 'card' }, [
+    el('div', { class: 'card__title' }, ['Focus Subgraph (lazy-loaded)']),
+    el('div', { class: 'small' }, ['Select a node to load its neighborhood without rendering the full repo graph.'])
+  ]);
+
   async function runSearch() {
     const q = document.getElementById('searchInput').value;
     const mode = document.getElementById('searchMode').value;
@@ -32,6 +37,24 @@ export function renderGraphPage({ state, pageEl }) {
             const symbolUid = r.node.symbolUid;
             const contract = await api.contractsGet({ symbolUid });
             evidenceEl.replaceWith(renderEvidencePanel(contract));
+
+            const nb = await api.neighborhood({ symbolUid, direction: 'both', limitEdges: 50 });
+            focusEl.replaceWith(
+              el('div', { class: 'card' }, [
+                el('div', { class: 'card__title' }, ['Focus Subgraph (lazy-loaded)']),
+                el('div', { class: 'small' }, [`Nodes: ${nb.nodes?.length ?? 0} • Edges: ${nb.edges?.length ?? 0}`]),
+                el(
+                  'ul',
+                  { class: 'list' },
+                  (nb.edges ?? []).slice(0, 20).map((e) =>
+                    el('li', { class: 'list__item' }, [
+                      el('div', { class: 'h' }, [`${e.edgeType}`]),
+                      el('div', { class: 'small k' }, [`${e.sourceSymbolUid} → ${e.targetSymbolUid}`])
+                    ])
+                  )
+                )
+              ])
+            );
           }
         }, [
           el('div', { class: 'h' }, [r.node.qualifiedName ?? r.node.name ?? r.node.symbolUid]),
@@ -56,8 +79,7 @@ export function renderGraphPage({ state, pageEl }) {
         el('div', { class: 'small' }, ['Results load on demand. Full-repo graph rendering is avoided by default.']),
         resultsEl
       ]),
-      evidenceEl
+      el('div', { class: 'stack' }, [evidenceEl, focusEl])
     ])
   );
 }
-

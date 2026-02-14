@@ -14,6 +14,7 @@ import { makeStripeWebhookHandler } from './stripe-webhook.js';
 import { applyStripeEventToEntitlements } from '../../../packages/billing/src/apply-stripe-event.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
 import { InMemoryDocStore } from '../../../packages/doc-store/src/in-memory.js';
+import { neighborhood } from '../../../packages/cig/src/neighborhood.js';
 
 const store = new InMemoryGraphStore();
 const docStore = new InMemoryDocStore();
@@ -72,6 +73,33 @@ router.get('/graph/edges', async (req) => {
   const tenantId = req.query.tenantId ?? 't-1';
   const repoId = req.query.repoId ?? 'r-1';
   return { status: 200, body: { edges: store.listEdges({ tenantId, repoId }).map(publicEdge) } };
+});
+
+router.get('/graph/neighborhood', async (req) => {
+  const tenantId = req.query.tenantId ?? 't-1';
+  const repoId = req.query.repoId ?? 'r-1';
+  const symbolUid = req.query.symbolUid;
+  const direction = req.query.direction ?? 'both';
+  const limitEdges = Number(req.query.limitEdges ?? 200);
+  const mode = req.query.mode ?? 'default';
+  if (typeof symbolUid !== 'string' || symbolUid.length === 0) return { status: 400, body: { error: 'symbolUid is required' } };
+
+  const out = neighborhood({
+    store,
+    tenantId,
+    repoId,
+    symbolUid,
+    direction,
+    limitEdges: Number.isFinite(limitEdges) ? Math.trunc(limitEdges) : 200
+  });
+  return {
+    status: 200,
+    body: {
+      nodes: out.nodes.map((n) => publicNode(n, { mode })),
+      edges: out.edges.map(publicEdge),
+      edgeOccurrenceCounts: out.edgeOccurrenceCounts
+    }
+  };
 });
 
 router.get('/graph/search', async (req) => {

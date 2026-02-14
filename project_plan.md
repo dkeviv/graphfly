@@ -16,9 +16,9 @@
 | GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | PARTIAL | `npm test` (webhook + local clone@sha; GitHub token clone pending) |
 | Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | PARTIAL | `npm test` (docs-repo-only guard + PR stub + in-memory doc store) |
 | Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | PARTIAL | `npm test` (doc-block validator + in-memory evidence store) |
-| OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` |
+| OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` (tool loop + semantic search tool) |
 | Support-safe mode enforcement | `docs/05_SECURITY.md` | FR-CIG-11 | PARTIAL | `npm test` |
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | PARTIAL | `npm test` |
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | PARTIAL | `npm test` (webhook verify+dedupe+plan sync; checkout/portal pending) |
-| Frontend onboarding + graph explorer UX | `docs/04_UX_SPEC.md` | UF-* + FR-GX-* | PARTIAL | `npm test` |
+| Frontend onboarding + graph explorer UX | `docs/04_UX_SPEC.md` | UF-* + FR-GX-* | PARTIAL | `npm test` (focus mode + lazy neighborhood fetch) |
 | Operations (SLOs/monitoring/runbooks) | `docs/06_OPERATIONS.md` | NFR-* | PARTIAL | `npm test` |
