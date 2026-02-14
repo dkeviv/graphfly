@@ -15,6 +15,7 @@ export class InMemoryGraphStore {
     this._observedDepsByRepo = new Map(); // repoKey -> Map(dep_key -> observed dep)
     this._depMismatchesByRepo = new Map(); // repoKey -> Map(mismatch_key -> mismatch)
     this._indexDiagnosticsByRepo = new Map(); // repoKey -> Array(diagnostic)
+    this._flowGraphsByRepo = new Map(); // repoKey -> Map(flow_graph_key -> flow graph)
   }
 
   upsertNode({ tenantId, repoId, node }) {
@@ -169,5 +170,23 @@ export class InMemoryGraphStore {
   listIndexDiagnostics({ tenantId, repoId }) {
     const repoKey = key({ tenantId, repoId });
     return Array.from(this._indexDiagnosticsByRepo.get(repoKey) ?? []);
+  }
+
+  upsertFlowGraph({ tenantId, repoId, flowGraph }) {
+    assert(isPlainObject(flowGraph), 'flowGraph must be an object');
+    assert(typeof flowGraph.flow_graph_key === 'string' && flowGraph.flow_graph_key.length > 0, 'flowGraph.flow_graph_key required');
+    const repoKey = key({ tenantId, repoId });
+    if (!this._flowGraphsByRepo.has(repoKey)) this._flowGraphsByRepo.set(repoKey, new Map());
+    this._flowGraphsByRepo.get(repoKey).set(flowGraph.flow_graph_key, flowGraph);
+  }
+
+  getFlowGraph({ tenantId, repoId, flowGraphKey }) {
+    const repoKey = key({ tenantId, repoId });
+    return this._flowGraphsByRepo.get(repoKey)?.get(flowGraphKey) ?? null;
+  }
+
+  listFlowGraphs({ tenantId, repoId }) {
+    const repoKey = key({ tenantId, repoId });
+    return Array.from(this._flowGraphsByRepo.get(repoKey)?.values() ?? []);
   }
 }

@@ -52,6 +52,10 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
       store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
       continue;
     }
+    if (record.type === 'flow_graph') {
+      store.upsertFlowGraph({ tenantId, repoId, flowGraph: record.data });
+      continue;
+    }
     // Unknown types are tolerated to allow forward-compatible indexer upgrades.
   }
 }

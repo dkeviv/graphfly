@@ -15,9 +15,9 @@ test('e2e: GitHub push webhook -> index job -> doc PR (docs repo only)', async (
   const indexQueue = new InMemoryQueue('index');
   const docQueue = new InMemoryQueue('doc');
 
-  const indexer = createIndexerWorker({ store, docQueue });
-  const docsWriter = new GitHubDocsWriter({ configuredDocsRepoFullName: 'org/docs' });
   const docStore = new InMemoryDocStore();
+  const indexer = createIndexerWorker({ store, docQueue, docStore });
+  const docsWriter = new GitHubDocsWriter({ configuredDocsRepoFullName: 'org/docs' });
   const docWorker = createDocWorker({ store, docsWriter, docStore });
 
   const secret = 'whsec_github';
@@ -61,4 +61,8 @@ test('e2e: GitHub push webhook -> index job -> doc PR (docs repo only)', async (
   assert.equal(out.ok, true);
   assert.equal(out.pr.targetRepoFullName, 'org/docs');
   assert.ok(out.pr.filesCount >= 1);
+
+  // Flow graphs should be materialized for entrypoints.
+  const fgs = store.listFlowGraphs({ tenantId: 't-1', repoId: 'r-1' });
+  assert.ok(fgs.length >= 1);
 });

@@ -168,6 +168,22 @@ router.get('/flows/entrypoints', async (req) => {
   return { status: 200, body: { entrypoints: store.listFlowEntrypoints({ tenantId, repoId }) } };
 });
 
+router.get('/flows/graphs', async (req) => {
+  const tenantId = req.query.tenantId ?? 't-1';
+  const repoId = req.query.repoId ?? 'r-1';
+  return { status: 200, body: { graphs: store.listFlowGraphs({ tenantId, repoId }) } };
+});
+
+router.get('/flows/graph', async (req) => {
+  const tenantId = req.query.tenantId ?? 't-1';
+  const repoId = req.query.repoId ?? 'r-1';
+  const flowGraphKey = req.query.flowGraphKey;
+  if (typeof flowGraphKey !== 'string' || flowGraphKey.length === 0) return { status: 400, body: { error: 'flowGraphKey is required' } };
+  const graph = store.getFlowGraph({ tenantId, repoId, flowGraphKey });
+  if (!graph) return { status: 404, body: { error: 'not_found' } };
+  return { status: 200, body: { graph } };
+});
+
 router.get('/flows/trace', async (req) => {
   const tenantId = req.query.tenantId ?? 't-1';
   const repoId = req.query.repoId ?? 'r-1';
