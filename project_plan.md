@@ -15,7 +15,7 @@
 | Incremental correctness diagnostics | `docs/02_REQUIREMENTS.md` | FR-CIG-12 | PARTIAL | `npm test` (reparse scope + impacted symbols + stale marking; persisted in pg via index_diagnostics) |
 | GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | PARTIAL | `npm test` (webhook → index → docs pipeline wired; ephemeral cloneAtSha path; GitHub installation token pending) |
 | Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | PARTIAL | `npm test` (docs-repo-only guard + LocalDocsWriter + `local:run` CLI; hard guard docs repo != source repo) |
-| Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | PARTIAL | `npm test` (doc-block validator + InMemory/Pg doc store + docs/PR run read APIs) |
+| Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | PARTIAL | `npm test` (doc-block validator + InMemory/Pg doc store + docs/PR run read APIs + surgical stale-only regen) |
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` (OpenClaw tool loop for doc PR run + per-block validation; `OPENCLAW_USE_REMOTE=1` enables gateway mode) |
 | Support-safe mode enforcement | `docs/05_SECURITY.md` | FR-CIG-11 | PARTIAL | `npm test` |
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | PARTIAL | `npm test` |

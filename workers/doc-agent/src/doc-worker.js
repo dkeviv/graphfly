@@ -10,10 +10,28 @@ export function createDocWorker({ store, docsWriter, docStore }) {
         throw new Error('docsRepoFullName is required');
       }
       const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
+      const docPathByEntrypointKey = new Map(
+        entrypoints.map((ep) => [ep.entrypoint_key, `flows/${String(ep.entrypoint_key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '')}.md`])
+      );
 
       const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha, status: 'running' }) ?? null;
 
       try {
+        // Surgical regeneration: if there are stale blocks, only regenerate those.
+        let entrypointKeys = null;
+        if (docStore?.listBlocks && docStore?.getEvidence) {
+          const stale = await docStore.listBlocks({ tenantId, repoId, status: 'stale' });
+          if (Array.isArray(stale) && stale.length > 0) {
+            const keySet = new Set();
+            const byDocFile = new Map(entrypoints.map((ep) => [docPathByEntrypointKey.get(ep.entrypoint_key), ep.entrypoint_key]));
+            for (const b of stale) {
+              const k = byDocFile.get(b.doc_file ?? b.docFile);
+              if (k) keySet.add(k);
+            }
+            if (keySet.size > 0) entrypointKeys = Array.from(keySet);
+          }
+        }
+
         const { pr } = await runDocPrWithOpenClaw({
           store,
           docStore,
@@ -22,9 +40,11 @@ export function createDocWorker({ store, docsWriter, docStore }) {
           repoId,
           docsRepoFullName,
           triggerSha,
-          prRunId: prRun?.id ?? null
+          prRunId: prRun?.id ?? null,
+          entrypointKeys
         });
 
+        const processedCount = entrypointKeys ? entrypointKeys.length : entrypoints.length;
         if (prRun && docStore?.updatePrRun) {
           await docStore.updatePrRun({
             tenantId,
@@ -33,8 +53,8 @@ export function createDocWorker({ store, docsWriter, docStore }) {
             patch: {
               status: pr?.empty ? 'skipped' : 'success',
               docsBranch: pr.branchName ?? null,
-              blocksUpdated: entrypoints.length,
-              blocksCreated: entrypoints.length,
+              blocksUpdated: processedCount,
+              blocksCreated: processedCount,
               blocksUnchanged: 0,
               completedAt: new Date().toISOString()
             }

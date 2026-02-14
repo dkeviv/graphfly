@@ -7,8 +7,14 @@ function slugify(key) {
   return String(key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '');
 }
 
-function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha }) {
+function filterEntrypoints(entrypoints, allowedKeys) {
+  if (!allowedKeys || allowedKeys.size === 0) return entrypoints;
+  return entrypoints.filter((ep) => allowedKeys.has(ep.entrypoint_key));
+}
+
+function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha, entrypointKeys }) {
   let callCount = 0;
+  let cachedEntrypoints = null;
 
   return async ({ body }) => {
     callCount++;
@@ -44,6 +50,7 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
 
     if (callCount === 2) {
       const entrypoints = outputsByCallId.get('call_entrypoints') ?? [];
+      cachedEntrypoints = entrypoints;
       const calls = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const ep = entrypoints[i];
@@ -65,7 +72,7 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
     }
 
     if (callCount === 3) {
-      const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
+      const entrypoints = cachedEntrypoints ?? (await store.listFlowEntrypoints({ tenantId, repoId }));
       const calls = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const ep = entrypoints[i];
@@ -106,7 +113,7 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
     }
 
     if (callCount === 4) {
-      const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
+      const entrypoints = cachedEntrypoints ?? (await store.listFlowEntrypoints({ tenantId, repoId }));
       const files = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const upsertResult = outputsByCallId.get(`call_docs_${i}`);
@@ -157,6 +164,7 @@ export async function runDocPrWithOpenClaw({
   docsRepoFullName,
   triggerSha,
   prRunId = null,
+  entrypointKeys = null,
   openclaw = null
 }) {
   if (!docStore) throw new Error('docStore is required');
@@ -171,7 +179,9 @@ export async function runDocPrWithOpenClaw({
       description: 'Lists flow entrypoints (routes, jobs, CLIs) for this repo.',
       parameters: { type: 'object', additionalProperties: false, properties: {}, required: [] },
       handler: async () => {
-        return store.listFlowEntrypoints({ tenantId, repoId });
+        const eps = await store.listFlowEntrypoints({ tenantId, repoId });
+        const allowed = entrypointKeys ? new Set(entrypointKeys) : null;
+        return filterEntrypoints(eps, allowed);
       }
     },
     {
@@ -311,7 +321,16 @@ export async function runDocPrWithOpenClaw({
   const useRemote = Boolean(openclaw?.useRemote ?? (process.env.OPENCLAW_USE_REMOTE === '1' && process.env.OPENCLAW_GATEWAY_URL));
   const requestJson =
     openclaw?.requestJson ??
-    (useRemote ? undefined : makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha }));
+    (useRemote
+      ? undefined
+      : makeLocalDocPrAgentGateway({
+          tenantId,
+          repoId,
+          store,
+          docsRepoFullName,
+          triggerSha,
+          entrypointKeys: entrypointKeys ? new Set(entrypointKeys) : null
+        }));
 
   const instructions = [
     'You are Graphfly Doc Agent.',
