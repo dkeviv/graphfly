@@ -83,7 +83,7 @@ function safeJsonParse(text) {
   }
 }
 
-function makePackageNode({ ecosystem, name }) {
+function makePackageNode({ ecosystem, name, sha }) {
   const qualifiedName = `${ecosystem}:${name}`;
   const signature = `package ${qualifiedName}`;
   const signatureHash = computeSignatureHash({ signature });
@@ -103,11 +103,13 @@ function makePackageNode({ ecosystem, name }) {
     contract: null,
     constraints: null,
     allowable_values: null,
-    external_ref: { ecosystem, name }
+    external_ref: { ecosystem, name },
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
   };
 }
 
-function makeManifestNode({ filePath }) {
+function makeManifestNode({ filePath, sha }) {
   const qualifiedName = `manifest:${filePath}`;
   const signature = `manifest ${filePath}`;
   const signatureHash = computeSignatureHash({ signature });
@@ -126,11 +128,13 @@ function makeManifestNode({ filePath }) {
     signature_hash: signatureHash,
     contract: null,
     constraints: null,
-    allowable_values: null
+    allowable_values: null,
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
   };
 }
 
-function makeFileNode({ filePath, language }) {
+function makeFileNode({ filePath, language, sha }) {
   const qualifiedName = filePath.replaceAll('/', '.');
   const signature = `file ${filePath}`;
   const signatureHash = computeSignatureHash({ signature });
@@ -151,11 +155,13 @@ function makeFileNode({ filePath, language }) {
     constraints: null,
     allowable_values: null,
     embedding_text: `${qualifiedName} ${signature}`,
-    embedding: embedText384(`${qualifiedName} ${signature}`)
+    embedding: embedText384(`${qualifiedName} ${signature}`),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
   };
 }
 
-function makeApiEndpointNode({ method, routePath, filePath, line }) {
+function makeApiEndpointNode({ method, routePath, filePath, line, sha }) {
   const qualifiedName = `http.${method}.${routePath}`;
   const signature = `${method} ${routePath}`;
   const signatureHash = computeSignatureHash({ signature });
@@ -176,7 +182,9 @@ function makeApiEndpointNode({ method, routePath, filePath, line }) {
     constraints: null,
     allowable_values: null,
     embedding_text: `${signature} endpoint`,
-    embedding: embedText384(`${signature} endpoint`)
+    embedding: embedText384(`${signature} endpoint`),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
   };
 }
 
@@ -210,14 +218,14 @@ export function mockIndexRepo({
 
   for (const absFile of sourceFiles) {
     const filePath = rel(absRoot, absFile);
-    const node = makeFileNode({ filePath, language });
+    const node = makeFileNode({ filePath, language, sha });
     fileToSymbol.set(filePath, node.symbol_uid);
     emit({ type: 'node', data: node });
   }
 
   for (const absManifest of manifestFiles) {
     const filePath = rel(absRoot, absManifest);
-    const manifestNode = makeManifestNode({ filePath });
+    const manifestNode = makeManifestNode({ filePath, sha });
     emit({ type: 'node', data: manifestNode });
 
     emit({
@@ -257,7 +265,7 @@ export function mockIndexRepo({
       });
 
       if (!packageToSymbol.has(packageKey)) {
-        const pkgNode = makePackageNode({ ecosystem: 'npm', name: d.name });
+        const pkgNode = makePackageNode({ ecosystem: 'npm', name: d.name, sha });
         packageToSymbol.set(packageKey, pkgNode.symbol_uid);
         emit({ type: 'node', data: pkgNode });
       }
@@ -268,7 +276,9 @@ export function mockIndexRepo({
           source_symbol_uid: manifestNode.symbol_uid,
           target_symbol_uid: packageToSymbol.get(packageKey),
           edge_type: 'DependsOn',
-          metadata: { declared: true, scope: d.scope, version_range: d.range }
+          metadata: { declared: true, scope: d.scope, version_range: d.range },
+          first_seen_sha: sha,
+          last_seen_sha: sha
         }
       });
     }
@@ -299,7 +309,7 @@ export function mockIndexRepo({
     const lines = fs.readFileSync(absFile, 'utf8').split('\n');
 
     for (const r of parseExpressRoutes(lines)) {
-      const epNode = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line });
+      const epNode = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha });
       emit({ type: 'node', data: epNode });
 
       emit({
@@ -308,7 +318,9 @@ export function mockIndexRepo({
           source_symbol_uid: sourceUid,
           target_symbol_uid: epNode.symbol_uid,
           edge_type: 'Defines',
-          metadata: { kind: 'route' }
+          metadata: { kind: 'route' },
+          first_seen_sha: sha,
+          last_seen_sha: sha
         }
       });
       emit({
@@ -320,7 +332,8 @@ export function mockIndexRepo({
           file_path: filePath,
           line_start: r.line,
           line_end: r.line,
-          occurrence_kind: 'route_map'
+          occurrence_kind: 'route_map',
+          sha
         }
       });
 
@@ -331,7 +344,9 @@ export function mockIndexRepo({
           source_symbol_uid: epNode.symbol_uid,
           target_symbol_uid: sourceUid,
           edge_type: 'ControlFlow',
-          metadata: { kind: 'route_handler_file' }
+          metadata: { kind: 'route_handler_file' },
+          first_seen_sha: sha,
+          last_seen_sha: sha
         }
       });
 
@@ -360,7 +375,14 @@ export function mockIndexRepo({
 
         emit({
           type: 'edge',
-          data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', metadata: null }
+          data: {
+            source_symbol_uid: sourceUid,
+            target_symbol_uid: targetUid,
+            edge_type: 'Imports',
+            metadata: null,
+            first_seen_sha: sha,
+            last_seen_sha: sha
+          }
         });
         emit({
           type: 'edge_occurrence',
@@ -371,7 +393,8 @@ export function mockIndexRepo({
             file_path: filePath,
             line_start: imp.line,
             line_end: imp.line,
-            occurrence_kind: 'import'
+            occurrence_kind: 'import',
+            sha
           }
         });
         continue;
@@ -395,7 +418,7 @@ export function mockIndexRepo({
       });
 
       if (!packageToSymbol.has(packageKey)) {
-        const pkgNode = makePackageNode({ ecosystem: 'npm', name: pkgName });
+        const pkgNode = makePackageNode({ ecosystem: 'npm', name: pkgName, sha });
         packageToSymbol.set(packageKey, pkgNode.symbol_uid);
         emit({ type: 'node', data: pkgNode });
       }
@@ -406,7 +429,9 @@ export function mockIndexRepo({
           source_symbol_uid: sourceUid,
           target_symbol_uid: packageToSymbol.get(packageKey),
           edge_type: 'UsesPackage',
-          metadata: { import: imp.spec }
+          metadata: { import: imp.spec },
+          first_seen_sha: sha,
+          last_seen_sha: sha
         }
       });
       emit({
@@ -418,7 +443,8 @@ export function mockIndexRepo({
           file_path: filePath,
           line_start: imp.line,
           line_end: imp.line,
-          occurrence_kind: 'import'
+          occurrence_kind: 'import',
+          sha
         }
       });
     }
@@ -435,7 +461,14 @@ export function mockIndexRepo({
         if (lines.some((l) => re.test(l))) {
           emit({
             type: 'edge',
-            data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee: name } }
+            data: {
+              source_symbol_uid: sourceUid,
+              target_symbol_uid: targetUid,
+              edge_type: 'Calls',
+              metadata: { callee: name },
+              first_seen_sha: sha,
+              last_seen_sha: sha
+            }
           });
         }
       }

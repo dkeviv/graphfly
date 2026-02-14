@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/pg-client",
+  "private": true,
+  "type": "module"
+}
+
