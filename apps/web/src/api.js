@@ -14,7 +14,9 @@ export class ApiClient {
   }
 
   search({ q, mode }) {
-    return this.getJson(`/graph/search?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&q=${encodeURIComponent(q)}&mode=${encodeURIComponent(mode)}`);
+    return this.getJson(
+      `/graph/search?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&q=${encodeURIComponent(q)}&mode=${encodeURIComponent(mode)}&viewMode=${encodeURIComponent(this.mode)}`
+    );
   }
 
   blastRadius({ symbolUid, depth = 1, direction = 'both' }) {

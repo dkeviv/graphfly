@@ -26,6 +26,7 @@ import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-c
 import { getPgPoolFromEnv } from '../../../packages/stores/src/pg-pool.js';
 import { withTenantClient } from '../../../packages/pg-client/src/tenant.js';
 import { PgBillingStore } from '../../../packages/billing-pg/src/pg-billing-store.js';
+import { formatGraphSearchResponse } from './search-format.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -233,7 +234,8 @@ router.get('/graph/search', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const q = req.query.q ?? '';
-  const mode = req.query.mode ?? 'text';
+  const mode = req.query.mode ?? 'text'; // text|semantic
+  const viewMode = req.query.viewMode ?? 'default'; // default|support_safe
   const limit = Number(req.query.limit ?? 10);
   const n = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.trunc(limit))) : 10;
 
@@ -244,22 +246,7 @@ router.get('/graph/search', async (req) => {
 
   return {
     status: 200,
-    body: {
-      mode,
-      query: q,
-      results: results.map((r) => ({
-        score: r.score,
-        node: {
-          symbolUid: r.node.symbol_uid,
-          qualifiedName: r.node.qualified_name,
-          name: r.node.name,
-          nodeType: r.node.node_type,
-          filePath: r.node.file_path,
-          lineStart: r.node.line_start,
-          lineEnd: r.node.line_end
-        }
-      }))
-    }
+    body: formatGraphSearchResponse({ mode, query: q, results, viewMode })
   };
 });
 

@@ -58,7 +58,9 @@ export function renderGraphPage({ state, pageEl }) {
           }
         }, [
           el('div', { class: 'h' }, [r.node.qualifiedName ?? r.node.name ?? r.node.symbolUid]),
-          el('div', { class: 'small k' }, [`${r.node.nodeType} • ${r.node.filePath ?? ''}:${r.node.lineStart ?? ''}`])
+          el('div', { class: 'small k' }, [
+            `${r.node.nodeType} • ${r.node.location?.filePath ?? ''}:${r.node.location?.lineStart ?? ''}`
+          ])
         ])
       );
     }
