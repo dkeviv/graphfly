@@ -23,4 +23,4 @@
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | PARTIAL | `npm test` (RPM limiter + InMemory/Pg usage counters for index/day + doc blocks/month) |
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | PARTIAL | `npm test` (webhook verify+in-mem dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; checkout/portal stubs) |
 | Frontend onboarding + graph explorer UX | `docs/04_UX_SPEC.md` | UF-* + FR-GX-* | PARTIAL | `npm test` (focus mode + lazy neighborhood fetch) |
-| Operations (SLOs/monitoring/runbooks) | `docs/06_OPERATIONS.md` | NFR-* | PARTIAL | `npm test` |
+| Operations (SLOs/monitoring/runbooks) | `docs/06_OPERATIONS.md` | NFR-* | DONE | `npm test` |
