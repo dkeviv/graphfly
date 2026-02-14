@@ -33,6 +33,7 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
       }
       if (
         record.type === 'flow_entrypoint' ||
+        record.type === 'flow_graph' ||
         record.type === 'dependency_manifest' ||
         record.type === 'declared_dependency' ||
         record.type === 'observed_dependency' ||
@@ -127,6 +128,7 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
         batch.push(record);
       } else if (
         record.type === 'flow_entrypoint' ||
+        record.type === 'flow_graph' ||
         record.type === 'dependency_manifest' ||
         record.type === 'declared_dependency' ||
         record.type === 'observed_dependency' ||

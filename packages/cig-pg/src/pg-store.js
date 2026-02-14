@@ -802,13 +802,11 @@ export class PgGraphStore {
     await this._ensureOrgRepo({ tenantId, repoId });
     if (!Array.isArray(records)) throw new Error('records must be array');
 
-    const hasFlowGraph = records.some((r) => r?.type === 'flow_graph');
-    if (hasFlowGraph) throw new Error('flow_graph records must be ingested via upsertFlowGraph, not ingestRecords');
-
     const nodesByUid = new Map();
     const edgesByKey = new Map();
     const occByKey = new Map();
     const entrypointsByKey = new Map();
+    const flowGraphsByKey = new Map();
     const manifests = [];
     const declared = [];
     const observed = [];
@@ -833,6 +831,12 @@ export class PgGraphStore {
         if (!ep?.entrypoint_key) continue;
         entrypointsByKey.set(ep.entrypoint_key, ep);
       }
+      else if (t === 'flow_graph') {
+        const fg = r.data;
+        const k = fg?.flow_graph_key ?? `${fg?.entrypoint_key ?? ''}::${fg?.sha ?? ''}::${fg?.depth ?? ''}`;
+        if (!k || k === '::::') continue;
+        flowGraphsByKey.set(k, fg);
+      }
       else if (t === 'dependency_manifest') manifests.push(r.data);
       else if (t === 'declared_dependency') declared.push(r.data);
       else if (t === 'observed_dependency') observed.push(r.data);
@@ -844,6 +848,7 @@ export class PgGraphStore {
     const edges = Array.from(edgesByKey.values());
     const occ = Array.from(occByKey.values());
     const entrypoints = Array.from(entrypointsByKey.values());
+    const flowGraphs = Array.from(flowGraphsByKey.values());
 
     await this._c.query('BEGIN');
     try {
@@ -859,6 +864,11 @@ export class PgGraphStore {
     } catch (err) {
       await this._c.query('ROLLBACK');
       throw err;
+    }
+
+    // Materialized flow graphs require graph_nodes/graph_edges IDs and are applied after base graph upserts.
+    for (const fg of flowGraphs) {
+      await this.upsertFlowGraph({ tenantId, repoId, flowGraph: fg });
     }
   }
 
