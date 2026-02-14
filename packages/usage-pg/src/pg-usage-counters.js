@@ -31,6 +31,19 @@ export class PgUsageCounters {
     this._nowMs = nowMs;
   }
 
+  async get({ tenantId, key, periodStart }) {
+    assertUuid(tenantId, 'tenantId');
+    if (typeof key !== 'string' || key.length === 0) throw new Error('key is required');
+    if (typeof periodStart !== 'string' || periodStart.length === 0) throw new Error('periodStart is required');
+    const res = await this._c.query(
+      `SELECT value
+       FROM usage_counters
+       WHERE org_id=$1 AND key=$2 AND period_start=$3`,
+      [tenantId, key, periodStart]
+    );
+    return Number(res.rows?.[0]?.value ?? 0) || 0;
+  }
+
   async consumeOrDeny({ tenantId, key, periodStart, periodEnd, amount, limit }) {
     assertUuid(tenantId, 'tenantId');
     if (typeof key !== 'string' || key.length === 0) throw new Error('key is required');
@@ -102,5 +115,14 @@ export class PgUsageCounters {
       limit: limitPerMonth
     });
   }
-}
 
+  async getIndexJobsToday({ tenantId }) {
+    const { periodStart, periodEnd } = dayWindow(this._nowMs());
+    return { used: await this.get({ tenantId, key: 'index_jobs_daily', periodStart }), periodStart, periodEnd };
+  }
+
+  async getDocBlocksThisMonth({ tenantId }) {
+    const { periodStart, periodEnd } = monthWindow(this._nowMs());
+    return { used: await this.get({ tenantId, key: 'doc_blocks_monthly', periodStart }), periodStart, periodEnd };
+  }
+}

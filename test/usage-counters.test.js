@@ -22,3 +22,15 @@ test('InMemoryUsageCounters enforces daily and monthly limits', () => {
   assert.equal(e.ok, true);
 });
 
+test('InMemoryUsageCounters reports current usage windows', () => {
+  let now = Date.UTC(2026, 1, 14, 12, 0, 0);
+  const usage = new InMemoryUsageCounters({ nowMs: () => now });
+  usage.consumeIndexJobOrDeny({ tenantId: 't-1', limitPerDay: 100, amount: 4 });
+  usage.consumeDocBlocksOrDeny({ tenantId: 't-1', limitPerMonth: 1000, amount: 9 });
+
+  assert.deepEqual(usage.getIndexJobsToday({ tenantId: 't-1' }), { used: 4, periodStart: '2026-02-14', periodEnd: '2026-02-14' });
+  assert.deepEqual(usage.getDocBlocksThisMonth({ tenantId: 't-1' }), { used: 9, periodStart: '2026-02-01', periodEnd: '2026-02-28' });
+
+  now = Date.UTC(2026, 2, 1, 0, 0, 0);
+  assert.deepEqual(usage.getDocBlocksThisMonth({ tenantId: 't-1' }), { used: 0, periodStart: '2026-03-01', periodEnd: '2026-03-31' });
+});

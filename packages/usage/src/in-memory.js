@@ -8,6 +8,17 @@ function monthKey(nowMs) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+function monthRange(nowMs) {
+  const d = new Date(nowMs);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  const start = new Date(Date.UTC(y, m, 1));
+  const end = new Date(Date.UTC(y, m + 1, 0));
+  const fmt = (dt) =>
+    `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+  return { periodStart: fmt(start), periodEnd: fmt(end) };
+}
+
 export class InMemoryUsageCounters {
   constructor({ nowMs = () => Date.now() } = {}) {
     this._nowMs = nowMs;
@@ -52,5 +63,15 @@ export class InMemoryUsageCounters {
     const window = monthKey(this._nowMs());
     return this.consumeOrDeny({ tenantId, key: 'doc_blocks_monthly', window, amount, limit: limitPerMonth });
   }
-}
 
+  getIndexJobsToday({ tenantId }) {
+    const window = dayKey(this._nowMs());
+    return { used: this.get({ tenantId, key: 'index_jobs_daily', window }), periodStart: window, periodEnd: window };
+  }
+
+  getDocBlocksThisMonth({ tenantId }) {
+    const window = monthKey(this._nowMs());
+    const { periodStart, periodEnd } = monthRange(this._nowMs());
+    return { used: this.get({ tenantId, key: 'doc_blocks_monthly', window }), periodStart, periodEnd };
+  }
+}

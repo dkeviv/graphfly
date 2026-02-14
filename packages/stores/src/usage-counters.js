@@ -24,6 +24,22 @@ export class PgUsageCountersPool {
       return store.consumeDocBlocksOrDeny(args);
     });
   }
+
+  async getIndexJobsToday(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgUsageCounters({ client });
+      return store.getIndexJobsToday(args);
+    });
+  }
+
+  async getDocBlocksThisMonth(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgUsageCounters({ client });
+      return store.getDocBlocksThisMonth(args);
+    });
+  }
 }
 
 export async function createUsageCountersFromEnv() {
@@ -34,4 +50,3 @@ export async function createUsageCountersFromEnv() {
   const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgUsageCountersPool({ pool });
 }
-

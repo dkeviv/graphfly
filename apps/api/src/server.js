@@ -27,6 +27,7 @@ import { getPgPoolFromEnv } from '../../../packages/stores/src/pg-pool.js';
 import { withTenantClient } from '../../../packages/pg-client/src/tenant.js';
 import { PgBillingStore } from '../../../packages/billing-pg/src/pg-billing-store.js';
 import { formatGraphSearchResponse } from './search-format.js';
+import { getBillingUsageSnapshot } from './billing-usage.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -133,11 +134,26 @@ router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
 
 router.get('/billing/summary', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
-  const plan = entitlements.getPlan(tenantId);
+  const plan = await Promise.resolve(entitlements.getPlan(tenantId));
   return { status: 200, body: { tenantId, plan } };
 });
 
-router.post('/billing/checkout', async (req) => {
+router.get('/api/v1/billing/summary', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const plan = await Promise.resolve(entitlements.getPlan(tenantId));
+  return { status: 200, body: { tenantId, plan } };
+});
+
+async function billingUsageHandler(req) {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const snapshot = await getBillingUsageSnapshot({ tenantId, entitlementsStore: entitlements, usageCounters: usage });
+  return { status: 200, body: snapshot };
+}
+
+router.get('/billing/usage', billingUsageHandler);
+router.get('/api/v1/billing/usage', billingUsageHandler);
+
+async function billingCheckoutHandler(req) {
   const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
   const plan = req.body?.plan ?? 'pro';
   // For this repo: org billing persistence is not wired yet; use env for customer + price.
@@ -161,9 +177,12 @@ router.post('/billing/checkout', async (req) => {
     metadata: { tenantId, plan }
   });
   return { status: 200, body: { url: session.url } };
-});
+}
 
-router.post('/billing/portal', async (req) => {
+router.post('/billing/checkout', billingCheckoutHandler);
+router.post('/api/v1/billing/checkout', billingCheckoutHandler);
+
+async function billingPortalHandler(req) {
   const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
   const apiKey = process.env.STRIPE_SECRET_KEY ?? '';
   const customerId = process.env.STRIPE_CUSTOMER_ID ?? '';
@@ -174,7 +193,10 @@ router.post('/billing/portal', async (req) => {
   const stripe = await createStripeClient({ apiKey });
   const session = await createCustomerPortalSession({ stripe, customerId, returnUrl });
   return { status: 200, body: { url: session.url } };
-});
+}
+
+router.post('/billing/portal', billingPortalHandler);
+router.post('/api/v1/billing/portal', billingPortalHandler);
 
 router.post('/webhooks/github', async ({ headers, rawBody }) => {
   return handleGitHubWebhook({ headers, rawBody });

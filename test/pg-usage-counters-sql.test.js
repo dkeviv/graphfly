@@ -58,3 +58,28 @@ test('PgUsageCounters.consumeOrDeny rolls back when limit exceeded', async () =>
   assert.equal(res.used, 10);
 });
 
+test('PgUsageCounters.getIndexJobsToday reads usage_counters without locking', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.includes('SELECT value') && text.includes('FROM usage_counters') && !text.includes('FOR UPDATE')) {
+      return { rows: [{ value: 3 }] };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+
+  const usage = new PgUsageCounters({ client, nowMs: () => Date.UTC(2026, 1, 14, 12, 0, 0) });
+  const res = await usage.getIndexJobsToday({ tenantId: '00000000-0000-0000-0000-000000000001' });
+  assert.deepEqual(res, { used: 3, periodStart: '2026-02-14', periodEnd: '2026-02-14' });
+});
+
+test('PgUsageCounters.getDocBlocksThisMonth reads usage_counters for the month window', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.includes('SELECT value') && text.includes('FROM usage_counters') && !text.includes('FOR UPDATE')) {
+      return { rows: [{ value: 12 }] };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+
+  const usage = new PgUsageCounters({ client, nowMs: () => Date.UTC(2026, 1, 14, 12, 0, 0) });
+  const res = await usage.getDocBlocksThisMonth({ tenantId: '00000000-0000-0000-0000-000000000001' });
+  assert.deepEqual(res, { used: 12, periodStart: '2026-02-01', periodEnd: '2026-02-28' });
+});
