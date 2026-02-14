@@ -125,6 +125,10 @@ Restore drills should be run periodically and documented (steps, expected timing
 
 This repository includes a local/test mode that avoids external dependencies and network calls while still exercising the end-to-end pipeline.
 
+**Run the pipeline locally**
+- From a local **source repo** checkout (inside a git worktree), run:
+  - `npm run local:run -- --docs-repo-path ../my-docs-repo --docs-repo-full-name org/docs --source-repo-full-name local/source`
+
 **Key environment variables**
 - `SOURCE_REPO_ROOT`: local filesystem path to the **source repo** to index (read-only). Default: `fixtures/sample-repo`.
 - `DOCS_REPO_FULL_NAME`: configured docs repo identifier (string). Default: `org/docs`.
