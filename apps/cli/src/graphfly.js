@@ -68,6 +68,13 @@ async function localRun(args) {
   const resolvedSourceRepoRoot = path.resolve(process.cwd(), sourceRepoRoot);
   if (!fs.existsSync(resolvedSourceRepoRoot)) throw new Error('source repo root does not exist');
 
+  // Hard guard: docs repo must be separate from source repo (never write to source repo).
+  const srcRoot = fs.realpathSync(path.resolve(resolvedSourceRepoRoot));
+  const docsRoot = fs.realpathSync(path.resolve(resolvedDocsRepoPath));
+  if (docsRoot === srcRoot || docsRoot.startsWith(srcRoot + path.sep)) {
+    throw new Error('docs_repo_must_be_separate_from_source_repo');
+  }
+
   const secret = `local-${Date.now()}`;
   const rt = await createRuntimeFromEnv({
     githubWebhookSecret: secret,
