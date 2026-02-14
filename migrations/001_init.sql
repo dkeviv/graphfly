@@ -14,6 +14,18 @@ CREATE TABLE IF NOT EXISTS orgs (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Optional enterprise metadata columns (added in-place for forward-compat).
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS slug TEXT;
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free'
+  CHECK (plan IN ('free','pro','enterprise'));
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS github_reader_install_id BIGINT;
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS github_docs_install_id BIGINT;
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS docs_repo_full_name TEXT;
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_slug_unique ON orgs(slug) WHERE slug IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS repos (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id         UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -23,6 +35,61 @@ CREATE TABLE IF NOT EXISTS repos (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, full_name)
 );
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- BILLING (Stripe) + USAGE COUNTERS (enterprise scaffolding)
+-- ═══════════════════════════════════════════════════════════════════════
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'stripe_subscription_status') THEN
+    CREATE TYPE stripe_subscription_status AS ENUM (
+      'incomplete',
+      'incomplete_expired',
+      'trialing',
+      'active',
+      'past_due',
+      'canceled',
+      'unpaid',
+      'paused'
+    );
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS org_billing (
+    org_id                 UUID PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+    stripe_customer_id     TEXT NOT NULL,
+    stripe_subscription_id TEXT,
+    stripe_price_id        TEXT,
+    status                 stripe_subscription_status,
+    current_period_start   TIMESTAMPTZ,
+    current_period_end     TIMESTAMPTZ,
+    cancel_at_period_end   BOOLEAN NOT NULL DEFAULT false,
+    trial_end              TIMESTAMPTZ,
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_org_billing_status ON org_billing(status);
+
+CREATE TABLE IF NOT EXISTS stripe_events (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id          UUID REFERENCES orgs(id) ON DELETE SET NULL,
+    stripe_event_id TEXT NOT NULL UNIQUE,
+    type            TEXT NOT NULL,
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    processed_at    TIMESTAMPTZ,
+    error_message   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS usage_counters (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id        UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    key           TEXT NOT NULL,
+    period_start  DATE NOT NULL,
+    period_end    DATE NOT NULL,
+    value         INTEGER NOT NULL DEFAULT 0,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (org_id, key, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_org_key ON usage_counters(org_id, key);
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- GRAPH NODES (Code Intelligence Graph + Public Contract Graph)
@@ -332,7 +399,11 @@ ALTER TABLE doc_blocks
 -- ═══════════════════════════════════════════════════════════════════════
 -- ROW-LEVEL SECURITY (tenant-scoped tables)
 -- ═══════════════════════════════════════════════════════════════════════
+ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE repos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_billing ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stripe_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usage_counters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edge_occurrences ENABLE ROW LEVEL SECURITY;
@@ -350,9 +421,25 @@ ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
 
 -- RLS policy pattern (replicate per table)
+DROP POLICY IF EXISTS tenant_self_orgs ON orgs;
+CREATE POLICY tenant_self_orgs ON orgs
+    USING (id = current_setting('app.tenant_id', true)::uuid);
+
 DROP POLICY IF EXISTS tenant_isolation_repos ON repos;
 CREATE POLICY tenant_isolation_repos ON repos
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_org_billing ON org_billing;
+CREATE POLICY tenant_isolation_org_billing ON org_billing
+    USING (org_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_stripe_events ON stripe_events;
+CREATE POLICY tenant_isolation_stripe_events ON stripe_events
+    USING (org_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_usage_counters ON usage_counters;
+CREATE POLICY tenant_isolation_usage_counters ON usage_counters
+    USING (org_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_graph_nodes ON graph_nodes;
 CREATE POLICY tenant_isolation_graph_nodes ON graph_nodes

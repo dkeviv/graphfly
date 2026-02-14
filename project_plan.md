@@ -9,6 +9,7 @@
 | Flow entities ingestion + APIs | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-09 | PARTIAL | `npm test` (entrypoints + trace + materialized flow_graph; DB tables pending) |
 | Dependency & manifest intelligence (declared/observed/mismatch) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-10 | PARTIAL | `npm test` (adds version_conflict mismatch) |
 | Postgres schema + migrations + RLS | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-06 | PARTIAL | `npm test` (+ bulk ingest + optional live RLS test when `DATABASE_URL` set) |
+| Billing schema (org_billing, stripe_events, usage_counters) + RLS | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-BL-03, FR-BL-04 | DONE | `npm test` |
 | pgvector embeddings + HNSW index | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-05 | PARTIAL | `npm test` (schema + PgGraphStore semanticSearch ORDER BY embedding <=>; live DB pending) |
 | Semantic search API | `docs/02_REQUIREMENTS.md` | FR-GX-04 | PARTIAL | `npm test` (async search + store-native semanticSearch hook) |
 | Impacted nodes (“blast radius”) correctness | `docs/02_REQUIREMENTS.md` | FR-GX-03 | DONE | `npm test` |
