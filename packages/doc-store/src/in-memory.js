@@ -76,9 +76,25 @@ export class InMemoryDocStore {
     const rk = repoKey({ tenantId, repoId });
     if (!this._prRuns.has(rk)) this._prRuns.set(rk, new Map());
     const id = hashString(`${triggerSha}:${Date.now()}:${Math.random()}`);
-    const pr = { id, tenantId, repoId, triggerSha, status, createdAt: Date.now() };
+    const pr = { id, tenantId, repoId, triggerSha, status, startedAt: Date.now(), createdAt: Date.now() };
     this._prRuns.get(rk).set(id, pr);
     return pr;
   }
-}
 
+  updatePrRun({ tenantId, repoId, prRunId, patch }) {
+    const rk = repoKey({ tenantId, repoId });
+    const pr = this._prRuns.get(rk)?.get(prRunId) ?? null;
+    if (!pr) return null;
+    const p = patch ?? {};
+    if (p.status !== undefined) pr.status = p.status;
+    if (p.docsBranch !== undefined) pr.docsBranch = p.docsBranch;
+    if (p.docsPrNumber !== undefined) pr.docsPrNumber = p.docsPrNumber;
+    if (p.docsPrUrl !== undefined) pr.docsPrUrl = p.docsPrUrl;
+    if (p.blocksUpdated !== undefined) pr.blocksUpdated = p.blocksUpdated;
+    if (p.blocksCreated !== undefined) pr.blocksCreated = p.blocksCreated;
+    if (p.blocksUnchanged !== undefined) pr.blocksUnchanged = p.blocksUnchanged;
+    if (p.errorMessage !== undefined) pr.errorMessage = p.errorMessage;
+    if (p.completedAt !== undefined) pr.completedAt = p.completedAt;
+    return pr;
+  }
+}

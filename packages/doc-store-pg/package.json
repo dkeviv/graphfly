@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/doc-store-pg",
+  "private": true,
+  "type": "module"
+}
+

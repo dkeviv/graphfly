@@ -1,5 +1,6 @@
 import { createRuntime } from './runtime.js';
 import { createGraphStoreFromEnv } from '../../stores/src/graph-store.js';
+import { createDocStoreFromEnv } from '../../stores/src/doc-store.js';
 
 export async function createRuntimeFromEnv({
   githubWebhookSecret,
@@ -13,16 +14,16 @@ export async function createRuntimeFromEnv({
   repoFullName = 'local/source'
 } = {}) {
   const store = await createGraphStoreFromEnv({ repoFullName });
+  const docsStore = docStore ?? (await createDocStoreFromEnv({ repoFullName }));
   return createRuntime({
     githubWebhookSecret,
     docsRepoFullName,
     docsRepoPath,
     store,
-    docStore,
+    docStore: docsStore,
     indexQueue,
     docQueue,
     docsWriter,
     repoRegistry
   });
 }
-

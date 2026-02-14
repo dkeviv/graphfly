@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
+import { createDocStoreFromEnv } from '../../../packages/stores/src/doc-store.js';
 import { ingestNdjson } from '../../../packages/ndjson/src/ingest.js';
 import { blastRadius } from '../../../packages/cig/src/query.js';
 import { semanticSearch, textSearch } from '../../../packages/cig/src/search.js';
@@ -13,7 +14,6 @@ import { StripeEventDedupe } from '../../../packages/stripe-webhooks/src/dedupe.
 import { makeStripeWebhookHandler } from './stripe-webhook.js';
 import { applyStripeEventToEntitlements } from '../../../packages/billing/src/apply-stripe-event.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
-import { InMemoryDocStore } from '../../../packages/doc-store/src/in-memory.js';
 import { neighborhood } from '../../../packages/cig/src/neighborhood.js';
 import { InMemoryQueue } from '../../../packages/queue/src/in-memory.js';
 import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker.js';
@@ -24,8 +24,9 @@ import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
 
-const store = await createGraphStoreFromEnv({ repoFullName: process.env.SOURCE_REPO_FULL_NAME ?? 'local/source' });
-const docStore = new InMemoryDocStore();
+const repoFullName = process.env.SOURCE_REPO_FULL_NAME ?? 'local/source';
+const store = await createGraphStoreFromEnv({ repoFullName });
+const docStore = await createDocStoreFromEnv({ repoFullName });
 const githubDedupe = new DeliveryDedupe();
 const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 const entitlements = new InMemoryEntitlementsStore();

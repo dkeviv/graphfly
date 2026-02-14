@@ -1,62 +1,61 @@
-import { generateFlowDocWithOpenClaw } from './openclaw-render.js';
-
-function slugify(key) {
-  return String(key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '');
-}
+import { runDocPrWithOpenClaw } from './openclaw-doc-run.js';
 
 export function createDocWorker({ store, docsWriter, docStore }) {
   return {
     async handle(job) {
       const { tenantId, repoId } = job.payload ?? {};
       const docsRepoFullName = job.payload?.docsRepoFullName;
+      const triggerSha = job.payload?.sha ?? 'mock';
       if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
         throw new Error('docsRepoFullName is required');
       }
       const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
 
-      const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha: job.payload.sha ?? 'mock', status: 'running' }) ?? null;
+      const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha, status: 'running' }) ?? null;
 
-      const files = [];
-      for (const ep of entrypoints) {
-        const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
-        const { markdown: md, trace } = await generateFlowDocWithOpenClaw({ store, tenantId, repoId, symbolUid });
-        const node = await store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
-
-        const docPath = `flows/${slugify(ep.entrypoint_key)}.md`;
-        // Persist block metadata (optional in this repo's in-memory implementation).
-        const block = docStore?.upsertBlock?.({
+      try {
+        const { pr } = await runDocPrWithOpenClaw({
+          store,
+          docStore,
+          docsWriter,
           tenantId,
           repoId,
-          docFile: docPath,
-          blockAnchor: `## ${node?.qualified_name ?? symbolUid}`,
-          blockType: 'flow',
-          content: md,
-          status: 'fresh'
-        }) ?? null;
-        if (block && docStore?.setEvidence) {
-          docStore.setEvidence({
+          docsRepoFullName,
+          triggerSha,
+          prRunId: prRun?.id ?? null
+        });
+
+        if (prRun && docStore?.updatePrRun) {
+          await docStore.updatePrRun({
             tenantId,
             repoId,
-            blockId: block.id,
-            evidence: trace.nodes.map((n) => ({
-              symbolUid: n.symbol_uid,
-              filePath: n.file_path ?? null,
-              lineStart: n.line_start ?? null
-            }))
+            prRunId: prRun.id,
+            patch: {
+              status: pr?.empty ? 'skipped' : 'success',
+              docsBranch: pr.branchName ?? null,
+              blocksUpdated: entrypoints.length,
+              blocksCreated: entrypoints.length,
+              blocksUnchanged: 0,
+              completedAt: new Date().toISOString()
+            }
           });
         }
-        files.push({ path: docPath, content: md });
+        return { ok: true, pr };
+      } catch (err) {
+        if (prRun && docStore?.updatePrRun) {
+          await docStore.updatePrRun({
+            tenantId,
+            repoId,
+            prRunId: prRun.id,
+            patch: {
+              status: 'failure',
+              errorMessage: String(err?.message ?? err),
+              completedAt: new Date().toISOString()
+            }
+          });
+        }
+        throw err;
       }
-
-      const pr = await docsWriter.openPullRequest({
-        targetRepoFullName: docsRepoFullName,
-        title: 'Graphfly: update docs',
-        body: 'Automated update based on Code Intelligence Graph evidence.',
-        branchName: `graphfly/docs/${Date.now()}`,
-        files
-      });
-      if (prRun) prRun.status = 'success';
-      return { ok: true, pr };
     }
   };
 }

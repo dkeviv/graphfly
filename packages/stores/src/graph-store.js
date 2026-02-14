@@ -1,7 +1,7 @@
 import { InMemoryGraphStore } from '../../cig/src/store.js';
 import { PgGraphStore } from '../../cig-pg/src/pg-store.js';
-import { createPgPool } from '../../pg-client/src/pool.js';
 import { withTenantClient } from '../../pg-client/src/tenant.js';
+import { getPgPoolFromEnv } from './pg-pool.js';
 
 export class PgGraphStorePool {
   constructor({ pool, repoFullName = 'local/unknown' }) {
@@ -187,6 +187,6 @@ export async function createGraphStoreFromEnv({ repoFullName = 'local/unknown' }
   const mode = process.env.GRAPHFLY_GRAPH_STORE ?? (connectionString ? 'pg' : 'memory');
   if (!connectionString || mode !== 'pg') return new InMemoryGraphStore();
 
-  const pool = await createPgPool({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
+  const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgGraphStorePool({ pool, repoFullName });
 }
