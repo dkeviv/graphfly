@@ -66,3 +66,32 @@ test('e2e: GitHub push webhook -> index job -> doc PR (docs repo only)', async (
   const fgs = store.listFlowGraphs({ tenantId: 't-1', repoId: 'r-1' });
   assert.ok(fgs.length >= 1);
 });
+
+test('incremental diagnostics mark doc blocks stale via impacted symbols', async () => {
+  const store = new InMemoryGraphStore();
+  const docQueue = new InMemoryQueue('doc');
+  const docStore = new InMemoryDocStore();
+  const indexer = createIndexerWorker({ store, docQueue, docStore });
+
+  // Initial full index to populate graph.
+  await indexer.handle({ payload: { tenantId: 't-1', repoId: 'r-1', repoRoot: 'fixtures/sample-repo', sha: 's1', changedFiles: [] } });
+
+  // Create a doc block that references the /health entrypoint symbol.
+  const ep = store.listFlowEntrypoints({ tenantId: 't-1', repoId: 'r-1' }).find((e) => e.path === '/health');
+  const block = docStore.upsertBlock({
+    tenantId: 't-1',
+    repoId: 'r-1',
+    docFile: 'flows/health.md',
+    blockAnchor: '## /health',
+    blockType: 'flow',
+    content: '## /health\n'
+  });
+  docStore.setEvidence({ tenantId: 't-1', repoId: 'r-1', blockId: block.id, evidence: [{ symbolUid: ep.entrypoint_symbol_uid }] });
+
+  // Incremental run: change a.js, which is called by server.js, which is triggered by the entrypoint.
+  await indexer.handle({ payload: { tenantId: 't-1', repoId: 'r-1', repoRoot: 'fixtures/sample-repo', sha: 's2', changedFiles: ['a.js'] } });
+
+  const after = docStore.getBlock({ tenantId: 't-1', repoId: 'r-1', blockId: block.id });
+  // Block should be stale because the entrypoint is in the impacted set (depth=2 both directions).
+  assert.equal(after.status, 'stale');
+});

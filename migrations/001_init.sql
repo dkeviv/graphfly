@@ -284,6 +284,12 @@ ALTER TABLE doc_blocks
 ALTER TABLE repos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE graph_edge_occurrences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_entrypoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dependency_manifests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE declared_dependencies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE observed_dependencies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dependency_mismatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
@@ -301,6 +307,30 @@ DROP POLICY IF EXISTS tenant_isolation_graph_edges ON graph_edges;
 CREATE POLICY tenant_isolation_graph_edges ON graph_edges
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
+DROP POLICY IF EXISTS tenant_isolation_graph_edge_occurrences ON graph_edge_occurrences;
+CREATE POLICY tenant_isolation_graph_edge_occurrences ON graph_edge_occurrences
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_flow_entrypoints ON flow_entrypoints;
+CREATE POLICY tenant_isolation_flow_entrypoints ON flow_entrypoints
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_dependency_manifests ON dependency_manifests;
+CREATE POLICY tenant_isolation_dependency_manifests ON dependency_manifests
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_declared_dependencies ON declared_dependencies;
+CREATE POLICY tenant_isolation_declared_dependencies ON declared_dependencies
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_observed_dependencies ON observed_dependencies;
+CREATE POLICY tenant_isolation_observed_dependencies ON observed_dependencies
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_dependency_mismatches ON dependency_mismatches;
+CREATE POLICY tenant_isolation_dependency_mismatches ON dependency_mismatches
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
 DROP POLICY IF EXISTS tenant_isolation_doc_blocks ON doc_blocks;
 CREATE POLICY tenant_isolation_doc_blocks ON doc_blocks
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
@@ -312,4 +342,3 @@ CREATE POLICY tenant_isolation_doc_evidence ON doc_evidence
 DROP POLICY IF EXISTS tenant_isolation_pr_runs ON pr_runs;
 CREATE POLICY tenant_isolation_pr_runs ON pr_runs
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
-

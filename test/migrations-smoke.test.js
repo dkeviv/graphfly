@@ -9,6 +9,8 @@ test('migrations/001_init.sql contains core CIG tables + RLS + HNSW', () => {
   assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS graph_edge_occurrences'));
   assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS doc_blocks'));
   assert.ok(sql.includes('ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY'));
+  assert.ok(sql.includes('ALTER TABLE graph_edge_occurrences ENABLE ROW LEVEL SECURITY'));
+  assert.ok(sql.includes('ALTER TABLE flow_entrypoints ENABLE ROW LEVEL SECURITY'));
+  assert.ok(sql.includes('ALTER TABLE dependency_manifests ENABLE ROW LEVEL SECURITY'));
   assert.ok(sql.includes('USING hnsw'));
 });
-
