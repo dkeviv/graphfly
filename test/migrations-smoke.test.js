@@ -20,5 +20,6 @@ test('migrations/001_init.sql contains core CIG tables + RLS + HNSW', () => {
   assert.ok(sql.includes('ALTER TABLE dependency_manifests ENABLE ROW LEVEL SECURITY'));
   assert.ok(sql.includes('ALTER TABLE index_diagnostics ENABLE ROW LEVEL SECURITY'));
   assert.ok(sql.includes('ALTER TABLE usage_counters ENABLE ROW LEVEL SECURITY'));
+  assert.ok(sql.includes('FORCE ROW LEVEL SECURITY'));
   assert.ok(sql.includes('USING hnsw'));
 });
