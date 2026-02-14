@@ -22,7 +22,7 @@ import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 import { createStripeClient, createCheckoutSession, createCustomerPortalSession } from '../../../packages/stripe-service/src/stripe.js';
-import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
+import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-counters.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -33,7 +33,7 @@ const docStore = await createDocStoreFromEnv({ repoFullName });
 const githubDedupe = new DeliveryDedupe();
 const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 const entitlements = new InMemoryEntitlementsStore();
-const usage = new InMemoryUsageCounters();
+const usage = await createUsageCountersFromEnv();
 const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 
@@ -59,7 +59,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
   onPush: async (push) => {
     const plan = entitlements.getPlan(DEFAULT_TENANT_ID);
     const limits = limitsForPlan(plan);
-    const ok = usage.consumeIndexJobOrDeny({ tenantId: DEFAULT_TENANT_ID, limitPerDay: limits.indexJobsPerDay, amount: 1 });
+    const ok = await usage.consumeIndexJobOrDeny({ tenantId: DEFAULT_TENANT_ID, limitPerDay: limits.indexJobsPerDay, amount: 1 });
     if (!ok.ok) {
       // For webhook-triggered runs, skip quietly (GitHub will retry on non-2xx).
       return;

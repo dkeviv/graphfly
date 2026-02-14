@@ -41,7 +41,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
         const processedCount = entrypointKeys ? entrypointKeys.length : entrypoints.length;
         const plan = entitlements.getPlan(tenantId);
         const limits = limitsForPlan(plan);
-        const allow = usage.consumeDocBlocksOrDeny({ tenantId, limitPerMonth: limits.docBlocksPerMonth, amount: processedCount });
+        const allow = await usage.consumeDocBlocksOrDeny({ tenantId, limitPerMonth: limits.docBlocksPerMonth, amount: processedCount });
         if (!allow.ok) {
           if (prRun && docStore?.updatePrRun) {
             await docStore.updatePrRun({
