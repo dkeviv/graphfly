@@ -72,6 +72,22 @@ export class PgDocStorePool {
       return store.updatePrRun(args);
     });
   }
+
+  async listPrRuns(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgDocStore({ client, repoFullName: this._repoFullName });
+      return store.listPrRuns(args);
+    });
+  }
+
+  async getPrRun(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgDocStore({ client, repoFullName: this._repoFullName });
+      return store.getPrRun(args);
+    });
+  }
 }
 
 export async function createDocStoreFromEnv({ repoFullName = 'local/unknown' } = {}) {
@@ -82,4 +98,3 @@ export async function createDocStoreFromEnv({ repoFullName = 'local/unknown' } =
   const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgDocStorePool({ pool, repoFullName });
 }
-

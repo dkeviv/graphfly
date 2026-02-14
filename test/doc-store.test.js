@@ -18,3 +18,12 @@ test('InMemoryDocStore upserts blocks and marks stale via evidence', () => {
   assert.equal(ds.getBlock({ tenantId: 't-1', repoId: 'r-1', blockId: b.id }).status, 'stale');
 });
 
+test('InMemoryDocStore creates and lists PR runs', () => {
+  const ds = new InMemoryDocStore();
+  const pr1 = ds.createPrRun({ tenantId: 't-1', repoId: 'r-1', triggerSha: 's1', status: 'running' });
+  ds.updatePrRun({ tenantId: 't-1', repoId: 'r-1', prRunId: pr1.id, patch: { status: 'success' } });
+  const runs = ds.listPrRuns({ tenantId: 't-1', repoId: 'r-1' });
+  assert.ok(Array.isArray(runs));
+  assert.equal(runs.length, 1);
+  assert.equal(ds.getPrRun({ tenantId: 't-1', repoId: 'r-1', prRunId: pr1.id }).status, 'success');
+});

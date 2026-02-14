@@ -271,7 +271,7 @@ router.get('/docs/blocks', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const status = req.query.status ?? null;
-  return { status: 200, body: { blocks: docStore.listBlocks({ tenantId, repoId, status }) } };
+  return { status: 200, body: { blocks: await docStore.listBlocks({ tenantId, repoId, status }) } };
 });
 
 router.get('/docs/block', async (req) => {
@@ -279,9 +279,27 @@ router.get('/docs/block', async (req) => {
   const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const blockId = req.query.blockId;
   if (typeof blockId !== 'string' || blockId.length === 0) return { status: 400, body: { error: 'blockId is required' } };
-  const block = docStore.getBlock({ tenantId, repoId, blockId });
+  const block = await docStore.getBlock({ tenantId, repoId, blockId });
   if (!block) return { status: 404, body: { error: 'not_found' } };
-  return { status: 200, body: { block, evidence: docStore.getEvidence({ tenantId, repoId, blockId }) } };
+  return { status: 200, body: { block, evidence: await docStore.getEvidence({ tenantId, repoId, blockId }) } };
+});
+
+router.get('/pr-runs', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const status = req.query.status ?? null;
+  const limit = Number(req.query.limit ?? 50);
+  return { status: 200, body: { runs: await docStore.listPrRuns({ tenantId, repoId, status, limit }) } };
+});
+
+router.get('/pr-run', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const prRunId = req.query.prRunId;
+  if (typeof prRunId !== 'string' || prRunId.length === 0) return { status: 400, body: { error: 'prRunId is required' } };
+  const prRun = await docStore.getPrRun({ tenantId, repoId, prRunId });
+  if (!prRun) return { status: 404, body: { error: 'not_found' } };
+  return { status: 200, body: { prRun } };
 });
 
 router.get('/deps/mismatches', async (req) => {

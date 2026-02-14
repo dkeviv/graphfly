@@ -96,3 +96,20 @@ test('PgDocStore.updatePrRun updates allowed fields', async () => {
   assert.equal(pr.status, 'success');
 });
 
+test('PgDocStore.listPrRuns and getPrRun query pr_runs', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
+    if (text.startsWith('SELECT * FROM pr_runs WHERE tenant_id')) {
+      if (text.includes('AND id=$3')) return { rows: [{ id: 'pr-1', status: 'success' }] };
+      return { rows: [{ id: 'pr-2', status: 'running' }] };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+  const ds = new PgDocStore({ client, repoFullName: 'org/repo' });
+
+  const list = await ds.listPrRuns({ tenantId: 't-uuid', repoId: 'r-uuid', limit: 5 });
+  assert.equal(list.length, 1);
+  const run = await ds.getPrRun({ tenantId: 't-uuid', repoId: 'r-uuid', prRunId: 'pr-1' });
+  assert.equal(run.id, 'pr-1');
+});

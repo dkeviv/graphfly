@@ -240,4 +240,32 @@ export class PgDocStore {
     );
     return res.rows?.[0] ?? null;
   }
+
+  async listPrRuns({ tenantId, repoId, status = null, limit = 50 } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 50;
+    if (status) {
+      const res = await this._c.query(
+        `SELECT * FROM pr_runs WHERE tenant_id=$1 AND repo_id=$2 AND status=$3 ORDER BY created_at DESC LIMIT $4`,
+        [tenantId, repoId, status, n]
+      );
+      return Array.isArray(res.rows) ? res.rows : [];
+    }
+    const res = await this._c.query(`SELECT * FROM pr_runs WHERE tenant_id=$1 AND repo_id=$2 ORDER BY created_at DESC LIMIT $3`, [
+      tenantId,
+      repoId,
+      n
+    ]);
+    return Array.isArray(res.rows) ? res.rows : [];
+  }
+
+  async getPrRun({ tenantId, repoId, prRunId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const res = await this._c.query(`SELECT * FROM pr_runs WHERE tenant_id=$1 AND repo_id=$2 AND id=$3 LIMIT 1`, [
+      tenantId,
+      repoId,
+      prRunId
+    ]);
+    return res.rows?.[0] ?? null;
+  }
 }

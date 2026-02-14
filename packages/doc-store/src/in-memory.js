@@ -97,4 +97,17 @@ export class InMemoryDocStore {
     if (p.completedAt !== undefined) pr.completedAt = p.completedAt;
     return pr;
   }
+
+  listPrRuns({ tenantId, repoId, status = null, limit = 50 } = {}) {
+    const rk = repoKey({ tenantId, repoId });
+    const runs = Array.from(this._prRuns.get(rk)?.values() ?? []);
+    const filtered = status ? runs.filter((r) => r.status === status) : runs;
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 50;
+    return filtered.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, n);
+  }
+
+  getPrRun({ tenantId, repoId, prRunId }) {
+    const rk = repoKey({ tenantId, repoId });
+    return this._prRuns.get(rk)?.get(prRunId) ?? null;
+  }
 }
