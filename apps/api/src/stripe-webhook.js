@@ -16,8 +16,13 @@ export function makeStripeWebhookHandler({ signingSecret, dedupe, onEvent, nowSe
     const eventId = event?.id;
     if (typeof eventId !== 'string' || eventId.length === 0) return { status: 400, body: { error: 'missing_event_id' } };
 
-    if (dedupe.has(eventId)) return { status: 200, body: { ok: true, deduped: true } };
-    dedupe.add(eventId);
+    if (dedupe?.tryAdd) {
+      const added = await dedupe.tryAdd(eventId);
+      if (!added) return { status: 200, body: { ok: true, deduped: true } };
+    } else if (dedupe) {
+      if (await dedupe.has(eventId)) return { status: 200, body: { ok: true, deduped: true } };
+      await dedupe.add(eventId);
+    }
 
     await onEvent(event);
     return { status: 200, body: { ok: true } };

@@ -17,5 +17,11 @@ export class StripeEventDedupe {
       this._seen.delete(firstKey);
     }
   }
-}
 
+  // Convenience for async-safe handlers: returns true if newly added, false if already seen.
+  tryAdd(eventId) {
+    if (this.has(eventId)) return false;
+    this.add(eventId);
+    return true;
+  }
+}

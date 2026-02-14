@@ -23,6 +23,9 @@ import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writ
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 import { createStripeClient, createCheckoutSession, createCustomerPortalSession } from '../../../packages/stripe-service/src/stripe.js';
 import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-counters.js';
+import { getPgPoolFromEnv } from '../../../packages/stores/src/pg-pool.js';
+import { withTenantClient } from '../../../packages/pg-client/src/tenant.js';
+import { PgBillingStore } from '../../../packages/billing-pg/src/pg-billing-store.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -36,6 +39,13 @@ const entitlements = new InMemoryEntitlementsStore();
 const usage = await createUsageCountersFromEnv();
 const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
+const billingPool = await getPgPoolFromEnv({ connectionString: process.env.DATABASE_URL ?? '', max: Number(process.env.PG_POOL_MAX ?? 10) });
+
+function tenantIdFromStripeEvent(event) {
+  const md = event?.data?.object?.metadata;
+  const v = md?.tenantId ?? md?.tenant_id ?? md?.orgId ?? md?.org_id;
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
 
 // In-memory job plumbing (no external deps). In production this is BullMQ + Redis.
 const indexQueue = new InMemoryQueue('index');
@@ -85,8 +95,34 @@ const handleStripeWebhook = makeStripeWebhookHandler({
   signingSecret: stripeSecret,
   dedupe: stripeDedupe,
   onEvent: async (event) => {
-    // TODO: persist stripe_events + org_billing snapshot per docs/02_REQUIREMENTS.md FR-BL-03 + docs/03_TECHNICAL_SPEC.md.
-    applyStripeEventToEntitlements({ event, tenantId: 't-1', entitlementsStore: entitlements });
+    const tenantId = tenantIdFromStripeEvent(event);
+    if (tenantId && billingPool) {
+      await withTenantClient({ pool: billingPool, tenantId }, async (client) => {
+        const billing = new PgBillingStore({ client });
+        const inserted = await billing.tryInsertStripeEvent({
+          tenantId,
+          stripeEventId: event.id,
+          type: String(event.type ?? 'unknown')
+        });
+        if (!inserted.inserted) return;
+
+        try {
+          if (String(event.type ?? '').startsWith('customer.subscription.')) {
+            await billing.upsertBillingFromSubscription({ tenantId, subscription: event.data?.object });
+            applyStripeEventToEntitlements({ event, tenantId, entitlementsStore: entitlements });
+          }
+          await billing.markStripeEventProcessed({ tenantId, stripeEventId: event.id, errorMessage: null });
+        } catch (err) {
+          await billing.markStripeEventProcessed({ tenantId, stripeEventId: event.id, errorMessage: String(err?.message ?? err) });
+          throw err;
+        }
+      });
+      return;
+    }
+
+    if (tenantId) {
+      applyStripeEventToEntitlements({ event, tenantId, entitlementsStore: entitlements });
+    }
   }
 });
 
