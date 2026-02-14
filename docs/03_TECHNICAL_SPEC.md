@@ -408,13 +408,14 @@ CREATE TABLE doc_blocks (
                         'overview', 'function', 'class', 'flow',
                         'module', 'api_endpoint', 'schema', 'package'
                     )),
+    status          TEXT NOT NULL DEFAULT 'fresh'
+                    CHECK (status IN ('fresh','stale','locked','error')),
     content         TEXT NOT NULL,      -- Full markdown of this section
-    content_hash    TEXT NOT NULL,      -- SHA-256 of content
-    status          TEXT NOT NULL DEFAULT 'current'
-                    CHECK (status IN ('current', 'stale', 'generating', 'error')),
+    content_hash    TEXT NOT NULL,      -- hash of content (sha256 in production; stable hash in dev/test)
+    last_index_sha  TEXT,
     last_pr_id      UUID,               -- FK to pr_runs (set after FK circle resolved)
-    last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, repo_id, doc_file, block_anchor)
 );
 CREATE INDEX idx_db_repo ON doc_blocks(tenant_id, repo_id);
@@ -429,14 +430,15 @@ CREATE INDEX idx_db_status ON doc_blocks(tenant_id, repo_id, status);
 CREATE TABLE doc_evidence (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
     doc_block_id    UUID NOT NULL REFERENCES doc_blocks(id) ON DELETE CASCADE,
-    node_id         UUID NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    node_id         UUID REFERENCES graph_nodes(id) ON DELETE SET NULL,
     symbol_uid      TEXT NOT NULL,      -- Denormalized stable identity (for UI/support without extra joins)
     qualified_name  TEXT,               -- Denormalized for display/search
-    file_path       TEXT NOT NULL,      -- Denormalized for fast display
-    line_start      INTEGER NOT NULL,
-    line_end        INTEGER NOT NULL,
-    commit_sha      TEXT NOT NULL,
+    file_path       TEXT,               -- Denormalized for fast display (no code bodies)
+    line_start      INTEGER,
+    line_end        INTEGER,
+    sha             TEXT NOT NULL,
     contract_hash   TEXT,               -- Hash of the public contract at time of doc generation
     evidence_kind   TEXT NOT NULL DEFAULT 'contract_location'
                     CHECK (evidence_kind IN ('contract_location','flow','dependency','other')),
@@ -774,6 +776,15 @@ async function getUndocumentedNodes(
 ```
 
 ### 2.3 Doc Agent Tools
+
+**MVP implementation note (this repo):** the current OpenClaw-backed doc agent loop is implemented as a tool-driven pipeline using these concrete tool names:
+- `flows_entrypoints_list`
+- `contracts_get`
+- `flows_trace`
+- `docs_upsert_block`
+- `github_create_pr`
+
+These map to the same conceptual capabilities described below (graph queries, contracts/flows, doc block CRUD, and docs PR creation). A future phase can add the expanded dotted tool naming (`graph.*`, `contracts.*`, `docs.*`) once the public API surface is finalized.
 
 All tools use TypeBox schema pattern from OpenClaw (`openclaw/src/agents/openclaw-tools.ts`):
 

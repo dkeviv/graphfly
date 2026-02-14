@@ -157,6 +157,10 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
   - symbol resolution changes cause cascading impacts beyond the changed files
 - System shall make the re-parse scope explicit (directly changed files + computed impacted set) and expose index diagnostics (what was re-parsed and why).
 
+#### FR-CIG-13 (Future): Graph Versions / Time Travel
+- V1 shall record `first_seen_sha` / `last_seen_sha` on graph entities to answer basic “when did this exist” questions.
+- A future phase should support full graph versioning (time travel) for a repo, enabling queries like “show the Code Intelligence Graph as of commit X” and diffing graph changes across commits.
+
 ---
 
 ### 2.3 Documentation Generation
@@ -167,6 +171,7 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - Initial docs shall be opened as a PR to the docs repo
 
 #### FR-DOC-02: Doc Block Structure
+- A **doc block** is an atomic, independently updatable Markdown section keyed by (`doc_file`, `block_anchor`) and backed by evidence links to graph nodes.
 - Each doc block shall correspond to one markdown section (`## Heading`)
 - Each doc block shall have a `block_type`: `function | class | flow | module | api_endpoint | schema | overview | package`
 - Each doc block shall have at least one evidence link (graph node + file + line numbers)
