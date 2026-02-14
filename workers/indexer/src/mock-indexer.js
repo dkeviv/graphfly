@@ -408,17 +408,27 @@ export function mockIndexRepo({
     const manifestNode = makeManifestNode({ filePath, sha });
     emit({ type: 'node', data: manifestNode });
 
+    const pkg = safeJsonParse(fs.readFileSync(absManifest, 'utf8')) ?? {};
+    const depsObj = pkg.dependencies ?? {};
+    const devDepsObj = pkg.devDependencies ?? {};
+
     emit({
       type: 'dependency_manifest',
       data: {
         file_path: filePath,
         sha,
         manifest_type: 'package.json',
-        manifest_key: `${filePath}::${sha}`
+        manifest_key: `${filePath}::${sha}`,
+        parsed: {
+          name: typeof pkg.name === 'string' ? pkg.name : null,
+          version: typeof pkg.version === 'string' ? pkg.version : null,
+          license: typeof pkg.license === 'string' ? pkg.license : null,
+          dependencies: typeof depsObj === 'object' && depsObj ? depsObj : {},
+          devDependencies: typeof devDepsObj === 'object' && devDepsObj ? devDepsObj : {}
+        }
       }
     });
 
-    const pkg = safeJsonParse(fs.readFileSync(absManifest, 'utf8')) ?? {};
     const deps = Object.entries(pkg.dependencies ?? {});
     const devDeps = Object.entries(pkg.devDependencies ?? {});
 

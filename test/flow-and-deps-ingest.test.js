@@ -14,6 +14,8 @@ test('mock indexer emits flow entrypoints, declared/observed deps, and mismatche
 
   const manifests = store.listDependencyManifests({ tenantId: 't-1', repoId: 'r-1' });
   assert.ok(manifests.some((m) => m.manifest_type === 'package.json'));
+  const root = manifests.find((m) => m.file_path === 'package.json') ?? manifests[0];
+  assert.ok(root?.parsed?.dependencies?.express, 'expected parsed manifest summary to include dependencies');
 
   const declared = store.listDeclaredDependencies({ tenantId: 't-1', repoId: 'r-1' });
   assert.ok(declared.some((d) => d.package_key === 'npm:express'));
