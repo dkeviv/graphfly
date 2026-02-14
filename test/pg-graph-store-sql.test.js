@@ -36,7 +36,9 @@ test('PgGraphStore.upsertNode writes graph_nodes with embedding literal', async 
   assert.equal(id, 'n-1');
   const insert = client.calls.find((c) => c.text.includes('INSERT INTO graph_nodes'));
   assert.ok(insert);
-  const embeddingParam = insert.params[23];
+  const embeddingParam = insert.params.find(
+    (p) => typeof p === 'string' && p.startsWith('[') && p.endsWith(']') && p.includes(',')
+  );
   assert.equal(typeof embeddingParam, 'string');
   assert.ok(embeddingParam.startsWith('[') && embeddingParam.endsWith(']'));
 });

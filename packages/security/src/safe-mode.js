@@ -19,6 +19,9 @@ export function sanitizeNodeForMode(node, mode) {
     qualifiedName: node.qualified_name ?? null,
     name: node.name ?? null,
     nodeType: node.node_type,
+    symbolKind: node.symbol_kind ?? null,
+    containerUid: node.container_uid ?? null,
+    exportedName: node.exported_name ?? null,
     language: node.language ?? null,
     visibility: node.visibility ?? null,
     signature: node.signature ?? null,
@@ -39,4 +42,3 @@ export function sanitizeNodeForMode(node, mode) {
 
   return safe;
 }
-

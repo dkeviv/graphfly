@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     -- Robust identity
     symbol_uid      TEXT NOT NULL,
     qualified_name  TEXT,
+    symbol_kind     TEXT, -- function/method/class/module/etc. (contract-first; no bodies)
+    container_uid   TEXT, -- symbol_uid of container (module/class/file), if any
+    exported_name   TEXT, -- export name if different from `name`
 
     name            TEXT,
     node_type       TEXT NOT NULL,
@@ -138,11 +141,26 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     UNIQUE (tenant_id, repo_id, node_key)
 );
 
+-- Optional schema enrichments (idempotent for existing DBs).
+ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS symbol_kind TEXT;
+ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS container_uid TEXT;
+ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS exported_name TEXT;
+ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS container_node_id UUID;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_graph_nodes_container_node') THEN
+    ALTER TABLE graph_nodes
+      ADD CONSTRAINT fk_graph_nodes_container_node
+      FOREIGN KEY (container_node_id) REFERENCES graph_nodes(id) ON DELETE SET NULL;
+  END IF;
+END$$;
+
 CREATE INDEX IF NOT EXISTS idx_gn_repo ON graph_nodes(tenant_id, repo_id);
 CREATE INDEX IF NOT EXISTS idx_gn_file ON graph_nodes(tenant_id, repo_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_gn_type ON graph_nodes(tenant_id, repo_id, node_type);
 CREATE INDEX IF NOT EXISTS idx_gn_name ON graph_nodes(tenant_id, repo_id, name);
 CREATE INDEX IF NOT EXISTS idx_gn_uid ON graph_nodes(tenant_id, repo_id, symbol_uid);
+CREATE INDEX IF NOT EXISTS idx_gn_container_uid ON graph_nodes(tenant_id, repo_id, container_uid) WHERE container_uid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_gn_embedding_hnsw ON graph_nodes
     USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
 

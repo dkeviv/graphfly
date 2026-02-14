@@ -318,6 +318,7 @@ export class PgGraphStore {
     const res = await this._c.query(
       `INSERT INTO graph_nodes (
         tenant_id, repo_id, node_key, symbol_uid, qualified_name,
+        symbol_kind, container_uid, exported_name,
         name, node_type, language, file_path, line_start, line_end, visibility,
         signature, signature_hash, declaration, docstring, type_annotation, return_type,
         parameters, contract, constraints, allowable_values, external_ref,
@@ -325,15 +326,19 @@ export class PgGraphStore {
         first_seen_sha, last_seen_sha
       ) VALUES (
         $1,$2,$3,$4,$5,
-        $6,$7,$8,$9,$10,$11,$12,
-        $13,$14,$15,$16,$17,$18,
-        $19,$20,$21,$22,$23,
-        $24,$25,
-        $26,$27
+        $6,$7,$8,
+        $9,$10,$11,$12,$13,$14,$15,
+        $16,$17,$18,$19,$20,$21,
+        $22,$23,$24,$25,$26,
+        $27,$28,
+        $29,$30
       )
       ON CONFLICT (tenant_id, repo_id, symbol_uid) DO UPDATE SET
         node_key=EXCLUDED.node_key,
         qualified_name=EXCLUDED.qualified_name,
+        symbol_kind=EXCLUDED.symbol_kind,
+        container_uid=EXCLUDED.container_uid,
+        exported_name=EXCLUDED.exported_name,
         name=EXCLUDED.name,
         node_type=EXCLUDED.node_type,
         language=EXCLUDED.language,
@@ -363,6 +368,9 @@ export class PgGraphStore {
         nodeKey,
         node.symbol_uid,
         node.qualified_name ?? null,
+        node.symbol_kind ?? null,
+        node.container_uid ?? null,
+        node.exported_name ?? null,
         node.name ?? null,
         node.node_type,
         node.language ?? null,
@@ -869,6 +877,9 @@ export class PgGraphStore {
          SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(
            symbol_uid text,
            qualified_name text,
+           symbol_kind text,
+           container_uid text,
+           exported_name text,
            name text,
            node_type text,
            language text,
@@ -896,6 +907,7 @@ export class PgGraphStore {
        )
        INSERT INTO graph_nodes (
          tenant_id, repo_id, node_key, symbol_uid, qualified_name,
+         symbol_kind, container_uid, exported_name,
          name, node_type, language, file_path, line_start, line_end, visibility,
          signature, signature_hash, declaration, docstring, type_annotation, return_type,
          parameters, contract, constraints, allowable_values, external_ref,
@@ -906,6 +918,7 @@ export class PgGraphStore {
          $1, $2,
          COALESCE(x.node_key, x.symbol_uid),
          x.symbol_uid, x.qualified_name,
+         x.symbol_kind, x.container_uid, x.exported_name,
          x.name, x.node_type, x.language, NULLIF(x.file_path, ''),
          x.line_start, x.line_end, x.visibility,
          x.signature, x.signature_hash, x.declaration, x.docstring, x.type_annotation, x.return_type,
@@ -918,6 +931,9 @@ export class PgGraphStore {
        ON CONFLICT (tenant_id, repo_id, symbol_uid) DO UPDATE SET
          node_key=EXCLUDED.node_key,
          qualified_name=EXCLUDED.qualified_name,
+         symbol_kind=EXCLUDED.symbol_kind,
+         container_uid=EXCLUDED.container_uid,
+         exported_name=EXCLUDED.exported_name,
          name=EXCLUDED.name,
          node_type=EXCLUDED.node_type,
          language=EXCLUDED.language,

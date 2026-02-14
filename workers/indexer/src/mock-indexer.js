@@ -211,7 +211,7 @@ function parseExportedDecls(lines) {
   return out;
 }
 
-function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language = 'js' }) {
+function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language = 'js', containerUid = null }) {
   const qualifiedName = `${filePath}::${name}`;
   const paramNames = params.length > 0 ? params : Array.from(jsdoc?.params?.keys?.() ?? []);
   const signature = kind === 'class' ? `class ${name}` : `function ${name}(${paramNames.join(', ')})`;
@@ -237,6 +237,8 @@ function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha
     qualified_name: qualifiedName,
     name,
     node_type: kind === 'class' ? 'Class' : 'Function',
+    symbol_kind: kind === 'class' ? 'class' : 'function',
+    container_uid: containerUid,
     file_path: filePath,
     line_start: line,
     line_end: line,
@@ -265,6 +267,7 @@ function makePackageNode({ ecosystem, name, sha }) {
     qualified_name: qualifiedName,
     name,
     node_type: 'Package',
+    symbol_kind: 'package',
     file_path: '',
     line_start: 1,
     line_end: 1,
@@ -291,6 +294,7 @@ function makeManifestNode({ filePath, sha }) {
     qualified_name: qualifiedName,
     name: path.basename(filePath),
     node_type: 'Manifest',
+    symbol_kind: 'manifest',
     file_path: filePath,
     line_start: 1,
     line_end: 1,
@@ -316,6 +320,7 @@ function makeFileNode({ filePath, language, sha }) {
     qualified_name: qualifiedName,
     name: path.basename(filePath),
     node_type: 'File',
+    symbol_kind: 'module',
     file_path: filePath,
     line_start: 1,
     line_end: 1,
@@ -333,7 +338,7 @@ function makeFileNode({ filePath, language, sha }) {
   };
 }
 
-function makeApiEndpointNode({ method, routePath, filePath, line, sha }) {
+function makeApiEndpointNode({ method, routePath, filePath, line, sha, containerUid = null }) {
   const qualifiedName = `http.${method}.${routePath}`;
   const signature = `${method} ${routePath}`;
   const signatureHash = computeSignatureHash({ signature });
@@ -343,6 +348,8 @@ function makeApiEndpointNode({ method, routePath, filePath, line, sha }) {
     qualified_name: qualifiedName,
     name: signature,
     node_type: 'ApiEndpoint',
+    symbol_kind: 'api_endpoint',
+    container_uid: containerUid,
     file_path: filePath,
     line_start: line,
     line_end: line,
@@ -486,7 +493,7 @@ export function mockIndexRepo({
       const byName = new Map();
       for (const d of decls) {
         const params = parseParamNames(d.paramsRaw);
-        const node = makeExportedSymbolNode({ kind: d.kind, name: d.name, params, jsdoc: d.jsdoc, filePath, line: d.line, sha, language });
+        const node = makeExportedSymbolNode({ kind: d.kind, name: d.name, params, jsdoc: d.jsdoc, filePath, line: d.line, sha, language, containerUid: sourceUid });
         byName.set(d.name, node.symbol_uid);
         emit({ type: 'node', data: node });
 
@@ -519,7 +526,7 @@ export function mockIndexRepo({
     }
 
     for (const r of parseExpressRoutes(lines)) {
-      const epNode = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha });
+      const epNode = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha, containerUid: sourceUid });
       emit({ type: 'node', data: epNode });
 
       emit({
