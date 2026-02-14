@@ -155,5 +155,28 @@ export class PgBillingStore {
 
     return { ok: true, plan };
   }
-}
 
+  async getBillingSummary({ tenantId }) {
+    assertUuid(tenantId, 'tenantId');
+    const res = await this._c.query(
+      `SELECT o.plan AS plan,
+              b.status AS status,
+              b.current_period_start AS current_period_start,
+              b.current_period_end AS current_period_end,
+              b.cancel_at_period_end AS cancel_at_period_end
+       FROM orgs o
+       LEFT JOIN org_billing b ON b.org_id = o.id
+       WHERE o.id=$1`,
+      [tenantId]
+    );
+    const row = res.rows?.[0] ?? null;
+    return {
+      tenantId,
+      plan: String(row?.plan ?? 'free'),
+      status: row?.status ?? null,
+      currentPeriodStart: row?.current_period_start ?? null,
+      currentPeriodEnd: row?.current_period_end ?? null,
+      cancelAtPeriodEnd: row?.cancel_at_period_end ?? null
+    };
+  }
+}

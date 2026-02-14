@@ -67,3 +67,32 @@ test('PgBillingStore.upsertBillingFromSubscription updates org plan and org_bill
   assert.equal(out.plan, 'enterprise');
 });
 
+test('PgBillingStore.getBillingSummary reads plan and current period fields', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.includes('FROM orgs o') && text.includes('LEFT JOIN org_billing')) {
+      return {
+        rows: [
+          {
+            plan: 'pro',
+            status: 'active',
+            current_period_start: '2026-02-01T00:00:00.000Z',
+            current_period_end: '2026-03-01T00:00:00.000Z',
+            cancel_at_period_end: false
+          }
+        ]
+      };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+
+  const store = new PgBillingStore({ client });
+  const out = await store.getBillingSummary({ tenantId: '00000000-0000-0000-0000-000000000001' });
+  assert.deepEqual(out, {
+    tenantId: '00000000-0000-0000-0000-000000000001',
+    plan: 'pro',
+    status: 'active',
+    currentPeriodStart: '2026-02-01T00:00:00.000Z',
+    currentPeriodEnd: '2026-03-01T00:00:00.000Z',
+    cancelAtPeriodEnd: false
+  });
+});

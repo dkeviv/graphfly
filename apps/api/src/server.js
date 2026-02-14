@@ -132,17 +132,31 @@ router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
   return handleStripeWebhook({ headers, rawBody });
 });
 
-router.get('/billing/summary', async (req) => {
+async function billingSummaryHandler(req) {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const plan = await Promise.resolve(entitlements.getPlan(tenantId));
-  return { status: 200, body: { tenantId, plan } };
-});
+  if (!billingPool) return { status: 200, body: { tenantId, plan, status: null, currentPeriodStart: null, currentPeriodEnd: null, cancelAtPeriodEnd: null } };
 
-router.get('/api/v1/billing/summary', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
-  const plan = await Promise.resolve(entitlements.getPlan(tenantId));
-  return { status: 200, body: { tenantId, plan } };
-});
+  const summary = await withTenantClient({ pool: billingPool, tenantId }, async (client) => {
+    const billing = new PgBillingStore({ client });
+    return billing.getBillingSummary({ tenantId });
+  });
+
+  return {
+    status: 200,
+    body: {
+      tenantId,
+      plan,
+      status: summary.status,
+      currentPeriodStart: summary.currentPeriodStart,
+      currentPeriodEnd: summary.currentPeriodEnd,
+      cancelAtPeriodEnd: summary.cancelAtPeriodEnd
+    }
+  };
+}
+
+router.get('/billing/summary', billingSummaryHandler);
+router.get('/api/v1/billing/summary', billingSummaryHandler);
 
 async function billingUsageHandler(req) {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;

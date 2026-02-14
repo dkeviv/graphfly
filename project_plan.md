@@ -22,6 +22,6 @@
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` (OpenClaw tool loop for doc PR run + per-block validation; `OPENCLAW_USE_REMOTE=1` enables gateway mode) |
 | Support-safe mode enforcement | `docs/05_SECURITY.md` | FR-CIG-11 | DONE | `npm test` |
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | PARTIAL | `npm test` (RPM limiter + Pg/InMemory entitlements + Pg/InMemory usage counters) |
-| Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | PARTIAL | `npm test` (webhook verify+in-mem dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; checkout/portal endpoints still env-stubbed) |
+| Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | PARTIAL | `npm test` (webhook verify+in-mem dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; billing summary reads org_billing; checkout/portal endpoints still env-stubbed) |
 | Frontend onboarding + graph explorer UX | `docs/04_UX_SPEC.md` | UF-* + FR-GX-* | PARTIAL | `npm test` (focus mode + lazy neighborhood fetch) |
 | Operations (SLOs/monitoring/runbooks) | `docs/06_OPERATIONS.md` | NFR-* | DONE | `npm test` |
