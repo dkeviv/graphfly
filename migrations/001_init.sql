@@ -139,6 +139,41 @@ CREATE TABLE IF NOT EXISTS flow_entrypoints (
     UNIQUE (tenant_id, repo_id, entrypoint_key)
 );
 
+CREATE TABLE IF NOT EXISTS flow_graphs (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    entrypoint_key  TEXT NOT NULL,
+    start_symbol_uid TEXT NOT NULL,
+    sha             TEXT NOT NULL,
+    depth           INTEGER NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, entrypoint_key, sha, depth)
+);
+CREATE INDEX IF NOT EXISTS idx_fg_repo ON flow_graphs(tenant_id, repo_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS flow_graph_nodes (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    flow_graph_id UUID NOT NULL REFERENCES flow_graphs(id) ON DELETE CASCADE,
+    node_id       UUID NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, flow_graph_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fgn_graph ON flow_graph_nodes(tenant_id, repo_id, flow_graph_id);
+
+CREATE TABLE IF NOT EXISTS flow_graph_edges (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    flow_graph_id UUID NOT NULL REFERENCES flow_graphs(id) ON DELETE CASCADE,
+    edge_id       UUID NOT NULL REFERENCES graph_edges(id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, flow_graph_id, edge_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fge_graph ON flow_graph_edges(tenant_id, repo_id, flow_graph_id);
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- DEPENDENCY & MANIFEST INTELLIGENCE
 -- ═══════════════════════════════════════════════════════════════════════
@@ -286,6 +321,9 @@ ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edge_occurrences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE flow_entrypoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_graphs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_graph_nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_graph_edges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dependency_manifests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE declared_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE observed_dependencies ENABLE ROW LEVEL SECURITY;
@@ -313,6 +351,18 @@ CREATE POLICY tenant_isolation_graph_edge_occurrences ON graph_edge_occurrences
 
 DROP POLICY IF EXISTS tenant_isolation_flow_entrypoints ON flow_entrypoints;
 CREATE POLICY tenant_isolation_flow_entrypoints ON flow_entrypoints
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_flow_graphs ON flow_graphs;
+CREATE POLICY tenant_isolation_flow_graphs ON flow_graphs
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_flow_graph_nodes ON flow_graph_nodes;
+CREATE POLICY tenant_isolation_flow_graph_nodes ON flow_graph_nodes
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_flow_graph_edges ON flow_graph_edges;
+CREATE POLICY tenant_isolation_flow_graph_edges ON flow_graph_edges
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_dependency_manifests ON dependency_manifests;
