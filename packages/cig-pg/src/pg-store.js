@@ -36,14 +36,16 @@ function parseFlowGraphKey(k) {
 }
 
 export class PgGraphStore {
-  constructor({ client }) {
+  constructor({ client, repoFullName = 'local/unknown' }) {
     if (!client || typeof client.query !== 'function') throw new Error('client.query is required');
     this._c = client;
+    this._repoFullName = repoFullName;
     this._nodeIdByKey = new Map(); // tenant::repo::symbol_uid -> uuid
     this._edgeIdByKey = new Map(); // tenant::repo::edgeKey -> uuid
     this._manifestIdByKey = new Map(); // tenant::repo::manifest_key -> uuid
     this._packageIdByKey = new Map(); // ecosystem::name -> uuid
     this._indexDiagnosticsByKey = new Map(); // tenant::repo -> Array
+    this._ensured = new Set(); // tenant::repo
   }
 
   _rk({ tenantId, repoId }) {
@@ -59,6 +61,7 @@ export class PgGraphStore {
   }
 
   async _getNodeId({ tenantId, repoId, symbolUid }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const k = this._nk({ tenantId, repoId, symbolUid });
     const cached = this._nodeIdByKey.get(k);
     if (cached) return cached;
@@ -89,6 +92,7 @@ export class PgGraphStore {
   }
 
   async _getEdgeIdByUids({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const edgeKey = `${sourceSymbolUid}::${edgeType}::${targetSymbolUid}`;
     const k = this._ek({ tenantId, repoId, edgeKey });
     const cached = this._edgeIdByKey.get(k);
@@ -108,6 +112,7 @@ export class PgGraphStore {
   }
 
   async getNodeBySymbolUid({ tenantId, repoId, symbolUid }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query(
       'SELECT * FROM graph_nodes WHERE tenant_id=$1 AND repo_id=$2 AND symbol_uid=$3 LIMIT 1',
       [tenantId, repoId, symbolUid]
@@ -116,11 +121,13 @@ export class PgGraphStore {
   }
 
   async listNodes({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query('SELECT * FROM graph_nodes WHERE tenant_id=$1 AND repo_id=$2', [tenantId, repoId]);
     return Array.isArray(res.rows) ? res.rows : [];
   }
 
   async listEdges({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query(
       `SELECT
          s.symbol_uid as source_symbol_uid,
@@ -139,6 +146,7 @@ export class PgGraphStore {
   }
 
   async listEdgesByNode({ tenantId, repoId, symbolUid, direction = 'both' }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (direction === 'out') {
       const res = await this._c.query(
         `SELECT
@@ -191,6 +199,7 @@ export class PgGraphStore {
   }
 
   async listEdgeOccurrencesForEdge({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const edgeId = await this._getEdgeIdByUids({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid });
     if (!edgeId) return [];
     const res = await this._c.query(
@@ -204,6 +213,7 @@ export class PgGraphStore {
   }
 
   async listFlowEntrypoints({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query(
       `SELECT entrypoint_key, entrypoint_type, method, path, symbol_uid, file_path, line_start, line_end
        FROM flow_entrypoints
@@ -215,6 +225,7 @@ export class PgGraphStore {
   }
 
   async getFlowGraph({ tenantId, repoId, flowGraphKey }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const { entrypointKey, sha, depth } = parseFlowGraphKey(flowGraphKey);
     if (!entrypointKey || !sha || !Number.isInteger(depth)) return null;
     const fgRes = await this._c.query(
@@ -259,6 +270,7 @@ export class PgGraphStore {
   }
 
   async listFlowGraphs({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query(
       `SELECT entrypoint_key, start_symbol_uid, sha, depth
        FROM flow_graphs
@@ -276,6 +288,7 @@ export class PgGraphStore {
   }
 
   async semanticSearch({ tenantId, repoId, query, limit = 10 }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     const q = String(query ?? '').trim();
     if (!q) return [];
     const vec = toPgVectorLiteral(embedText384(q));
@@ -295,6 +308,7 @@ export class PgGraphStore {
   }
 
   async upsertNode({ tenantId, repoId, node }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(node?.symbol_uid)) throw new Error('node.symbol_uid required');
     if (!isNonEmptyString(node?.node_type)) throw new Error('node.node_type required');
     const nodeKey = node.node_key ?? node.symbol_uid;
@@ -380,6 +394,7 @@ export class PgGraphStore {
   }
 
   async upsertEdge({ tenantId, repoId, edge }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(edge?.source_symbol_uid)) throw new Error('edge.source_symbol_uid required');
     if (!isNonEmptyString(edge?.target_symbol_uid)) throw new Error('edge.target_symbol_uid required');
     if (!isNonEmptyString(edge?.edge_type)) throw new Error('edge.edge_type required');
@@ -410,6 +425,7 @@ export class PgGraphStore {
   }
 
   async addEdgeOccurrence({ tenantId, repoId, occurrence }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(occurrence?.source_symbol_uid)) throw new Error('occurrence.source_symbol_uid required');
     if (!isNonEmptyString(occurrence?.target_symbol_uid)) throw new Error('occurrence.target_symbol_uid required');
     if (!isNonEmptyString(occurrence?.edge_type)) throw new Error('occurrence.edge_type required');
@@ -459,6 +475,7 @@ export class PgGraphStore {
   }
 
   async upsertFlowEntrypoint({ tenantId, repoId, entrypoint }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(entrypoint?.entrypoint_key)) throw new Error('entrypoint.entrypoint_key required');
     if (!isNonEmptyString(entrypoint?.entrypoint_type)) throw new Error('entrypoint.entrypoint_type required');
     await this._c.query(
@@ -490,6 +507,7 @@ export class PgGraphStore {
   }
 
   async addDependencyManifest({ tenantId, repoId, manifest }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(manifest?.file_path)) throw new Error('manifest.file_path required');
     if (!isNonEmptyString(manifest?.sha)) throw new Error('manifest.sha required');
     if (!isNonEmptyString(manifest?.manifest_type)) throw new Error('manifest.manifest_type required');
@@ -510,6 +528,7 @@ export class PgGraphStore {
   }
 
   async addDeclaredDependency({ tenantId, repoId, declared }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(declared?.package_key)) throw new Error('declared.package_key required');
     const manifestKey = declared.manifest_key ?? null;
     let manifestId = null;
@@ -548,6 +567,7 @@ export class PgGraphStore {
   }
 
   async addObservedDependency({ tenantId, repoId, observed }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(observed?.package_key)) throw new Error('observed.package_key required');
     const packageId = await this._getPackageId({ packageKey: observed.package_key });
     const sourceNodeId = observed.source_symbol_uid
@@ -566,6 +586,7 @@ export class PgGraphStore {
   }
 
   async addDependencyMismatch({ tenantId, repoId, mismatch }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(mismatch?.mismatch_type)) throw new Error('mismatch.mismatch_type required');
     const packageId = mismatch.package_key ? await this._getPackageId({ packageKey: mismatch.package_key }) : null;
     await this._c.query(
@@ -573,6 +594,102 @@ export class PgGraphStore {
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [tenantId, repoId, mismatch.mismatch_type, packageId, mismatch.details ?? {}, mismatch.sha ?? 'mock']
     );
+  }
+
+  async listDependencyManifests({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const res = await this._c.query(
+      `SELECT manifest_type, file_path, sha, parsed, parsed_at
+       FROM dependency_manifests
+       WHERE tenant_id=$1 AND repo_id=$2
+       ORDER BY parsed_at DESC`,
+      [tenantId, repoId]
+    );
+    return Array.isArray(res.rows) ? res.rows : [];
+  }
+
+  async listDeclaredDependencies({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const res = await this._c.query(
+      `SELECT
+         dm.file_path as manifest_file_path,
+         dm.sha as manifest_sha,
+         p.ecosystem,
+         p.name as package_name,
+         dd.scope,
+         dd.version_range,
+         dd.metadata
+       FROM declared_dependencies dd
+       JOIN dependency_manifests dm ON dm.id=dd.manifest_id
+       JOIN packages p ON p.id=dd.package_id
+       WHERE dd.tenant_id=$1 AND dd.repo_id=$2
+       ORDER BY dm.file_path ASC, p.ecosystem ASC, p.name ASC`,
+      [tenantId, repoId]
+    );
+    return Array.isArray(res.rows)
+      ? res.rows.map((r) => ({
+          manifest_key: `${r.manifest_file_path}::${r.manifest_sha}`,
+          package_key: `${r.ecosystem}:${r.package_name}`,
+          scope: r.scope,
+          version_range: r.version_range ?? null,
+          metadata: r.metadata ?? null
+        }))
+      : [];
+  }
+
+  async listObservedDependencies({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const res = await this._c.query(
+      `SELECT
+         p.ecosystem,
+         p.name as package_name,
+         n.symbol_uid as source_symbol_uid,
+         od.evidence,
+         od.first_seen_sha,
+         od.last_seen_sha
+       FROM observed_dependencies od
+       JOIN packages p ON p.id=od.package_id
+       LEFT JOIN graph_nodes n ON n.id=od.source_node_id
+       WHERE od.tenant_id=$1 AND od.repo_id=$2
+       ORDER BY p.ecosystem ASC, p.name ASC`,
+      [tenantId, repoId]
+    );
+    return Array.isArray(res.rows)
+      ? res.rows.map((r) => ({
+          package_key: `${r.ecosystem}:${r.package_name}`,
+          source_symbol_uid: r.source_symbol_uid ?? null,
+          evidence: r.evidence ?? null,
+          first_seen_sha: r.first_seen_sha,
+          last_seen_sha: r.last_seen_sha
+        }))
+      : [];
+  }
+
+  async listDependencyMismatches({ tenantId, repoId }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const res = await this._c.query(
+      `SELECT
+         dm.mismatch_type,
+         p.ecosystem,
+         p.name as package_name,
+         dm.details,
+         dm.sha,
+         dm.created_at
+       FROM dependency_mismatches dm
+       LEFT JOIN packages p ON p.id=dm.package_id
+       WHERE dm.tenant_id=$1 AND dm.repo_id=$2
+       ORDER BY dm.created_at DESC`,
+      [tenantId, repoId]
+    );
+    return Array.isArray(res.rows)
+      ? res.rows.map((r) => ({
+          mismatch_type: r.mismatch_type,
+          package_key: r.ecosystem && r.package_name ? `${r.ecosystem}:${r.package_name}` : null,
+          details: r.details ?? null,
+          sha: r.sha,
+          created_at: r.created_at
+        }))
+      : [];
   }
 
   addIndexDiagnostic({ tenantId, repoId, diagnostic }) {
@@ -587,6 +704,7 @@ export class PgGraphStore {
   }
 
   async upsertFlowGraph({ tenantId, repoId, flowGraph }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(flowGraph?.entrypoint_key)) throw new Error('flowGraph.entrypoint_key required');
     if (!isNonEmptyString(flowGraph?.start_symbol_uid)) throw new Error('flowGraph.start_symbol_uid required');
     if (!isNonEmptyString(flowGraph?.sha)) throw new Error('flowGraph.sha required');
@@ -652,5 +770,67 @@ export class PgGraphStore {
     } finally {
       void begin;
     }
+  }
+
+  async ingestRecords({ tenantId, repoId, records }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    if (!Array.isArray(records)) throw new Error('records must be array');
+
+    const hasFlowGraph = records.some((r) => r?.type === 'flow_graph');
+    if (hasFlowGraph) throw new Error('flow_graph records must be ingested via upsertFlowGraph, not ingestRecords');
+
+    const nodes = [];
+    const edges = [];
+    const occ = [];
+    const entrypoints = [];
+    const manifests = [];
+    const declared = [];
+    const observed = [];
+    const mismatches = [];
+
+    for (const r of records) {
+      const t = r?.type;
+      if (t === 'node') nodes.push(r.data);
+      else if (t === 'edge') edges.push(r.data);
+      else if (t === 'edge_occurrence') occ.push(r.data);
+      else if (t === 'flow_entrypoint') entrypoints.push(r.data);
+      else if (t === 'dependency_manifest') manifests.push(r.data);
+      else if (t === 'declared_dependency') declared.push(r.data);
+      else if (t === 'observed_dependency') observed.push(r.data);
+      else if (t === 'dependency_mismatch') mismatches.push(r.data);
+      else if (t === 'index_diagnostic') this.addIndexDiagnostic({ tenantId, repoId, diagnostic: r.data });
+    }
+
+    await this._c.query('BEGIN');
+    try {
+      for (const n of nodes) await this.upsertNode({ tenantId, repoId, node: n });
+      for (const e of edges) await this.upsertEdge({ tenantId, repoId, edge: e });
+      for (const o of occ) await this.addEdgeOccurrence({ tenantId, repoId, occurrence: o });
+      for (const ep of entrypoints) await this.upsertFlowEntrypoint({ tenantId, repoId, entrypoint: ep });
+      for (const m of manifests) await this.addDependencyManifest({ tenantId, repoId, manifest: m });
+      for (const d of declared) await this.addDeclaredDependency({ tenantId, repoId, declared: d });
+      for (const o of observed) await this.addObservedDependency({ tenantId, repoId, observed: o });
+      for (const mm of mismatches) await this.addDependencyMismatch({ tenantId, repoId, mismatch: mm });
+      await this._c.query('COMMIT');
+    } catch (err) {
+      await this._c.query('ROLLBACK');
+      throw err;
+    }
+  }
+
+  async _ensureOrgRepo({ tenantId, repoId }) {
+    const k = `${tenantId}::${repoId}`;
+    if (this._ensured.has(k)) return;
+    await this._c.query(`INSERT INTO orgs (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [
+      tenantId,
+      'graphfly'
+    ]);
+    await this._c.query(
+      `INSERT INTO repos (id, tenant_id, full_name, default_branch)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO NOTHING`,
+      [repoId, tenantId, this._repoFullName, 'main']
+    );
+    this._ensured.add(k);
   }
 }

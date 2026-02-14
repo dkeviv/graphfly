@@ -122,7 +122,10 @@ export async function generateFlowDocWithOpenClaw({
   const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? '';
   const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'doc-agent';
   const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const requestJson = openclaw?.requestJson ?? makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store });
+  const useRemote = Boolean(openclaw?.useRemote ?? (process.env.OPENCLAW_USE_REMOTE === '1' && process.env.OPENCLAW_GATEWAY_URL));
+  const requestJson =
+    openclaw?.requestJson ??
+    (useRemote ? undefined : makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }));
 
   const instructions = [
     'You are Graphfly Doc Agent.',
@@ -157,4 +160,3 @@ export async function generateFlowDocWithOpenClaw({
   const trace = await traceFlow({ store, tenantId, repoId, startSymbolUid: symbolUid, depth: 3 });
   return { markdown: outputText.trimEnd() + '\n', trace };
 }
-

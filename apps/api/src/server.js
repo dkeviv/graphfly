@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { InMemoryGraphStore } from '../../../packages/cig/src/store.js';
+import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
 import { ingestNdjson } from '../../../packages/ndjson/src/ingest.js';
 import { blastRadius } from '../../../packages/cig/src/query.js';
 import { semanticSearch, textSearch } from '../../../packages/cig/src/search.js';
@@ -21,7 +21,10 @@ import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 
-const store = new InMemoryGraphStore();
+const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
+const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
+
+const store = await createGraphStoreFromEnv({ repoFullName: process.env.SOURCE_REPO_FULL_NAME ?? 'local/source' });
 const docStore = new InMemoryDocStore();
 const githubDedupe = new DeliveryDedupe();
 const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
@@ -51,8 +54,8 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
   onPush: async (push) => {
     // Spec: push webhook triggers incremental index which triggers docs update.
     indexQueue.add('index.run', {
-      tenantId: 't-1',
-      repoId: 'r-1',
+      tenantId: DEFAULT_TENANT_ID,
+      repoId: DEFAULT_REPO_ID,
       repoRoot: process.env.SOURCE_REPO_ROOT ?? 'fixtures/sample-repo',
       sha: push.sha,
       changedFiles: push.changedFiles,
@@ -84,7 +87,7 @@ router.post('/webhooks/github', async ({ headers, rawBody }) => {
 });
 
 router.post('/ingest/ndjson', async (req) => {
-  const { tenantId = 't-1', repoId = 'r-1', ndjson } = req.body ?? {};
+  const { tenantId = DEFAULT_TENANT_ID, repoId = DEFAULT_REPO_ID, ndjson } = req.body ?? {};
   if (typeof ndjson !== 'string' || ndjson.length === 0) {
     return { status: 400, body: { error: 'ndjson must be a non-empty string' } };
   }
@@ -93,22 +96,22 @@ router.post('/ingest/ndjson', async (req) => {
 });
 
 router.get('/graph/nodes', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const mode = req.query.mode ?? 'default';
   const nodes = (await store.listNodes({ tenantId, repoId })).map((n) => publicNode(n, { mode }));
   return { status: 200, body: { nodes } };
 });
 
 router.get('/graph/edges', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   return { status: 200, body: { edges: (await store.listEdges({ tenantId, repoId })).map(publicEdge) } };
 });
 
 router.get('/graph/neighborhood', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const symbolUid = req.query.symbolUid;
   const direction = req.query.direction ?? 'both';
   const limitEdges = Number(req.query.limitEdges ?? 200);
@@ -134,8 +137,8 @@ router.get('/graph/neighborhood', async (req) => {
 });
 
 router.get('/graph/search', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const q = req.query.q ?? '';
   const mode = req.query.mode ?? 'text';
   const limit = Number(req.query.limit ?? 10);
@@ -168,8 +171,8 @@ router.get('/graph/search', async (req) => {
 });
 
 router.get('/graph/blast-radius', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const symbolUid = req.query.symbolUid;
   const depth = Number(req.query.depth ?? 1);
   const direction = req.query.direction ?? 'both';
@@ -185,8 +188,8 @@ router.get('/graph/blast-radius', async (req) => {
 });
 
 router.get('/graph/edge-occurrences', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const sourceSymbolUid = req.query.sourceSymbolUid;
   const edgeType = req.query.edgeType;
   const targetSymbolUid = req.query.targetSymbolUid;
@@ -198,8 +201,8 @@ router.get('/graph/edge-occurrences', async (req) => {
 });
 
 router.get('/contracts/get', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const symbolUid = req.query.symbolUid;
   if (typeof symbolUid !== 'string' || symbolUid.length === 0) {
     return { status: 400, body: { error: 'symbolUid is required' } };
@@ -221,20 +224,20 @@ router.get('/contracts/get', async (req) => {
 });
 
 router.get('/flows/entrypoints', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   return { status: 200, body: { entrypoints: await store.listFlowEntrypoints({ tenantId, repoId }) } };
 });
 
 router.get('/flows/graphs', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   return { status: 200, body: { graphs: await store.listFlowGraphs({ tenantId, repoId }) } };
 });
 
 router.get('/flows/graph', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const flowGraphKey = req.query.flowGraphKey;
   if (typeof flowGraphKey !== 'string' || flowGraphKey.length === 0) return { status: 400, body: { error: 'flowGraphKey is required' } };
   const graph = await store.getFlowGraph({ tenantId, repoId, flowGraphKey });
@@ -243,8 +246,8 @@ router.get('/flows/graph', async (req) => {
 });
 
 router.get('/flows/trace', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const startSymbolUid = req.query.startSymbolUid;
   const depth = Number(req.query.depth ?? 2);
   const mode = req.query.mode ?? 'default';
@@ -264,15 +267,15 @@ router.get('/flows/trace', async (req) => {
 });
 
 router.get('/docs/blocks', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const status = req.query.status ?? null;
   return { status: 200, body: { blocks: docStore.listBlocks({ tenantId, repoId, status }) } };
 });
 
 router.get('/docs/block', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const blockId = req.query.blockId;
   if (typeof blockId !== 'string' || blockId.length === 0) return { status: 400, body: { error: 'blockId is required' } };
   const block = docStore.getBlock({ tenantId, repoId, blockId });
@@ -281,33 +284,33 @@ router.get('/docs/block', async (req) => {
 });
 
 router.get('/deps/mismatches', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { mismatches: store.listDependencyMismatches({ tenantId, repoId }) } };
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  return { status: 200, body: { mismatches: await store.listDependencyMismatches({ tenantId, repoId }) } };
 });
 
 router.get('/deps/manifests', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { manifests: store.listDependencyManifests({ tenantId, repoId }) } };
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  return { status: 200, body: { manifests: await store.listDependencyManifests({ tenantId, repoId }) } };
 });
 
 router.get('/deps/declared', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { declared: store.listDeclaredDependencies({ tenantId, repoId }) } };
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  return { status: 200, body: { declared: await store.listDeclaredDependencies({ tenantId, repoId }) } };
 });
 
 router.get('/deps/observed', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { observed: store.listObservedDependencies({ tenantId, repoId }) } };
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  return { status: 200, body: { observed: await store.listObservedDependencies({ tenantId, repoId }) } };
 });
 
 router.get('/index/diagnostics', async (req) => {
-  const tenantId = req.query.tenantId ?? 't-1';
-  const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { diagnostics: store.listIndexDiagnostics({ tenantId, repoId }) } };
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  return { status: 200, body: { diagnostics: (await store.listIndexDiagnostics?.({ tenantId, repoId })) ?? [] } };
 });
 
 const server = http.createServer(async (req, res) => {

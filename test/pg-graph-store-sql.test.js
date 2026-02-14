@@ -15,6 +15,8 @@ function makeFakeClient(respond) {
 
 test('PgGraphStore.upsertNode writes graph_nodes with embedding literal', async () => {
   const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
     if (text.includes('INSERT INTO graph_nodes')) return { rows: [{ id: 'n-1' }] };
     throw new Error(`unexpected query: ${text}`);
   });
@@ -32,14 +34,17 @@ test('PgGraphStore.upsertNode writes graph_nodes with embedding literal', async 
   });
 
   assert.equal(id, 'n-1');
-  assert.ok(client.calls[0].text.includes('INSERT INTO graph_nodes'));
-  const embeddingParam = client.calls[0].params[23];
+  const insert = client.calls.find((c) => c.text.includes('INSERT INTO graph_nodes'));
+  assert.ok(insert);
+  const embeddingParam = insert.params[23];
   assert.equal(typeof embeddingParam, 'string');
   assert.ok(embeddingParam.startsWith('[') && embeddingParam.endsWith(']'));
 });
 
 test('PgGraphStore.upsertEdge resolves node ids then upserts graph_edges', async () => {
   const client = makeFakeClient(async (text, params) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
     if (text.startsWith('SELECT id FROM graph_nodes')) {
       const symbolUid = params[2];
       return { rows: [{ id: symbolUid === 's' ? 'ns' : 'nt' }] };
@@ -63,6 +68,8 @@ test('PgGraphStore.upsertEdge resolves node ids then upserts graph_edges', async
 
 test('PgGraphStore.addEdgeOccurrence upserts edge if missing then writes occurrence', async () => {
   const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
     if (text.includes('FROM graph_edges e') && text.includes('LIMIT 1')) return { rows: [] };
     if (text.startsWith('SELECT id FROM graph_nodes')) return { rows: [{ id: 'n-x' }] };
     if (text.includes('INSERT INTO graph_edges')) return { rows: [{ id: 'e-x' }] };
@@ -91,6 +98,8 @@ test('PgGraphStore.addEdgeOccurrence upserts edge if missing then writes occurre
 
 test('PgGraphStore.upsertFlowGraph uses a transaction and clears prior associations', async () => {
   const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
     if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [] };
     if (text.includes('INSERT INTO flow_graphs')) return { rows: [{ id: 'fg-1' }] };
     if (text.startsWith('DELETE FROM flow_graph_nodes')) return { rows: [] };
@@ -123,6 +132,8 @@ test('PgGraphStore.upsertFlowGraph uses a transaction and clears prior associati
 
 test('PgGraphStore.semanticSearch orders by pgvector distance', async () => {
   const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
     if (text.includes('FROM graph_nodes') && text.includes('ORDER BY embedding <=>')) {
       return { rows: [{ symbol_uid: 'n1', node_type: 'File', score: 0.9 }] };
     }

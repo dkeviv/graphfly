@@ -129,12 +129,28 @@ This repository includes a local/test mode that avoids external dependencies and
 - From a local **source repo** checkout (inside a git worktree), run:
   - `npm run local:run -- --docs-repo-path ../my-docs-repo --docs-repo-full-name org/docs --source-repo-full-name local/source`
 
+**Postgres mode (optional)**
+- Set:
+  - `DATABASE_URL` (Postgres connection string)
+  - `GRAPHFLY_GRAPH_STORE=pg`
+- Apply schema (requires `pg` dependency in your environment):
+  - `node apps/cli/src/graphfly.js pg-migrate --database-url "$DATABASE_URL"`
+
+**OpenClaw remote mode (optional)**
+- Set:
+  - `OPENCLAW_GATEWAY_URL`
+  - `OPENCLAW_GATEWAY_TOKEN` (if required by your gateway)
+  - `OPENCLAW_USE_REMOTE=1`
+- If `OPENCLAW_USE_REMOTE` is not set, Graphfly uses a local deterministic OpenClaw-compatible tool loop for tests and offline dev.
+
 **Key environment variables**
 - `SOURCE_REPO_ROOT`: local filesystem path to the **source repo** to index (read-only). Default: `fixtures/sample-repo`.
 - `DOCS_REPO_FULL_NAME`: configured docs repo identifier (string). Default: `org/docs`.
 - `DOCS_REPO_PATH`: local filesystem path to a **separate docs git repository**. When set, docs updates are written by creating a new branch + commit (simulating a PR) and never touch the source repo.
 - `GITHUB_WEBHOOK_SECRET`: secret used to verify GitHub `push` webhooks (HMAC-SHA256).
 - `STRIPE_WEBHOOK_SECRET`: secret used to verify Stripe webhook signatures.
+ - `DATABASE_URL`: Postgres connection string (enables DB-backed graph store when `GRAPHFLY_GRAPH_STORE=pg`).
+ - `GRAPHFLY_GRAPH_STORE`: set to `pg` to use Postgres-backed Code Intelligence Graph store.
 
 **Operational guardrails (must hold in all environments)**
 - Documentation writes are denied unless the target repo matches the configured docs repo.

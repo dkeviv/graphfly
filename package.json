@@ -12,6 +12,7 @@
     "dev:api": "node apps/api/src/server.js",
     "dev:web": "node apps/web/dev-server.js",
     "local:run": "node apps/cli/src/graphfly.js local-run",
+    "pg:migrate": "node apps/cli/src/graphfly.js pg-migrate",
     "index:mock": "node workers/indexer/src/mock-indexer.js",
     "ingest:mock": "node workers/indexer/src/mock-index-and-ingest.js"
   }
