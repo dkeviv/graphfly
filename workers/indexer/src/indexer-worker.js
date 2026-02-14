@@ -30,7 +30,9 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
           }
         });
 
-        docStore?.markBlocksStaleForSymbolUids?.({ tenantId, repoId, symbolUids: impact.impactedSymbolUids });
+        if (docStore?.markBlocksStaleForSymbolUids) {
+          await Promise.resolve(docStore.markBlocksStaleForSymbolUids({ tenantId, repoId, symbolUids: impact.impactedSymbolUids }));
+        }
       }
 
       let effectiveRepoRoot = repoRoot;
