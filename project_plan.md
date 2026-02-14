@@ -16,7 +16,7 @@
 | GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | PARTIAL | `npm test` (webhook → index → docs pipeline wired; GitHub token clone pending) |
 | Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | PARTIAL | `npm test` (docs-repo-only guard + LocalDocsWriter + `local:run` CLI for local docs git repo) |
 | Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | PARTIAL | `npm test` (doc-block validator + in-memory evidence store) |
-| OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` (tool loop + semantic search tool) |
+| OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` (doc agent uses OpenClaw tool loop with local gateway fallback) |
 | Support-safe mode enforcement | `docs/05_SECURITY.md` | FR-CIG-11 | PARTIAL | `npm test` |
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | PARTIAL | `npm test` |
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | PARTIAL | `npm test` (webhook verify+dedupe+plan sync; checkout/portal pending) |

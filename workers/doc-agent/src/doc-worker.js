@@ -1,6 +1,4 @@
-import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/validate.js';
-import { renderContractDocBlock } from './doc-block-render.js';
-import { traceFlow } from '../../../packages/cig/src/trace.js';
+import { generateFlowDocWithOpenClaw } from './openclaw-render.js';
 
 function slugify(key) {
   return String(key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '');
@@ -21,24 +19,8 @@ export function createDocWorker({ store, docsWriter, docStore }) {
       const files = [];
       for (const ep of entrypoints) {
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
+        const { markdown: md, trace } = await generateFlowDocWithOpenClaw({ store, tenantId, repoId, symbolUid });
         const node = await store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
-        if (!node) continue;
-
-        const trace = await traceFlow({ store, tenantId, repoId, startSymbolUid: symbolUid, depth: 3 });
-
-        const contractPayload = {
-          symbolUid: node.symbol_uid,
-          qualifiedName: node.qualified_name,
-          signature: node.signature,
-          contract: node.contract ?? null,
-          constraints: node.constraints ?? null,
-          allowableValues: node.allowable_values ?? null,
-          location: { filePath: node.file_path, lineStart: node.line_start, lineEnd: node.line_end }
-        };
-
-        const md = renderContractDocBlock(contractPayload).trimEnd() + `\n\n### Flow (Derived)\n- Depth: 3\n- Nodes: ${trace.nodes.length}\n- Edges: ${trace.edges.length}\n`;
-        const v = validateDocBlockMarkdown(md);
-        if (!v.ok) throw new Error(`doc_block_invalid:${v.reason}`);
 
         const docPath = `flows/${slugify(ep.entrypoint_key)}.md`;
         // Persist block metadata (optional in this repo's in-memory implementation).
@@ -46,7 +28,7 @@ export function createDocWorker({ store, docsWriter, docStore }) {
           tenantId,
           repoId,
           docFile: docPath,
-          blockAnchor: `## ${contractPayload.qualifiedName ?? contractPayload.symbolUid}`,
+          blockAnchor: `## ${node?.qualified_name ?? symbolUid}`,
           blockType: 'flow',
           content: md,
           status: 'fresh'
