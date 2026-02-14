@@ -4,12 +4,15 @@ function assertUuid(v, name) {
   }
 }
 
-export async function withTenantClient({ pool, tenantId }, fn) {
+export async function withTenantClient({ pool, tenantId, searchPath = null }, fn) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('pool.connect is required');
   assertUuid(tenantId, 'tenantId');
 
   const client = await pool.connect();
   try {
+    if (typeof searchPath === 'string' && searchPath.length > 0) {
+      await client.query(`SET search_path TO ${searchPath}`);
+    }
     await client.query('SET app.tenant_id = $1', [tenantId]);
     return await fn(client);
   } finally {
@@ -18,7 +21,11 @@ export async function withTenantClient({ pool, tenantId }, fn) {
     } catch {
       // ignore; releasing client is best-effort
     }
+    try {
+      await client.query('RESET search_path');
+    } catch {
+      // ignore
+    }
     client.release();
   }
 }
-
