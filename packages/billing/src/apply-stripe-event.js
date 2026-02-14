@@ -7,7 +7,7 @@ function isActiveSubscription(event) {
   return status === 'active' || status === 'trialing';
 }
 
-export function applyStripeEventToEntitlements({ event, tenantId, entitlementsStore }) {
+export async function applyStripeEventToEntitlements({ event, tenantId, entitlementsStore }) {
   if (!event || typeof event !== 'object') throw new Error('event required');
   if (!tenantId) throw new Error('tenantId required');
   if (!entitlementsStore?.setPlan) throw new Error('entitlementsStore required');
@@ -16,8 +16,7 @@ export function applyStripeEventToEntitlements({ event, tenantId, entitlementsSt
   // - active/trialing subscription => PRO
   // - else => FREE
   if (event.type?.startsWith('customer.subscription.')) {
-    entitlementsStore.setPlan(tenantId, isActiveSubscription(event) ? Plans.PRO : Plans.FREE);
+    await Promise.resolve(entitlementsStore.setPlan(tenantId, isActiveSubscription(event) ? Plans.PRO : Plans.FREE));
   }
   return { ok: true };
 }
-

@@ -6,7 +6,7 @@ export function makeRateLimitMiddleware({ entitlementsStore, limiter = null } = 
 
   return async (ctx) => {
     const tenantId = ctx.query?.tenantId ?? ctx.body?.tenantId ?? 't-1';
-    const plan = entitlementsStore?.getPlan?.(tenantId) ?? 'free';
+    const plan = await Promise.resolve(entitlementsStore?.getPlan?.(tenantId) ?? 'free');
     const { rpm } = limitsForPlan(plan);
 
     // Convert rpm to refill/sec while keeping a small burst capacity.

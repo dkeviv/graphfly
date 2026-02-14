@@ -8,7 +8,7 @@ import { createJsonRouter } from './tiny-router.js';
 import { DeliveryDedupe } from '../../../packages/github-webhooks/src/dedupe.js';
 import { makeGitHubWebhookHandler } from './github-webhook.js';
 import { publicNode, publicEdge } from './public-shapes.js';
-import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
+import { createEntitlementsStoreFromEnv } from '../../../packages/stores/src/entitlements-store.js';
 import { makeRateLimitMiddleware } from './middleware/rate-limit.js';
 import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { StripeEventDedupe } from '../../../packages/stripe-webhooks/src/dedupe.js';
@@ -35,7 +35,7 @@ const store = await createGraphStoreFromEnv({ repoFullName });
 const docStore = await createDocStoreFromEnv({ repoFullName });
 const githubDedupe = new DeliveryDedupe();
 const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
-const entitlements = new InMemoryEntitlementsStore();
+const entitlements = await createEntitlementsStoreFromEnv();
 const usage = await createUsageCountersFromEnv();
 const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
@@ -67,7 +67,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
   secret: githubSecret,
   dedupe: githubDedupe,
   onPush: async (push) => {
-    const plan = entitlements.getPlan(DEFAULT_TENANT_ID);
+    const plan = await Promise.resolve(entitlements.getPlan(DEFAULT_TENANT_ID));
     const limits = limitsForPlan(plan);
     const ok = await usage.consumeIndexJobOrDeny({ tenantId: DEFAULT_TENANT_ID, limitPerDay: limits.indexJobsPerDay, amount: 1 });
     if (!ok.ok) {
@@ -109,7 +109,7 @@ const handleStripeWebhook = makeStripeWebhookHandler({
         try {
           if (String(event.type ?? '').startsWith('customer.subscription.')) {
             await billing.upsertBillingFromSubscription({ tenantId, subscription: event.data?.object });
-            applyStripeEventToEntitlements({ event, tenantId, entitlementsStore: entitlements });
+            await applyStripeEventToEntitlements({ event, tenantId, entitlementsStore: entitlements });
           }
           await billing.markStripeEventProcessed({ tenantId, stripeEventId: event.id, errorMessage: null });
         } catch (err) {
@@ -121,7 +121,7 @@ const handleStripeWebhook = makeStripeWebhookHandler({
     }
 
     if (tenantId) {
-      applyStripeEventToEntitlements({ event, tenantId, entitlementsStore: entitlements });
+      await applyStripeEventToEntitlements({ event, tenantId, entitlementsStore: entitlements });
     }
   }
 });

@@ -4,13 +4,12 @@ import { InMemoryEntitlementsStore } from '../packages/entitlements/src/store.js
 import { Plans } from '../packages/entitlements/src/limits.js';
 import { applyStripeEventToEntitlements } from '../packages/billing/src/apply-stripe-event.js';
 
-test('applyStripeEventToEntitlements sets PRO when subscription is active', () => {
+test('applyStripeEventToEntitlements sets PRO when subscription is active', async () => {
   const ent = new InMemoryEntitlementsStore();
-  applyStripeEventToEntitlements({
+  await applyStripeEventToEntitlements({
     tenantId: 't-1',
     entitlementsStore: ent,
     event: { id: 'evt_1', type: 'customer.subscription.updated', data: { object: { status: 'active' } } }
   });
   assert.equal(ent.getPlan('t-1'), Plans.PRO);
 });
-
