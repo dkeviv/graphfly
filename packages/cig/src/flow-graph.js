@@ -8,10 +8,10 @@ export function makeFlowGraphKey({ entrypointKey, sha, depth }) {
   return `${entrypointKey}::${sha}::${depth}`;
 }
 
-export function materializeFlowGraph({ store, tenantId, repoId, entrypoint, sha, depth = 3 }) {
+export async function materializeFlowGraph({ store, tenantId, repoId, entrypoint, sha, depth = 3 }) {
   const entrypointKey = entrypoint.entrypoint_key;
   const startSymbolUid = entrypoint.entrypoint_symbol_uid ?? entrypoint.symbol_uid;
-  const trace = traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
+  const trace = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
 
   const flowGraphKey = makeFlowGraphKey({ entrypointKey, sha, depth });
   const nodeUids = trace.nodes.map((n) => n.symbol_uid);
@@ -27,4 +27,3 @@ export function materializeFlowGraph({ store, tenantId, repoId, entrypoint, sha,
     edge_keys: edgeKeys
   };
 }
-

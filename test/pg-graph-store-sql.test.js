@@ -121,3 +121,16 @@ test('PgGraphStore.upsertFlowGraph uses a transaction and clears prior associati
   assert.ok(client.calls.some((c) => c.text === 'COMMIT'));
 });
 
+test('PgGraphStore.semanticSearch orders by pgvector distance', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.includes('FROM graph_nodes') && text.includes('ORDER BY embedding <=>')) {
+      return { rows: [{ symbol_uid: 'n1', node_type: 'File', score: 0.9 }] };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+  const store = new PgGraphStore({ client });
+
+  const results = await store.semanticSearch({ tenantId: 't-uuid', repoId: 'r-uuid', query: 'login', limit: 5 });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].node.symbol_uid, 'n1');
+});

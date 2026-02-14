@@ -34,7 +34,7 @@ test('blastRadius traverses deduped edges', async () => {
 
   await ingestNdjson({ tenantId: 't-1', repoId: 'r-1', ndjsonText, store });
 
-  const uids = blastRadius({ store, tenantId: 't-1', repoId: 'r-1', symbolUid: 'js::a::1', depth: 2, direction: 'out' });
+  const uids = await blastRadius({ store, tenantId: 't-1', repoId: 'r-1', symbolUid: 'js::a::1', depth: 2, direction: 'out' });
   assert.deepEqual(new Set(uids), new Set(['js::a::1', 'js::b::1', 'js::c::1']));
 });
 

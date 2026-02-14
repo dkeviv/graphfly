@@ -12,9 +12,8 @@ test('materializeFlowGraph produces a stable key and stores node/edge lists', as
 
   const ep = store.listFlowEntrypoints({ tenantId: 't-1', repoId: 'r-1' }).find((e) => e.path === '/health');
   assert.ok(ep);
-  const fg = materializeFlowGraph({ store, tenantId: 't-1', repoId: 'r-1', entrypoint: ep, sha: 'abc', depth: 2 });
+  const fg = await materializeFlowGraph({ store, tenantId: 't-1', repoId: 'r-1', entrypoint: ep, sha: 'abc', depth: 2 });
   assert.ok(fg.flow_graph_key.includes('abc'));
   assert.ok(Array.isArray(fg.node_uids));
   assert.ok(Array.isArray(fg.edge_keys));
 });
-

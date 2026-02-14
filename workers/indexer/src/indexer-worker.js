@@ -10,7 +10,7 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
 
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
-        const impact = computeImpact({ store, tenantId, repoId, changedFiles, depth: 2 });
+        const impact = await computeImpact({ store, tenantId, repoId, changedFiles, depth: 2 });
         store.addIndexDiagnostic({
           tenantId,
           repoId,
@@ -31,9 +31,9 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
       await ingestNdjson({ tenantId, repoId, ndjsonText, store });
 
       // Materialize flow graphs (entrypoints + trace subgraphs) for fast UI rendering.
-      for (const ep of store.listFlowEntrypoints({ tenantId, repoId })) {
-        const fg = materializeFlowGraph({ store, tenantId, repoId, entrypoint: ep, sha, depth: 3 });
-        store.upsertFlowGraph({ tenantId, repoId, flowGraph: fg });
+      for (const ep of await store.listFlowEntrypoints({ tenantId, repoId })) {
+        const fg = await materializeFlowGraph({ store, tenantId, repoId, entrypoint: ep, sha, depth: 3 });
+        await store.upsertFlowGraph({ tenantId, repoId, flowGraph: fg });
       }
 
       docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName });

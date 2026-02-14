@@ -1,9 +1,9 @@
 import { embedText384, cosineSimilarity } from './embedding.js';
 
-export function textSearch({ store, tenantId, repoId, query, limit = 10 }) {
+export async function textSearch({ store, tenantId, repoId, query, limit = 10 }) {
   const q = String(query ?? '').toLowerCase().trim();
   if (!q) return [];
-  const nodes = store.listNodes({ tenantId, repoId });
+  const nodes = await store.listNodes({ tenantId, repoId });
   const scored = nodes
     .map((n) => {
       const hay = `${n.qualified_name ?? ''} ${n.name ?? ''}`.toLowerCase();
@@ -15,15 +15,20 @@ export function textSearch({ store, tenantId, repoId, query, limit = 10 }) {
   return scored.map((x) => ({ node: x.node, score: x.score }));
 }
 
-export function semanticSearch({ store, tenantId, repoId, query, limit = 10 }) {
+export async function semanticSearch({ store, tenantId, repoId, query, limit = 10 }) {
   const q = String(query ?? '').trim();
   if (!q) return [];
+
+  // Optional store-native semantic search (e.g., pgvector+HNSW).
+  if (typeof store.semanticSearch === 'function') {
+    return store.semanticSearch({ tenantId, repoId, query: q, limit });
+  }
+
   const qVec = embedText384(q);
-  const nodes = store.listNodes({ tenantId, repoId }).filter((n) => Array.isArray(n.embedding) && n.embedding.length === 384);
+  const nodes = (await store.listNodes({ tenantId, repoId })).filter((n) => Array.isArray(n.embedding) && n.embedding.length === 384);
   const scored = nodes
     .map((n) => ({ node: n, score: cosineSimilarity(qVec, n.embedding) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   return scored;
 }
-

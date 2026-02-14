@@ -14,47 +14,47 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
     if (record.type === 'node') {
       const v = validateNodeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_node:${v.reason}`);
-      store.upsertNode({ tenantId, repoId, node: record.data });
+      await store.upsertNode({ tenantId, repoId, node: record.data });
       continue;
     }
     if (record.type === 'edge') {
       const v = validateEdgeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_edge:${v.reason}`);
-      store.upsertEdge({ tenantId, repoId, edge: record.data });
+      await store.upsertEdge({ tenantId, repoId, edge: record.data });
       continue;
     }
     if (record.type === 'edge_occurrence') {
       const v = validateEdgeOccurrenceRecord(record.data);
       if (!v.ok) throw new Error(`invalid_edge_occurrence:${v.reason}`);
-      store.addEdgeOccurrence({ tenantId, repoId, occurrence: record.data });
+      await store.addEdgeOccurrence({ tenantId, repoId, occurrence: record.data });
       continue;
     }
     if (record.type === 'flow_entrypoint') {
-      store.upsertFlowEntrypoint({ tenantId, repoId, entrypoint: record.data });
+      await store.upsertFlowEntrypoint({ tenantId, repoId, entrypoint: record.data });
       continue;
     }
     if (record.type === 'dependency_manifest') {
-      store.addDependencyManifest({ tenantId, repoId, manifest: record.data });
+      await store.addDependencyManifest({ tenantId, repoId, manifest: record.data });
       continue;
     }
     if (record.type === 'declared_dependency') {
-      store.addDeclaredDependency({ tenantId, repoId, declared: record.data });
+      await store.addDeclaredDependency({ tenantId, repoId, declared: record.data });
       continue;
     }
     if (record.type === 'observed_dependency') {
-      store.addObservedDependency({ tenantId, repoId, observed: record.data });
+      await store.addObservedDependency({ tenantId, repoId, observed: record.data });
       continue;
     }
     if (record.type === 'dependency_mismatch') {
-      store.addDependencyMismatch({ tenantId, repoId, mismatch: record.data });
+      await store.addDependencyMismatch({ tenantId, repoId, mismatch: record.data });
       continue;
     }
     if (record.type === 'index_diagnostic') {
-      store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
+      await store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
       continue;
     }
     if (record.type === 'flow_graph') {
-      store.upsertFlowGraph({ tenantId, repoId, flowGraph: record.data });
+      await store.upsertFlowGraph({ tenantId, repoId, flowGraph: record.data });
       continue;
     }
     // Unknown types are tolerated to allow forward-compatible indexer upgrades.
@@ -67,47 +67,47 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
     if (record.type === 'node') {
       const v = validateNodeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_node:${v.reason}`);
-      store.upsertNode({ tenantId, repoId, node: record.data });
+      await store.upsertNode({ tenantId, repoId, node: record.data });
       continue;
     }
     if (record.type === 'edge') {
       const v = validateEdgeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_edge:${v.reason}`);
-      store.upsertEdge({ tenantId, repoId, edge: record.data });
+      await store.upsertEdge({ tenantId, repoId, edge: record.data });
       continue;
     }
     if (record.type === 'edge_occurrence') {
       const v = validateEdgeOccurrenceRecord(record.data);
       if (!v.ok) throw new Error(`invalid_edge_occurrence:${v.reason}`);
-      store.addEdgeOccurrence({ tenantId, repoId, occurrence: record.data });
+      await store.addEdgeOccurrence({ tenantId, repoId, occurrence: record.data });
       continue;
     }
     if (record.type === 'flow_entrypoint') {
-      store.upsertFlowEntrypoint({ tenantId, repoId, entrypoint: record.data });
+      await store.upsertFlowEntrypoint({ tenantId, repoId, entrypoint: record.data });
       continue;
     }
     if (record.type === 'dependency_manifest') {
-      store.addDependencyManifest({ tenantId, repoId, manifest: record.data });
+      await store.addDependencyManifest({ tenantId, repoId, manifest: record.data });
       continue;
     }
     if (record.type === 'declared_dependency') {
-      store.addDeclaredDependency({ tenantId, repoId, declared: record.data });
+      await store.addDeclaredDependency({ tenantId, repoId, declared: record.data });
       continue;
     }
     if (record.type === 'observed_dependency') {
-      store.addObservedDependency({ tenantId, repoId, observed: record.data });
+      await store.addObservedDependency({ tenantId, repoId, observed: record.data });
       continue;
     }
     if (record.type === 'dependency_mismatch') {
-      store.addDependencyMismatch({ tenantId, repoId, mismatch: record.data });
+      await store.addDependencyMismatch({ tenantId, repoId, mismatch: record.data });
       continue;
     }
     if (record.type === 'index_diagnostic') {
-      store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
+      await store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
       continue;
     }
     if (record.type === 'flow_graph') {
-      store.upsertFlowGraph({ tenantId, repoId, flowGraph: record.data });
+      await store.upsertFlowGraph({ tenantId, repoId, flowGraph: record.data });
       continue;
     }
   }

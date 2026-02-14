@@ -4,7 +4,7 @@ import { InMemoryGraphStore } from '../packages/cig/src/store.js';
 import { embedText384 } from '../packages/cig/src/embedding.js';
 import { semanticSearch } from '../packages/cig/src/search.js';
 
-test('semanticSearch ranks nodes with embeddings', () => {
+test('semanticSearch ranks nodes with embeddings', async () => {
   const store = new InMemoryGraphStore();
   store.upsertNode({
     tenantId: 't-1',
@@ -17,8 +17,7 @@ test('semanticSearch ranks nodes with embeddings', () => {
     node: { symbol_uid: 'n2', qualified_name: 'billing.checkout', name: 'checkout', embedding: embedText384('stripe checkout') }
   });
 
-  const results = semanticSearch({ store, tenantId: 't-1', repoId: 'r-1', query: 'checkout', limit: 2 });
+  const results = await semanticSearch({ store, tenantId: 't-1', repoId: 'r-1', query: 'checkout', limit: 2 });
   assert.equal(results.length, 2);
   assert.ok(results[0].score >= results[1].score);
 });
-

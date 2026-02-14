@@ -1,3 +1,5 @@
+import { embedText384 } from '../../cig/src/embedding.js';
+
 function isNonEmptyString(v) {
   return typeof v === 'string' && v.length > 0;
 }
@@ -271,6 +273,25 @@ export class PgGraphStore {
       sha: r.sha,
       depth: r.depth
     }));
+  }
+
+  async semanticSearch({ tenantId, repoId, query, limit = 10 }) {
+    const q = String(query ?? '').trim();
+    if (!q) return [];
+    const vec = toPgVectorLiteral(embedText384(q));
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.trunc(limit))) : 10;
+    const res = await this._c.query(
+      `SELECT *, (1 - (embedding <=> $3::vector)) as score
+       FROM graph_nodes
+       WHERE tenant_id=$1 AND repo_id=$2 AND embedding IS NOT NULL
+       ORDER BY embedding <=> $3::vector
+       LIMIT $4`,
+      [tenantId, repoId, vec, n]
+    );
+    return (res.rows ?? []).map((row) => {
+      const { score, ...node } = row;
+      return { node, score: Number(score) };
+    });
   }
 
   async upsertNode({ tenantId, repoId, node }) {

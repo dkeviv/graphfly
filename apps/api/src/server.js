@@ -96,14 +96,14 @@ router.get('/graph/nodes', async (req) => {
   const tenantId = req.query.tenantId ?? 't-1';
   const repoId = req.query.repoId ?? 'r-1';
   const mode = req.query.mode ?? 'default';
-  const nodes = store.listNodes({ tenantId, repoId }).map((n) => publicNode(n, { mode }));
+  const nodes = (await store.listNodes({ tenantId, repoId })).map((n) => publicNode(n, { mode }));
   return { status: 200, body: { nodes } };
 });
 
 router.get('/graph/edges', async (req) => {
   const tenantId = req.query.tenantId ?? 't-1';
   const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { edges: store.listEdges({ tenantId, repoId }).map(publicEdge) } };
+  return { status: 200, body: { edges: (await store.listEdges({ tenantId, repoId })).map(publicEdge) } };
 });
 
 router.get('/graph/neighborhood', async (req) => {
@@ -115,7 +115,7 @@ router.get('/graph/neighborhood', async (req) => {
   const mode = req.query.mode ?? 'default';
   if (typeof symbolUid !== 'string' || symbolUid.length === 0) return { status: 400, body: { error: 'symbolUid is required' } };
 
-  const out = neighborhood({
+  const out = await neighborhood({
     store,
     tenantId,
     repoId,
@@ -143,8 +143,8 @@ router.get('/graph/search', async (req) => {
 
   const results =
     mode === 'semantic'
-      ? semanticSearch({ store, tenantId, repoId, query: q, limit: n })
-      : textSearch({ store, tenantId, repoId, query: q, limit: n });
+      ? await semanticSearch({ store, tenantId, repoId, query: q, limit: n })
+      : await textSearch({ store, tenantId, repoId, query: q, limit: n });
 
   return {
     status: 200,
@@ -177,9 +177,8 @@ router.get('/graph/blast-radius', async (req) => {
   if (typeof symbolUid !== 'string' || symbolUid.length === 0) {
     return { status: 400, body: { error: 'symbolUid is required' } };
   }
-  const uids = blastRadius({ store, tenantId, repoId, symbolUid, depth: Number.isFinite(depth) ? Math.trunc(depth) : 1, direction });
-  const nodes = uids
-    .map((uid) => store.getNodeBySymbolUid({ tenantId, repoId, symbolUid: uid }))
+  const uids = await blastRadius({ store, tenantId, repoId, symbolUid, depth: Number.isFinite(depth) ? Math.trunc(depth) : 1, direction });
+  const nodes = (await Promise.all(uids.map((uid) => store.getNodeBySymbolUid({ tenantId, repoId, symbolUid: uid }))))
     .filter(Boolean)
     .map((n) => publicNode(n, { mode }));
   return { status: 200, body: { symbolUid, depth, direction, nodes } };
@@ -194,7 +193,7 @@ router.get('/graph/edge-occurrences', async (req) => {
   if (![sourceSymbolUid, edgeType, targetSymbolUid].every((v) => typeof v === 'string' && v.length > 0)) {
     return { status: 400, body: { error: 'sourceSymbolUid, edgeType, targetSymbolUid are required' } };
   }
-  const occurrences = store.listEdgeOccurrencesForEdge({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid });
+  const occurrences = await store.listEdgeOccurrencesForEdge({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid });
   return { status: 200, body: { occurrences } };
 });
 
@@ -205,7 +204,7 @@ router.get('/contracts/get', async (req) => {
   if (typeof symbolUid !== 'string' || symbolUid.length === 0) {
     return { status: 400, body: { error: 'symbolUid is required' } };
   }
-  const node = store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
+  const node = await store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
   if (!node) return { status: 404, body: { error: 'not found' } };
   return {
     status: 200,
@@ -224,13 +223,13 @@ router.get('/contracts/get', async (req) => {
 router.get('/flows/entrypoints', async (req) => {
   const tenantId = req.query.tenantId ?? 't-1';
   const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { entrypoints: store.listFlowEntrypoints({ tenantId, repoId }) } };
+  return { status: 200, body: { entrypoints: await store.listFlowEntrypoints({ tenantId, repoId }) } };
 });
 
 router.get('/flows/graphs', async (req) => {
   const tenantId = req.query.tenantId ?? 't-1';
   const repoId = req.query.repoId ?? 'r-1';
-  return { status: 200, body: { graphs: store.listFlowGraphs({ tenantId, repoId }) } };
+  return { status: 200, body: { graphs: await store.listFlowGraphs({ tenantId, repoId }) } };
 });
 
 router.get('/flows/graph', async (req) => {
@@ -238,7 +237,7 @@ router.get('/flows/graph', async (req) => {
   const repoId = req.query.repoId ?? 'r-1';
   const flowGraphKey = req.query.flowGraphKey;
   if (typeof flowGraphKey !== 'string' || flowGraphKey.length === 0) return { status: 400, body: { error: 'flowGraphKey is required' } };
-  const graph = store.getFlowGraph({ tenantId, repoId, flowGraphKey });
+  const graph = await store.getFlowGraph({ tenantId, repoId, flowGraphKey });
   if (!graph) return { status: 404, body: { error: 'not_found' } };
   return { status: 200, body: { graph } };
 });
@@ -252,7 +251,7 @@ router.get('/flows/trace', async (req) => {
   if (typeof startSymbolUid !== 'string' || startSymbolUid.length === 0) {
     return { status: 400, body: { error: 'startSymbolUid is required' } };
   }
-  const t = traceFlow({ store, tenantId, repoId, startSymbolUid, depth: Number.isFinite(depth) ? Math.trunc(depth) : 2 });
+  const t = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth: Number.isFinite(depth) ? Math.trunc(depth) : 2 });
   return {
     status: 200,
     body: {

@@ -14,17 +14,17 @@ export function createDocWorker({ store, docsWriter, docStore }) {
       if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
         throw new Error('docsRepoFullName is required');
       }
-      const entrypoints = store.listFlowEntrypoints({ tenantId, repoId });
+      const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
 
       const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha: job.payload.sha ?? 'mock', status: 'running' }) ?? null;
 
       const files = [];
       for (const ep of entrypoints) {
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
-        const node = store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
+        const node = await store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
         if (!node) continue;
 
-        const trace = traceFlow({ store, tenantId, repoId, startSymbolUid: symbolUid, depth: 3 });
+        const trace = await traceFlow({ store, tenantId, repoId, startSymbolUid: symbolUid, depth: 3 });
 
         const contractPayload = {
           symbolUid: node.symbol_uid,

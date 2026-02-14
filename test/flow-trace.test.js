@@ -14,10 +14,9 @@ test('traceFlow returns a focused subgraph from an entrypoint', async () => {
   const ep = eps.find((e) => e.path === '/health');
   assert.ok(ep);
 
-  const t = traceFlow({ store, tenantId: 't-1', repoId: 'r-1', startSymbolUid: ep.entrypoint_symbol_uid, depth: 3 });
+  const t = await traceFlow({ store, tenantId: 't-1', repoId: 'r-1', startSymbolUid: ep.entrypoint_symbol_uid, depth: 3 });
   const uids = new Set(t.nodes.map((n) => n.symbol_uid));
   // Must include the entrypoint itself and at least the server file it maps to.
   assert.ok(uids.has(ep.entrypoint_symbol_uid));
   assert.ok(Array.from(uids).some((u) => String(u).includes('server.js'.replaceAll('/', '.')) || String(u).includes('server.js')));
 });
-

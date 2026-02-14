@@ -1,6 +1,6 @@
 import { assert } from './types.js';
 
-export function blastRadius({ store, tenantId, repoId, symbolUid, depth = 1, direction = 'both' }) {
+export async function blastRadius({ store, tenantId, repoId, symbolUid, depth = 1, direction = 'both' }) {
   assert(typeof symbolUid === 'string' && symbolUid.length > 0, 'symbolUid required');
   assert(Number.isInteger(depth) && depth >= 0 && depth <= 5, 'depth must be 0..5');
 
@@ -10,7 +10,7 @@ export function blastRadius({ store, tenantId, repoId, symbolUid, depth = 1, dir
   for (let d = 0; d < depth; d++) {
     const next = new Set();
     for (const current of frontier) {
-      const edges = store.listEdgesByNode({ tenantId, repoId, symbolUid: current, direction });
+      const edges = await store.listEdgesByNode({ tenantId, repoId, symbolUid: current, direction });
       for (const e of edges) {
         if (direction === 'out' || direction === 'both') {
           if (e.source_symbol_uid === current && !visited.has(e.target_symbol_uid)) next.add(e.target_symbol_uid);
@@ -27,4 +27,3 @@ export function blastRadius({ store, tenantId, repoId, symbolUid, depth = 1, dir
 
   return Array.from(visited);
 }
-

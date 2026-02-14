@@ -16,21 +16,20 @@ function buildStore() {
   return { store, tenantId: t, repoId: r };
 }
 
-test('blastRadius out depth=1', () => {
+test('blastRadius out depth=1', async () => {
   const { store, tenantId, repoId } = buildStore();
-  const uids = blastRadius({ store, tenantId, repoId, symbolUid: 'A', depth: 1, direction: 'out' });
+  const uids = await blastRadius({ store, tenantId, repoId, symbolUid: 'A', depth: 1, direction: 'out' });
   assert.deepEqual(new Set(uids), new Set(['A', 'B']));
 });
 
-test('blastRadius out depth=2', () => {
+test('blastRadius out depth=2', async () => {
   const { store, tenantId, repoId } = buildStore();
-  const uids = blastRadius({ store, tenantId, repoId, symbolUid: 'A', depth: 2, direction: 'out' });
+  const uids = await blastRadius({ store, tenantId, repoId, symbolUid: 'A', depth: 2, direction: 'out' });
   assert.deepEqual(new Set(uids), new Set(['A', 'B', 'C']));
 });
 
-test('blastRadius in depth=2', () => {
+test('blastRadius in depth=2', async () => {
   const { store, tenantId, repoId } = buildStore();
-  const uids = blastRadius({ store, tenantId, repoId, symbolUid: 'D', depth: 2, direction: 'in' });
+  const uids = await blastRadius({ store, tenantId, repoId, symbolUid: 'D', depth: 2, direction: 'in' });
   assert.deepEqual(new Set(uids), new Set(['D', 'C', 'B']));
 });
-
