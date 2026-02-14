@@ -13,7 +13,7 @@
 | Semantic search API | `docs/02_REQUIREMENTS.md` | FR-GX-04 | PARTIAL | `npm test` (async search + store-native semanticSearch hook) |
 | Impacted nodes (“blast radius”) correctness | `docs/02_REQUIREMENTS.md` | FR-GX-03 | DONE | `npm test` |
 | Incremental correctness diagnostics | `docs/02_REQUIREMENTS.md` | FR-CIG-12 | PARTIAL | `npm test` (reparse scope + impacted symbols + stale marking) |
-| GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | PARTIAL | `npm test` (webhook → index → docs pipeline wired; GitHub token clone pending) |
+| GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | PARTIAL | `npm test` (webhook → index → docs pipeline wired; ephemeral cloneAtSha path; GitHub installation token pending) |
 | Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | PARTIAL | `npm test` (docs-repo-only guard + LocalDocsWriter + `local:run` CLI for local docs git repo) |
 | Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | PARTIAL | `npm test` (doc-block validator + InMemory/Pg doc store + docs/PR run read APIs) |
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | PARTIAL | `npm test` (OpenClaw tool loop for doc PR run + per-block validation; `OPENCLAW_USE_REMOTE=1` enables gateway mode) |
