@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/runtime",
+  "private": true,
+  "type": "module"
+}
+

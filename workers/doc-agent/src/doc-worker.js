@@ -10,6 +10,10 @@ export function createDocWorker({ store, docsWriter, docStore }) {
   return {
     async handle(job) {
       const { tenantId, repoId } = job.payload ?? {};
+      const docsRepoFullName = job.payload?.docsRepoFullName;
+      if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
+        throw new Error('docsRepoFullName is required');
+      }
       const entrypoints = store.listFlowEntrypoints({ tenantId, repoId });
 
       const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha: job.payload.sha ?? 'mock', status: 'running' }) ?? null;
@@ -63,7 +67,7 @@ export function createDocWorker({ store, docsWriter, docStore }) {
       }
 
       const pr = await docsWriter.openPullRequest({
-        targetRepoFullName: job.payload.docsRepoFullName,
+        targetRepoFullName: docsRepoFullName,
         title: 'Graphfly: update docs',
         body: 'Automated update based on Code Intelligence Graph evidence.',
         branchName: `graphfly/docs/${Date.now()}`,

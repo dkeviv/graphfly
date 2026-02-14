@@ -6,7 +6,7 @@ import { computeImpact } from '../../../packages/cig/src/impact.js';
 export function createIndexerWorker({ store, docQueue, docStore }) {
   return {
     async handle(job) {
-      const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [] } = job.payload ?? {};
+      const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [], docsRepoFullName = null } = job.payload ?? {};
 
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
@@ -36,7 +36,7 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
         store.upsertFlowGraph({ tenantId, repoId, flowGraph: fg });
       }
 
-      docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles });
+      docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName });
       return { ok: true };
     }
   };

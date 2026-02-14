@@ -57,7 +57,7 @@ test('e2e: GitHub push webhook -> index job -> doc PR (docs repo only)', async (
   const docJobs = docQueue.drain();
   assert.equal(docJobs.length, 1);
 
-  const out = await docWorker.handle({ payload: { ...docJobs[0].payload, docsRepoFullName: 'org/docs' } });
+  const out = await docWorker.handle({ payload: docJobs[0].payload });
   assert.equal(out.ok, true);
   assert.equal(out.pr.targetRepoFullName, 'org/docs');
   assert.ok(out.pr.filesCount >= 1);

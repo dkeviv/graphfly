@@ -15,6 +15,10 @@ import { applyStripeEventToEntitlements } from '../../../packages/billing/src/ap
 import { traceFlow } from '../../../packages/cig/src/trace.js';
 import { InMemoryDocStore } from '../../../packages/doc-store/src/in-memory.js';
 import { neighborhood } from '../../../packages/cig/src/neighborhood.js';
+import { InMemoryQueue } from '../../../packages/queue/src/in-memory.js';
+import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker.js';
+import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
+import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 
 const store = new InMemoryGraphStore();
 const docStore = new InMemoryDocStore();
@@ -24,11 +28,33 @@ const entitlements = new InMemoryEntitlementsStore();
 const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 
+// In-memory job plumbing (no external deps). In production this is BullMQ + Redis.
+const indexQueue = new InMemoryQueue('index');
+const docQueue = new InMemoryQueue('doc');
+const docsWriter = new GitHubDocsWriter({ configuredDocsRepoFullName: process.env.DOCS_REPO_FULL_NAME ?? 'org/docs' });
+const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
+const docWorker = createDocWorker({ store, docsWriter, docStore });
+
+async function drainOnce() {
+  for (const j of indexQueue.drain()) await indexerWorker.handle(j);
+  for (const j of docQueue.drain()) await docWorker.handle({ payload: j.payload });
+}
+
 const handleGitHubWebhook = makeGitHubWebhookHandler({
   secret: githubSecret,
   dedupe: githubDedupe,
-  onPush: async () => {
-    // TODO: enqueue incremental indexing job (BullMQ) per docs/02_REQUIREMENTS.md FR-CIG-02.
+  onPush: async (push) => {
+    // Spec: push webhook triggers incremental index which triggers docs update.
+    indexQueue.add('index.run', {
+      tenantId: 't-1',
+      repoId: 'r-1',
+      repoRoot: process.env.SOURCE_REPO_ROOT ?? 'fixtures/sample-repo',
+      sha: push.sha,
+      changedFiles: push.changedFiles,
+      removedFiles: push.removedFiles,
+      docsRepoFullName: process.env.DOCS_REPO_FULL_NAME ?? 'org/docs'
+    });
+    await drainOnce();
   }
 });
 
