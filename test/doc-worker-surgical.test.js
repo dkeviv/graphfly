@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { InMemoryGraphStore } from '../packages/cig/src/store.js';
 import { InMemoryDocStore } from '../packages/doc-store/src/in-memory.js';
 import { createDocWorker } from '../workers/doc-agent/src/doc-worker.js';
+import { InMemoryEntitlementsStore } from '../packages/entitlements/src/store.js';
+import { InMemoryUsageCounters } from '../packages/usage/src/in-memory.js';
 
 class CapturingDocsWriter {
   constructor() {
@@ -19,7 +21,13 @@ test('doc worker regenerates only stale flow blocks (surgical)', async () => {
   const store = new InMemoryGraphStore();
   const docStore = new InMemoryDocStore();
   const docsWriter = new CapturingDocsWriter();
-  const worker = createDocWorker({ store, docsWriter, docStore });
+  const worker = createDocWorker({
+    store,
+    docsWriter,
+    docStore,
+    entitlementsStore: new InMemoryEntitlementsStore(),
+    usageCounters: new InMemoryUsageCounters()
+  });
 
   const tenantId = 't-1';
   const repoId = 'r-1';
@@ -96,4 +104,3 @@ test('doc worker regenerates only stale flow blocks (surgical)', async () => {
   assert.equal(docsWriter.calls[0].files.length, 1);
   assert.equal(docsWriter.calls[0].files[0].path, 'flows/http-get-health.md');
 });
-

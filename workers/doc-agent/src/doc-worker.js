@@ -1,6 +1,12 @@
 import { runDocPrWithOpenClaw } from './openclaw-doc-run.js';
+import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
+import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
+import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
 
-export function createDocWorker({ store, docsWriter, docStore }) {
+export function createDocWorker({ store, docsWriter, docStore, entitlementsStore = null, usageCounters = null }) {
+  const entitlements = entitlementsStore ?? new InMemoryEntitlementsStore();
+  const usage = usageCounters ?? new InMemoryUsageCounters();
+
   return {
     async handle(job) {
       const { tenantId, repoId } = job.payload ?? {};
@@ -32,6 +38,22 @@ export function createDocWorker({ store, docsWriter, docStore }) {
           }
         }
 
+        const processedCount = entrypointKeys ? entrypointKeys.length : entrypoints.length;
+        const plan = entitlements.getPlan(tenantId);
+        const limits = limitsForPlan(plan);
+        const allow = usage.consumeDocBlocksOrDeny({ tenantId, limitPerMonth: limits.docBlocksPerMonth, amount: processedCount });
+        if (!allow.ok) {
+          if (prRun && docStore?.updatePrRun) {
+            await docStore.updatePrRun({
+              tenantId,
+              repoId,
+              prRunId: prRun.id,
+              patch: { status: 'skipped', errorMessage: 'doc_blocks_monthly_limit_exceeded', completedAt: new Date().toISOString() }
+            });
+          }
+          return { ok: true, pr: { ok: true, empty: true, targetRepoFullName: docsRepoFullName, filesCount: 0 } };
+        }
+
         const { pr } = await runDocPrWithOpenClaw({
           store,
           docStore,
@@ -44,7 +66,6 @@ export function createDocWorker({ store, docsWriter, docStore }) {
           entrypointKeys
         });
 
-        const processedCount = entrypointKeys ? entrypointKeys.length : entrypoints.length;
         if (prRun && docStore?.updatePrRun) {
           await docStore.updatePrRun({
             tenantId,

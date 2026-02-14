@@ -10,6 +10,7 @@ import { makeGitHubWebhookHandler } from './github-webhook.js';
 import { publicNode, publicEdge } from './public-shapes.js';
 import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
 import { makeRateLimitMiddleware } from './middleware/rate-limit.js';
+import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { StripeEventDedupe } from '../../../packages/stripe-webhooks/src/dedupe.js';
 import { makeStripeWebhookHandler } from './stripe-webhook.js';
 import { applyStripeEventToEntitlements } from '../../../packages/billing/src/apply-stripe-event.js';
@@ -21,6 +22,7 @@ import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 import { createStripeClient, createCheckoutSession, createCustomerPortalSession } from '../../../packages/stripe-service/src/stripe.js';
+import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -31,6 +33,7 @@ const docStore = await createDocStoreFromEnv({ repoFullName });
 const githubDedupe = new DeliveryDedupe();
 const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 const entitlements = new InMemoryEntitlementsStore();
+const usage = new InMemoryUsageCounters();
 const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 
@@ -43,7 +46,7 @@ const docsWriter = docsRepoPath
   ? new LocalDocsWriter({ configuredDocsRepoFullName: docsRepoFullName, docsRepoPath })
   : new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName });
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
-const docWorker = createDocWorker({ store, docsWriter, docStore });
+const docWorker = createDocWorker({ store, docsWriter, docStore, entitlementsStore: entitlements, usageCounters: usage });
 
 async function drainOnce() {
   for (const j of indexQueue.drain()) await indexerWorker.handle(j);
@@ -54,6 +57,13 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
   secret: githubSecret,
   dedupe: githubDedupe,
   onPush: async (push) => {
+    const plan = entitlements.getPlan(DEFAULT_TENANT_ID);
+    const limits = limitsForPlan(plan);
+    const ok = usage.consumeIndexJobOrDeny({ tenantId: DEFAULT_TENANT_ID, limitPerDay: limits.indexJobsPerDay, amount: 1 });
+    if (!ok.ok) {
+      // For webhook-triggered runs, skip quietly (GitHub will retry on non-2xx).
+      return;
+    }
     // Spec: push webhook triggers incremental index which triggers docs update.
     indexQueue.add('index.run', {
       tenantId: DEFAULT_TENANT_ID,

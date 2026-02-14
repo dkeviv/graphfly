@@ -9,6 +9,8 @@ import { computeGitHubSignature256 } from '../packages/github-webhooks/src/verif
 import { DeliveryDedupe } from '../packages/github-webhooks/src/dedupe.js';
 import { makeGitHubWebhookHandler } from '../apps/api/src/github-webhook.js';
 import { InMemoryDocStore } from '../packages/doc-store/src/in-memory.js';
+import { InMemoryEntitlementsStore } from '../packages/entitlements/src/store.js';
+import { InMemoryUsageCounters } from '../packages/usage/src/in-memory.js';
 
 test('e2e: GitHub push webhook -> index job -> doc PR (docs repo only)', async () => {
   const store = new InMemoryGraphStore();
@@ -18,7 +20,13 @@ test('e2e: GitHub push webhook -> index job -> doc PR (docs repo only)', async (
   const docStore = new InMemoryDocStore();
   const indexer = createIndexerWorker({ store, docQueue, docStore });
   const docsWriter = new GitHubDocsWriter({ configuredDocsRepoFullName: 'org/docs' });
-  const docWorker = createDocWorker({ store, docsWriter, docStore });
+  const docWorker = createDocWorker({
+    store,
+    docsWriter,
+    docStore,
+    entitlementsStore: new InMemoryEntitlementsStore(),
+    usageCounters: new InMemoryUsageCounters()
+  });
 
   const secret = 'whsec_github';
   const dedupe = new DeliveryDedupe();

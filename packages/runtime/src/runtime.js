@@ -8,6 +8,8 @@ import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../github-service/src/local-docs-writer.js';
 import { InMemoryRepoRegistry } from './repo-registry.js';
+import { InMemoryEntitlementsStore } from '../../entitlements/src/store.js';
+import { InMemoryUsageCounters } from '../../usage/src/in-memory.js';
 
 export function createRuntime({
   githubWebhookSecret,
@@ -18,13 +20,17 @@ export function createRuntime({
   indexQueue = null,
   docQueue = null,
   docsWriter = null,
-  repoRegistry = null
+  repoRegistry = null,
+  entitlementsStore = null,
+  usageCounters = null
 } = {}) {
   const graphStore = store ?? new InMemoryGraphStore();
   const docsStore = docStore ?? new InMemoryDocStore();
   const iq = indexQueue ?? new InMemoryQueue('index');
   const dq = docQueue ?? new InMemoryQueue('doc');
   const registry = repoRegistry ?? new InMemoryRepoRegistry();
+  const entitlements = entitlementsStore ?? new InMemoryEntitlementsStore();
+  const usage = usageCounters ?? new InMemoryUsageCounters();
   const writer =
     docsWriter ??
     (docsRepoPath
@@ -32,7 +38,13 @@ export function createRuntime({
       : new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName }));
 
   const indexer = createIndexerWorker({ store: graphStore, docQueue: dq, docStore: docsStore });
-  const docWorker = createDocWorker({ store: graphStore, docsWriter: writer, docStore: docsStore });
+  const docWorker = createDocWorker({
+    store: graphStore,
+    docsWriter: writer,
+    docStore: docsStore,
+    entitlementsStore: entitlements,
+    usageCounters: usage
+  });
 
   const githubDedupe = new DeliveryDedupe();
 
