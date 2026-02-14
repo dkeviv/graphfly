@@ -779,10 +779,10 @@ export class PgGraphStore {
     const hasFlowGraph = records.some((r) => r?.type === 'flow_graph');
     if (hasFlowGraph) throw new Error('flow_graph records must be ingested via upsertFlowGraph, not ingestRecords');
 
-    const nodes = [];
-    const edges = [];
-    const occ = [];
-    const entrypoints = [];
+    const nodesByUid = new Map();
+    const edgesByKey = new Map();
+    const occByKey = new Map();
+    const entrypointsByKey = new Map();
     const manifests = [];
     const declared = [];
     const observed = [];
@@ -790,10 +790,23 @@ export class PgGraphStore {
 
     for (const r of records) {
       const t = r?.type;
-      if (t === 'node') nodes.push(r.data);
-      else if (t === 'edge') edges.push(r.data);
-      else if (t === 'edge_occurrence') occ.push(r.data);
-      else if (t === 'flow_entrypoint') entrypoints.push(r.data);
+      if (t === 'node') {
+        if (r.data?.symbol_uid) nodesByUid.set(r.data.symbol_uid, r.data);
+      } else if (t === 'edge') {
+        const e = r.data;
+        if (!e?.source_symbol_uid || !e?.target_symbol_uid || !e?.edge_type) continue;
+        const k = `${e.source_symbol_uid}::${e.edge_type}::${e.target_symbol_uid}`;
+        edgesByKey.set(k, e);
+      } else if (t === 'edge_occurrence') {
+        const o = r.data;
+        if (!o?.source_symbol_uid || !o?.target_symbol_uid || !o?.edge_type || !o?.file_path) continue;
+        const k = `${o.source_symbol_uid}::${o.edge_type}::${o.target_symbol_uid}::${o.file_path}::${o.line_start}::${o.line_end}`;
+        occByKey.set(k, o);
+      } else if (t === 'flow_entrypoint') {
+        const ep = r.data;
+        if (!ep?.entrypoint_key) continue;
+        entrypointsByKey.set(ep.entrypoint_key, ep);
+      }
       else if (t === 'dependency_manifest') manifests.push(r.data);
       else if (t === 'declared_dependency') declared.push(r.data);
       else if (t === 'observed_dependency') observed.push(r.data);
@@ -801,12 +814,17 @@ export class PgGraphStore {
       else if (t === 'index_diagnostic') this.addIndexDiagnostic({ tenantId, repoId, diagnostic: r.data });
     }
 
+    const nodes = Array.from(nodesByUid.values());
+    const edges = Array.from(edgesByKey.values());
+    const occ = Array.from(occByKey.values());
+    const entrypoints = Array.from(entrypointsByKey.values());
+
     await this._c.query('BEGIN');
     try {
-      for (const n of nodes) await this.upsertNode({ tenantId, repoId, node: n });
-      for (const e of edges) await this.upsertEdge({ tenantId, repoId, edge: e });
-      for (const o of occ) await this.addEdgeOccurrence({ tenantId, repoId, occurrence: o });
-      for (const ep of entrypoints) await this.upsertFlowEntrypoint({ tenantId, repoId, entrypoint: ep });
+      if (nodes.length) await this._bulkUpsertNodes({ tenantId, repoId, nodes });
+      if (edges.length) await this._bulkUpsertEdges({ tenantId, repoId, edges });
+      if (occ.length) await this._bulkUpsertEdgeOccurrences({ tenantId, repoId, occurrences: occ });
+      if (entrypoints.length) await this._bulkUpsertFlowEntrypoints({ tenantId, repoId, entrypoints });
       for (const m of manifests) await this.addDependencyManifest({ tenantId, repoId, manifest: m });
       for (const d of declared) await this.addDeclaredDependency({ tenantId, repoId, declared: d });
       for (const o of observed) await this.addObservedDependency({ tenantId, repoId, observed: o });
@@ -816,6 +834,218 @@ export class PgGraphStore {
       await this._c.query('ROLLBACK');
       throw err;
     }
+  }
+
+  async _bulkUpsertNodes({ tenantId, repoId, nodes }) {
+    const payload = nodes.map((n) => ({
+      ...n,
+      node_key: n.node_key ?? null,
+      file_path: n.file_path ?? null,
+      embedding_vec: n.embedding ? toPgVectorLiteral(n.embedding) : null,
+      first_seen_sha: n.first_seen_sha ?? null,
+      last_seen_sha: n.last_seen_sha ?? null
+    }));
+
+    await this._c.query(
+      `WITH data AS (
+         SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(
+           symbol_uid text,
+           qualified_name text,
+           name text,
+           node_type text,
+           language text,
+           file_path text,
+           line_start int,
+           line_end int,
+           visibility text,
+           signature text,
+           signature_hash text,
+           declaration text,
+           docstring text,
+           type_annotation text,
+           return_type text,
+           parameters jsonb,
+           contract jsonb,
+           constraints jsonb,
+           allowable_values jsonb,
+           external_ref jsonb,
+           embedding_text text,
+           embedding_vec text,
+           first_seen_sha text,
+           last_seen_sha text,
+           node_key text
+         )
+       )
+       INSERT INTO graph_nodes (
+         tenant_id, repo_id, node_key, symbol_uid, qualified_name,
+         name, node_type, language, file_path, line_start, line_end, visibility,
+         signature, signature_hash, declaration, docstring, type_annotation, return_type,
+         parameters, contract, constraints, allowable_values, external_ref,
+         embedding, embedding_text,
+         first_seen_sha, last_seen_sha
+       )
+       SELECT
+         $1, $2,
+         COALESCE(x.node_key, x.symbol_uid),
+         x.symbol_uid, x.qualified_name,
+         x.name, x.node_type, x.language, NULLIF(x.file_path, ''),
+         x.line_start, x.line_end, x.visibility,
+         x.signature, x.signature_hash, x.declaration, x.docstring, x.type_annotation, x.return_type,
+         x.parameters, x.contract, x.constraints, x.allowable_values, x.external_ref,
+         CASE WHEN x.embedding_vec IS NULL OR x.embedding_vec = '' THEN NULL ELSE x.embedding_vec::vector END,
+         x.embedding_text,
+         COALESCE(x.first_seen_sha, 'mock'),
+         COALESCE(x.last_seen_sha, 'mock')
+       FROM data x
+       ON CONFLICT (tenant_id, repo_id, symbol_uid) DO UPDATE SET
+         node_key=EXCLUDED.node_key,
+         qualified_name=EXCLUDED.qualified_name,
+         name=EXCLUDED.name,
+         node_type=EXCLUDED.node_type,
+         language=EXCLUDED.language,
+         file_path=EXCLUDED.file_path,
+         line_start=EXCLUDED.line_start,
+         line_end=EXCLUDED.line_end,
+         visibility=EXCLUDED.visibility,
+         signature=EXCLUDED.signature,
+         signature_hash=EXCLUDED.signature_hash,
+         declaration=EXCLUDED.declaration,
+         docstring=EXCLUDED.docstring,
+         type_annotation=EXCLUDED.type_annotation,
+         return_type=EXCLUDED.return_type,
+         parameters=EXCLUDED.parameters,
+         contract=EXCLUDED.contract,
+         constraints=EXCLUDED.constraints,
+         allowable_values=EXCLUDED.allowable_values,
+         external_ref=EXCLUDED.external_ref,
+         embedding=EXCLUDED.embedding,
+         embedding_text=EXCLUDED.embedding_text,
+         last_seen_sha=EXCLUDED.last_seen_sha,
+         indexed_at=now()`,
+      [tenantId, repoId, JSON.stringify(payload)]
+    );
+  }
+
+  async _bulkUpsertEdges({ tenantId, repoId, edges }) {
+    const payload = edges.map((e) => ({
+      ...e,
+      first_seen_sha: e.first_seen_sha ?? null,
+      last_seen_sha: e.last_seen_sha ?? null
+    }));
+
+    await this._c.query(
+      `WITH data AS (
+         SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(
+           source_symbol_uid text,
+           target_symbol_uid text,
+           edge_type text,
+           metadata jsonb,
+           first_seen_sha text,
+           last_seen_sha text
+         )
+       )
+       INSERT INTO graph_edges (
+         tenant_id, repo_id, source_node_id, target_node_id, edge_type, metadata, first_seen_sha, last_seen_sha
+       )
+       SELECT
+         $1, $2,
+         s.id, t.id,
+         x.edge_type,
+         x.metadata,
+         COALESCE(x.first_seen_sha, 'mock'),
+         COALESCE(x.last_seen_sha, 'mock')
+       FROM data x
+       JOIN graph_nodes s ON s.tenant_id=$1 AND s.repo_id=$2 AND s.symbol_uid=x.source_symbol_uid
+       JOIN graph_nodes t ON t.tenant_id=$1 AND t.repo_id=$2 AND t.symbol_uid=x.target_symbol_uid
+       ON CONFLICT (tenant_id, repo_id, source_node_id, target_node_id, edge_type) DO UPDATE SET
+         metadata=EXCLUDED.metadata,
+         last_seen_sha=EXCLUDED.last_seen_sha,
+         indexed_at=now()`,
+      [tenantId, repoId, JSON.stringify(payload)]
+    );
+  }
+
+  async _bulkUpsertEdgeOccurrences({ tenantId, repoId, occurrences }) {
+    const payload = occurrences.map((o) => ({
+      ...o,
+      sha: o.sha ?? null
+    }));
+
+    await this._c.query(
+      `WITH data AS (
+         SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(
+           source_symbol_uid text,
+           target_symbol_uid text,
+           edge_type text,
+           file_path text,
+           line_start int,
+           line_end int,
+           occurrence_kind text,
+           sha text
+         )
+       )
+       INSERT INTO graph_edge_occurrences (
+         tenant_id, repo_id, edge_id, file_path, line_start, line_end, occurrence_kind, sha
+       )
+       SELECT
+         $1, $2,
+         e.id,
+         x.file_path,
+         x.line_start,
+         x.line_end,
+         COALESCE(x.occurrence_kind, 'other'),
+         COALESCE(x.sha, 'mock')
+       FROM data x
+       JOIN graph_nodes s ON s.tenant_id=$1 AND s.repo_id=$2 AND s.symbol_uid=x.source_symbol_uid
+       JOIN graph_nodes t ON t.tenant_id=$1 AND t.repo_id=$2 AND t.symbol_uid=x.target_symbol_uid
+       JOIN graph_edges e ON e.tenant_id=$1 AND e.repo_id=$2 AND e.source_node_id=s.id AND e.target_node_id=t.id AND e.edge_type=x.edge_type
+       ON CONFLICT (tenant_id, repo_id, edge_id, file_path, line_start, line_end) DO UPDATE SET
+         occurrence_kind=EXCLUDED.occurrence_kind,
+         sha=EXCLUDED.sha`,
+      [tenantId, repoId, JSON.stringify(payload)]
+    );
+  }
+
+  async _bulkUpsertFlowEntrypoints({ tenantId, repoId, entrypoints }) {
+    const payload = entrypoints.map((ep) => ({ ...ep }));
+    await this._c.query(
+      `WITH data AS (
+         SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(
+           entrypoint_key text,
+           entrypoint_type text,
+           method text,
+           path text,
+           symbol_uid text,
+           file_path text,
+           line_start int,
+           line_end int
+         )
+       )
+       INSERT INTO flow_entrypoints (
+         tenant_id, repo_id, entrypoint_key, entrypoint_type, method, path, symbol_uid, file_path, line_start, line_end
+       )
+       SELECT
+         $1, $2,
+         x.entrypoint_key,
+         x.entrypoint_type,
+         x.method,
+         x.path,
+         x.symbol_uid,
+         NULLIF(x.file_path, ''),
+         x.line_start,
+         x.line_end
+       FROM data x
+       ON CONFLICT (tenant_id, repo_id, entrypoint_key) DO UPDATE SET
+         entrypoint_type=EXCLUDED.entrypoint_type,
+         method=EXCLUDED.method,
+         path=EXCLUDED.path,
+         symbol_uid=EXCLUDED.symbol_uid,
+         file_path=EXCLUDED.file_path,
+         line_start=EXCLUDED.line_start,
+         line_end=EXCLUDED.line_end,
+         indexed_at=now()`,
+      [tenantId, repoId, JSON.stringify(payload)]
+    );
   }
 
   async _ensureOrgRepo({ tenantId, repoId }) {

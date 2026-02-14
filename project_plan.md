@@ -4,11 +4,11 @@
 |---|---|---|---|---|
 | Repo scaffolding (apps/workers/packages) | `plan.md` + `agents.md` | N/A | DONE | `npm test` |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | PARTIAL | `npm test` |
-| NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | PARTIAL | `npm test` (adds streaming ingest) |
+| NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | PARTIAL | `npm test` (streaming ingest + store.ingestRecords fast-path) |
 | Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | PARTIAL | `npm test` |
 | Flow entities ingestion + APIs | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-09 | PARTIAL | `npm test` (entrypoints + trace + materialized flow_graph; DB tables pending) |
 | Dependency & manifest intelligence (declared/observed/mismatch) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-10 | PARTIAL | `npm test` (adds version_conflict mismatch) |
-| Postgres schema + migrations + RLS | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-06 | PARTIAL | `npm test` (+ optional live RLS test when `DATABASE_URL` set) |
+| Postgres schema + migrations + RLS | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-06 | PARTIAL | `npm test` (+ bulk ingest + optional live RLS test when `DATABASE_URL` set) |
 | pgvector embeddings + HNSW index | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-05 | PARTIAL | `npm test` (schema + PgGraphStore semanticSearch ORDER BY embedding <=>; live DB pending) |
 | Semantic search API | `docs/02_REQUIREMENTS.md` | FR-GX-04 | PARTIAL | `npm test` (async search + store-native semanticSearch hook) |
 | Impacted nodes (“blast radius”) correctness | `docs/02_REQUIREMENTS.md` | FR-GX-03 | DONE | `npm test` |
