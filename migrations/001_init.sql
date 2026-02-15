@@ -26,6 +26,18 @@ ALTER TABLE orgs ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 ALTER TABLE orgs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_slug_unique ON orgs(slug) WHERE slug IS NOT NULL;
 
+-- Org membership + roles (enterprise auth scaffolding).
+CREATE TABLE IF NOT EXISTS org_members (
+    tenant_id    UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    user_id      TEXT NOT NULL,
+    role         TEXT NOT NULL DEFAULT 'viewer'
+                 CHECK (role IN ('viewer','member','admin','owner')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_org_members_role ON org_members(tenant_id, role);
+
 CREATE TABLE IF NOT EXISTS repos (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id         UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -446,6 +458,7 @@ ALTER TABLE doc_blocks
 -- ROW-LEVEL SECURITY (tenant-scoped tables)
 -- ═══════════════════════════════════════════════════════════════════════
 ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE repos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_billing ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stripe_events ENABLE ROW LEVEL SECURITY;
@@ -469,6 +482,7 @@ ALTER TABLE webhook_deliveries ENABLE ROW LEVEL SECURITY;
 
 -- Hardening: ensure RLS applies even for table owners.
 ALTER TABLE orgs FORCE ROW LEVEL SECURITY;
+ALTER TABLE org_members FORCE ROW LEVEL SECURITY;
 ALTER TABLE repos FORCE ROW LEVEL SECURITY;
 ALTER TABLE org_billing FORCE ROW LEVEL SECURITY;
 ALTER TABLE stripe_events FORCE ROW LEVEL SECURITY;
@@ -493,6 +507,10 @@ ALTER TABLE pr_runs FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_self_orgs ON orgs;
 CREATE POLICY tenant_self_orgs ON orgs
     USING (id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_org_members ON org_members;
+CREATE POLICY tenant_isolation_org_members ON org_members
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_repos ON repos;
 CREATE POLICY tenant_isolation_repos ON repos

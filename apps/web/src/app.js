@@ -10,8 +10,9 @@ const modeSelect = document.getElementById('modeSelect');
 const state = {
   mode: modeSelect.value,
   apiUrl: localStorage.getItem('graphfly_api_url') ?? 'http://127.0.0.1:8787',
-  tenantId: 't-1',
-  repoId: 'r-1'
+  tenantId: localStorage.getItem('graphfly_tenant_id') ?? '00000000-0000-0000-0000-000000000001',
+  repoId: localStorage.getItem('graphfly_repo_id') ?? '00000000-0000-0000-0000-000000000002',
+  authToken: localStorage.getItem('graphfly_auth_token') ?? null
 };
 
 modeSelect.addEventListener('change', () => {
@@ -42,4 +43,3 @@ for (const btn of document.querySelectorAll('[data-route]')) {
 }
 
 router.start();
-

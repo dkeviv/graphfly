@@ -1,16 +1,29 @@
 export class ApiClient {
-  constructor({ apiUrl, tenantId, repoId, mode }) {
+  constructor({ apiUrl, tenantId, repoId, mode, authToken = null }) {
     this.apiUrl = apiUrl;
     this.tenantId = tenantId;
     this.repoId = repoId;
     this.mode = mode;
+    this.authToken = authToken;
+  }
+
+  _headersJson() {
+    const h = { accept: 'application/json', 'content-type': 'application/json; charset=utf-8' };
+    if (this.authToken) h.authorization = `Bearer ${this.authToken}`;
+    return h;
+  }
+
+  _headersAccept() {
+    const h = { accept: 'application/json' };
+    if (this.authToken) h.authorization = `Bearer ${this.authToken}`;
+    return h;
   }
 
   async sendJson(method, path, body) {
     const url = new URL(path, this.apiUrl);
     const res = await fetch(url, {
       method,
-      headers: { accept: 'application/json', 'content-type': 'application/json; charset=utf-8' },
+      headers: this._headersJson(),
       body: body ? JSON.stringify(body) : undefined
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -19,7 +32,7 @@ export class ApiClient {
 
   async getJson(path) {
     const url = new URL(path, this.apiUrl);
-    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    const res = await fetch(url, { headers: this._headersAccept() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }

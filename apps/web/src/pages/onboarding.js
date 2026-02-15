@@ -4,7 +4,7 @@ import { parseOAuthCallbackParams, parseGitHubAppCallbackParams, stripQueryFromU
 
 export function renderOnboardingPage({ state, pageEl }) {
   clear(pageEl);
-  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode });
+  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
   const steps = [
     { k: '1', h: 'Connect GitHub', s: 'OAuth (dev: paste token) to list repos read-only.', ok: false },
@@ -165,7 +165,17 @@ export function renderOnboardingPage({ state, pageEl }) {
       if (cb) {
         statusEl.textContent = 'Completing GitHub connection…';
         try {
-          await api.githubOAuthCallback(cb);
+          const out = await api.githubOAuthCallback(cb);
+          if (out?.authToken) {
+            state.authToken = out.authToken;
+            localStorage.setItem('graphfly_auth_token', out.authToken);
+            api.authToken = out.authToken;
+          }
+          if (out?.tenantId) {
+            state.tenantId = out.tenantId;
+            localStorage.setItem('graphfly_tenant_id', out.tenantId);
+            api.tenantId = out.tenantId;
+          }
           stripQueryFromUrl();
         } catch (e) {
           statusEl.textContent = `OAuth callback failed: ${String(e?.message ?? e)}`;
@@ -185,6 +195,14 @@ export function renderOnboardingPage({ state, pageEl }) {
           el('li', { class: 'list__item' }, [
             el('div', { class: 'row' }, [
               el('div', {}, [el('div', { class: 'h' }, [r.fullName]), el('div', { class: 'small k' }, [r.id])]),
+              el('button', {
+                class: 'button',
+                onclick: () => {
+                  state.repoId = r.id;
+                  localStorage.setItem('graphfly_repo_id', r.id);
+                  window.location.hash = 'graph';
+                }
+              }, ['Open']),
               el('button', {
                 class: 'button button--danger',
                 onclick: async () => {
@@ -221,7 +239,14 @@ export function renderOnboardingPage({ state, pageEl }) {
                   class: 'button',
                   onclick: async () => {
                     try {
-                      await api.createRepo({ fullName: r.fullName, defaultBranch: r.defaultBranch, githubRepoId: r.id });
+                      const created = await api.createRepo({ fullName: r.fullName, defaultBranch: r.defaultBranch, githubRepoId: r.id });
+                      const repo = created?.repo ?? null;
+                      if (repo?.id) {
+                        state.repoId = repo.id;
+                        localStorage.setItem('graphfly_repo_id', repo.id);
+                        window.location.hash = 'graph';
+                        return;
+                      }
                       await refresh();
                     } catch (e) {
                       statusEl.textContent = `Create project failed: ${String(e?.message ?? e)}`;

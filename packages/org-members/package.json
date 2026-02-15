@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/org-members",
+  "private": true,
+  "type": "module",
+  "main": "src/store.js"
+}
+

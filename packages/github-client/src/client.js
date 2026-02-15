@@ -39,6 +39,21 @@ export class GitHubClient {
     this._base = apiBaseUrl;
   }
 
+  async getCurrentUser() {
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'GET',
+      path: `/user`,
+      ok: [200]
+    });
+    return {
+      id: data?.id ?? null,
+      login: data?.login ?? null
+    };
+  }
+
   async listUserRepos({ perPage = 100 } = {}) {
     const n = Number.isFinite(perPage) ? Math.max(1, Math.min(100, Math.trunc(perPage))) : 100;
     const data = await ghRequest({
@@ -93,4 +108,3 @@ export class GitHubClient {
     return ref?.object?.sha ?? null;
   }
 }
-

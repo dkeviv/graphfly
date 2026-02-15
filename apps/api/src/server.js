@@ -10,6 +10,8 @@ import { makeGitHubWebhookHandler } from './github-webhook.js';
 import { publicNode, publicEdge } from './public-shapes.js';
 import { createEntitlementsStoreFromEnv } from '../../../packages/stores/src/entitlements-store.js';
 import { makeRateLimitMiddleware } from './middleware/rate-limit.js';
+import { makeAuthMiddleware, requireRole, tenantIdFromCtx } from './middleware/auth.js';
+import { createJwtHs256 } from '../../../packages/auth/src/jwt.js';
 import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { StripeEventDedupe } from '../../../packages/stripe-webhooks/src/dedupe.js';
 import { makeStripeWebhookHandler } from './stripe-webhook.js';
@@ -36,6 +38,7 @@ import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-
 import { GitHubClient } from '../../../packages/github-client/src/client.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
+import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -51,6 +54,7 @@ const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 const billingPool = await getPgPoolFromEnv({ connectionString: process.env.DATABASE_URL ?? '', max: Number(process.env.PG_POOL_MAX ?? 10) });
 const orgs = await createOrgStoreFromEnv();
+const orgMembers = await createOrgMemberStoreFromEnv();
 const repos = await createRepoStoreFromEnv();
 const secrets = await createSecretsStoreFromEnv();
 const oauthStates = new InMemoryOAuthStateStore();
@@ -175,6 +179,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
 });
 
 const router = createJsonRouter();
+router.use(makeAuthMiddleware({ orgMemberStore: orgMembers }));
 router.use(makeRateLimitMiddleware({ entitlementsStore: entitlements }));
 
 const handleStripeWebhook = makeStripeWebhookHandler({
@@ -217,7 +222,9 @@ router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
 });
 
 router.post('/api/v1/integrations/github/connect', async (req) => {
-  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
   const token = req.body?.token ?? '';
   if (typeof token !== 'string' || token.length < 10) return { status: 400, body: { error: 'token is required' } };
   // Store encrypted; never return it.
@@ -226,7 +233,7 @@ router.post('/api/v1/integrations/github/connect', async (req) => {
 });
 
 router.get('/api/v1/integrations/github/oauth/start', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const clientId = process.env.GITHUB_OAUTH_CLIENT_ID ?? '';
   const redirectUri = process.env.GITHUB_OAUTH_REDIRECT_URI ?? '';
   if (!clientId || !redirectUri) return { status: 501, body: { error: 'oauth_not_configured' } };
@@ -252,7 +259,9 @@ router.get('/api/v1/github/docs-app-url', async () => {
 });
 
 router.get('/api/v1/github/reader/callback', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
   const installationId = req.query.installation_id ?? req.query.installationId;
   if (!installationId) return { status: 400, body: { error: 'installation_id is required' } };
   const n = Number(installationId);
@@ -262,7 +271,9 @@ router.get('/api/v1/github/reader/callback', async (req) => {
 });
 
 router.get('/api/v1/github/docs/callback', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
   const installationId = req.query.installation_id ?? req.query.installationId;
   if (!installationId) return { status: 400, body: { error: 'installation_id is required' } };
   const n = Number(installationId);
@@ -272,7 +283,7 @@ router.get('/api/v1/github/docs/callback', async (req) => {
 });
 
 router.post('/api/v1/integrations/github/oauth/callback', async (req) => {
-  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const code = req.body?.code ?? '';
   const state = req.body?.state ?? '';
   if (!oauthStates.consume({ tenantId, state })) return { status: 400, body: { error: 'invalid_state' } };
@@ -284,11 +295,28 @@ router.post('/api/v1/integrations/github/oauth/callback', async (req) => {
 
   const out = await exchangeCodeForToken({ clientId, clientSecret, code, redirectUri });
   await secrets.setSecret({ tenantId, key: 'github.user_token', value: out.token });
-  return { status: 200, body: { ok: true } };
+
+  // Production onboarding: bind the OAuth identity to an org member and return a session token (JWT).
+  const authMode = String(process.env.GRAPHFLY_AUTH_MODE ?? 'none');
+  if (authMode !== 'jwt') return { status: 200, body: { ok: true } };
+
+  const jwtSecret = process.env.GRAPHFLY_JWT_SECRET ?? '';
+  if (!jwtSecret) return { status: 500, body: { error: 'server_misconfigured', missing: ['GRAPHFLY_JWT_SECRET'] } };
+
+  const gh = new GitHubClient({ token: out.token });
+  const user = await gh.getCurrentUser();
+  const userId = user?.id != null ? `gh:${String(user.id)}` : null;
+  if (!userId) return { status: 500, body: { error: 'oauth_user_lookup_failed' } };
+
+  await orgs.ensureOrg?.({ tenantId, name: 'default' });
+  await orgMembers.upsertMember({ tenantId, userId, role: 'owner' });
+
+  const authToken = createJwtHs256({ secret: jwtSecret, claims: { tenantId, sub: userId }, ttlSec: 7 * 24 * 3600 });
+  return { status: 200, body: { ok: true, authToken, tenantId, user: { id: userId, login: user?.login ?? null } } };
 });
 
 router.get('/api/v1/integrations/github/repos', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const token = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
   if (!token) return { status: 401, body: { error: 'github_not_connected' } };
   const gh = new GitHubClient({ token });
@@ -297,7 +325,7 @@ router.get('/api/v1/integrations/github/repos', async (req) => {
 });
 
 router.get('/api/v1/orgs/current', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const org = (await orgs.getOrg?.({ tenantId })) ?? (await orgs.ensureOrg?.({ tenantId, name: 'default' }));
   const plan = await Promise.resolve(entitlements.getPlan(tenantId));
   return {
@@ -315,7 +343,9 @@ router.get('/api/v1/orgs/current', async (req) => {
 });
 
 router.put('/api/v1/orgs/current', async (req) => {
-  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
   const docsRepoFullName = req.body?.docsRepoFullName;
   if (docsRepoFullName) {
     const list = await repos.listRepos({ tenantId });
@@ -340,13 +370,15 @@ router.put('/api/v1/orgs/current', async (req) => {
 });
 
 router.get('/api/v1/repos', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const out = await repos.listRepos({ tenantId });
   return { status: 200, body: { repos: out } };
 });
 
 router.post('/api/v1/repos', async (req) => {
-  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
   const fullName = req.body?.fullName ?? req.body?.full_name;
   const githubRepoId = req.body?.githubRepoId ?? req.body?.github_repo_id ?? null;
   const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? 'main';
@@ -382,7 +414,9 @@ router.post('/api/v1/repos', async (req) => {
 });
 
 router.delete('/api/v1/repos/:repoId', async (req) => {
-  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
   const repoId = req.params.repoId;
   const out = await repos.deleteRepo({ tenantId, repoId });
   return { status: 200, body: out };
@@ -424,7 +458,9 @@ router.get('/billing/usage', billingUsageHandler);
 router.get('/api/v1/billing/usage', billingUsageHandler);
 
 async function billingCheckoutHandler(req) {
-  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'owner');
+  if (forbid) return forbid;
   const plan = req.body?.plan ?? 'pro';
   try {
     const out = await createCheckoutUrl({
@@ -446,7 +482,9 @@ router.post('/billing/checkout', billingCheckoutHandler);
 router.post('/api/v1/billing/checkout', billingCheckoutHandler);
 
 async function billingPortalHandler(req) {
-  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'owner');
+  if (forbid) return forbid;
   try {
     const out = await createPortalUrl({
       tenantId,

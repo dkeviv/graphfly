@@ -4,7 +4,7 @@ import { renderEvidencePanel } from './shared/evidence.js';
 
 export function renderGraphPage({ state, pageEl }) {
   clear(pageEl);
-  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode });
+  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
   const resultsEl = el('ul', { class: 'list' });
   const evidenceEl = el('div', { class: 'card', 'data-testid': 'evidence-panel' }, [

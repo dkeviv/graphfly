@@ -3,7 +3,7 @@ import { el, clear } from '../render.js';
 
 export function renderDocsPage({ state, pageEl }) {
   clear(pageEl);
-  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode });
+  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
   const listEl = el('ul', { class: 'list' });
   const detailEl = el('div', { class: 'card' }, [
