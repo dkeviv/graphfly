@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/repos-pg",
+  "private": true,
+  "type": "module",
+  "main": "src/pg-repo-store.js"
+}
+

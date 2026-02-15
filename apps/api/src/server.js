@@ -28,6 +28,8 @@ import { withTenantClient } from '../../../packages/pg-client/src/tenant.js';
 import { PgBillingStore } from '../../../packages/billing-pg/src/pg-billing-store.js';
 import { formatGraphSearchResponse } from './search-format.js';
 import { getBillingUsageSnapshot } from './billing-usage.js';
+import { createOrgStoreFromEnv } from '../../../packages/stores/src/org-store.js';
+import { createRepoStoreFromEnv } from '../../../packages/stores/src/repo-store.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -42,6 +44,8 @@ const usage = await createUsageCountersFromEnv();
 const stripeDedupe = new StripeEventDedupe();
 const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 const billingPool = await getPgPoolFromEnv({ connectionString: process.env.DATABASE_URL ?? '', max: Number(process.env.PG_POOL_MAX ?? 10) });
+const orgs = await createOrgStoreFromEnv();
+const repos = await createRepoStoreFromEnv();
 
 function tenantIdFromStripeEvent(event) {
   const md = event?.data?.object?.metadata;
@@ -130,6 +134,69 @@ const handleStripeWebhook = makeStripeWebhookHandler({
 
 router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
   return handleStripeWebhook({ headers, rawBody });
+});
+
+router.get('/api/v1/orgs/current', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const org = (await orgs.getOrg?.({ tenantId })) ?? (await orgs.ensureOrg?.({ tenantId, name: 'default' }));
+  const plan = await Promise.resolve(entitlements.getPlan(tenantId));
+  return {
+    status: 200,
+    body: {
+      id: org?.id ?? tenantId,
+      slug: org?.slug ?? null,
+      displayName: org?.displayName ?? null,
+      plan,
+      githubReaderInstallId: org?.githubReaderInstallId ?? null,
+      githubDocsInstallId: org?.githubDocsInstallId ?? null,
+      docsRepoFullName: org?.docsRepoFullName ?? null
+    }
+  };
+});
+
+router.put('/api/v1/orgs/current', async (req) => {
+  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const patch = {
+    displayName: req.body?.displayName,
+    docsRepoFullName: req.body?.docsRepoFullName
+  };
+  const org = await orgs.upsertOrg({ tenantId, patch });
+  const plan = await Promise.resolve(entitlements.getPlan(tenantId));
+  return {
+    status: 200,
+    body: {
+      id: org?.id ?? tenantId,
+      slug: org?.slug ?? null,
+      displayName: org?.displayName ?? null,
+      plan,
+      githubReaderInstallId: org?.githubReaderInstallId ?? null,
+      githubDocsInstallId: org?.githubDocsInstallId ?? null,
+      docsRepoFullName: org?.docsRepoFullName ?? null
+    }
+  };
+});
+
+router.get('/api/v1/repos', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const out = await repos.listRepos({ tenantId });
+  return { status: 200, body: { repos: out } };
+});
+
+router.post('/api/v1/repos', async (req) => {
+  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const fullName = req.body?.fullName ?? req.body?.full_name;
+  const githubRepoId = req.body?.githubRepoId ?? req.body?.github_repo_id ?? null;
+  const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? 'main';
+  if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
+  const repo = await repos.createRepo({ tenantId, fullName, defaultBranch, githubRepoId });
+  return { status: 200, body: { repo } };
+});
+
+router.delete('/api/v1/repos/:repoId', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.params.repoId;
+  const out = await repos.deleteRepo({ tenantId, repoId });
+  return { status: 200, body: out };
 });
 
 async function billingSummaryHandler(req) {

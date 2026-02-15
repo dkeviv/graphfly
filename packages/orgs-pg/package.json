@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/orgs-pg",
+  "private": true,
+  "type": "module",
+  "main": "src/pg-org-store.js"
+}
+

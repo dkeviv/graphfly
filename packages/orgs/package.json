@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/orgs",
+  "private": true,
+  "type": "module",
+  "main": "src/store.js"
+}
+
