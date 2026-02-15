@@ -30,6 +30,7 @@ import { formatGraphSearchResponse } from './search-format.js';
 import { getBillingUsageSnapshot } from './billing-usage.js';
 import { createOrgStoreFromEnv } from '../../../packages/stores/src/org-store.js';
 import { createRepoStoreFromEnv } from '../../../packages/stores/src/repo-store.js';
+import { createCheckoutUrl, createPortalUrl } from './billing-sessions.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -265,27 +266,20 @@ router.get('/api/v1/billing/usage', billingUsageHandler);
 async function billingCheckoutHandler(req) {
   const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
   const plan = req.body?.plan ?? 'pro';
-  // For this repo: org billing persistence is not wired yet; use env for customer + price.
-  const apiKey = process.env.STRIPE_SECRET_KEY ?? '';
-  const customerId = process.env.STRIPE_CUSTOMER_ID ?? '';
-  const priceId =
-    plan === 'enterprise' ? process.env.STRIPE_ENTERPRISE_PRICE_ID ?? '' : process.env.STRIPE_PRO_PRICE_ID ?? '';
-  const successUrl = process.env.STRIPE_SUCCESS_URL ?? 'http://localhost/success';
-  const cancelUrl = process.env.STRIPE_CANCEL_URL ?? 'http://localhost/cancel';
-
-  if (!apiKey || !customerId || !priceId) {
-    return { status: 501, body: { error: 'stripe_not_configured', tenantId, missing: { apiKey: !apiKey, customerId: !customerId, priceId: !priceId } } };
+  try {
+    const out = await createCheckoutUrl({
+      tenantId,
+      plan,
+      orgStore: orgs,
+      stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession }
+    });
+    return { status: 200, body: out };
+  } catch (e) {
+    if (e?.code === 'stripe_not_configured') {
+      return { status: 501, body: { error: 'stripe_not_configured', tenantId, missing: e.missing } };
+    }
+    throw e;
   }
-  const stripe = await createStripeClient({ apiKey });
-  const session = await createCheckoutSession({
-    stripe,
-    customerId,
-    priceId,
-    successUrl,
-    cancelUrl,
-    metadata: { tenantId, plan }
-  });
-  return { status: 200, body: { url: session.url } };
 }
 
 router.post('/billing/checkout', billingCheckoutHandler);
@@ -293,15 +287,19 @@ router.post('/api/v1/billing/checkout', billingCheckoutHandler);
 
 async function billingPortalHandler(req) {
   const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
-  const apiKey = process.env.STRIPE_SECRET_KEY ?? '';
-  const customerId = process.env.STRIPE_CUSTOMER_ID ?? '';
-  const returnUrl = process.env.STRIPE_RETURN_URL ?? 'http://localhost/billing';
-  if (!apiKey || !customerId) {
-    return { status: 501, body: { error: 'stripe_not_configured', tenantId, missing: { apiKey: !apiKey, customerId: !customerId } } };
+  try {
+    const out = await createPortalUrl({
+      tenantId,
+      orgStore: orgs,
+      stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession }
+    });
+    return { status: 200, body: out };
+  } catch (e) {
+    if (e?.code === 'stripe_not_configured') {
+      return { status: 501, body: { error: 'stripe_not_configured', tenantId, missing: e.missing } };
+    }
+    throw e;
   }
-  const stripe = await createStripeClient({ apiKey });
-  const session = await createCustomerPortalSession({ stripe, customerId, returnUrl });
-  return { status: 200, body: { url: session.url } };
 }
 
 router.post('/billing/portal', billingPortalHandler);
