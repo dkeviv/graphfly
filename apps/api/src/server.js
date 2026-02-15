@@ -43,6 +43,35 @@ import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-me
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
 
+function assertProdConfig(env = process.env) {
+  const mode = String(env.GRAPHFLY_MODE ?? 'dev').toLowerCase();
+  if (mode !== 'prod') return;
+  const missing = [];
+  if (!env.DATABASE_URL) missing.push('DATABASE_URL');
+  if (!env.GRAPHFLY_SECRET_KEY) missing.push('GRAPHFLY_SECRET_KEY');
+  if (!env.GRAPHFLY_JWT_SECRET) missing.push('GRAPHFLY_JWT_SECRET');
+  if (String(env.GRAPHFLY_AUTH_MODE ?? '') !== 'jwt') missing.push('GRAPHFLY_AUTH_MODE=jwt');
+  if (String(env.GRAPHFLY_QUEUE_MODE ?? '') !== 'pg') missing.push('GRAPHFLY_QUEUE_MODE=pg');
+  const forcedPgStores = [
+    'GRAPHFLY_GRAPH_STORE',
+    'GRAPHFLY_DOC_STORE',
+    'GRAPHFLY_REPO_STORE',
+    'GRAPHFLY_ORG_STORE',
+    'GRAPHFLY_SECRETS_STORE',
+    'GRAPHFLY_ENTITLEMENTS_STORE',
+    'GRAPHFLY_USAGE_COUNTERS',
+    'GRAPHFLY_ORG_MEMBER_STORE'
+  ];
+  for (const k of forcedPgStores) {
+    if (k in env && String(env[k] ?? '').toLowerCase() !== 'pg') missing.push(`${k}=pg`);
+  }
+  if (missing.length) {
+    throw new Error(`prod_config_missing_or_invalid: ${missing.join(',')}`);
+  }
+}
+
+assertProdConfig();
+
 const repoFullName = process.env.SOURCE_REPO_FULL_NAME ?? 'local/source';
 const store = await createGraphStoreFromEnv({ repoFullName });
 const docStore = await createDocStoreFromEnv({ repoFullName });
