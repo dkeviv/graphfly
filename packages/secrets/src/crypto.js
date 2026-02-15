@@ -44,6 +44,11 @@ function parseKeyring(env) {
   return { primaryKeyId: null, primaryKey: null, keysById: new Map() };
 }
 
+export function getSecretKeyringInfo({ env = process.env } = {}) {
+  const ring = parseKeyring(env);
+  return { primaryKeyId: ring.primaryKeyId, keyIds: Array.from(ring.keysById.keys()) };
+}
+
 export function encryptString({ plaintext, env = process.env }) {
   const ring = parseKeyring(env);
   if (!ring.primaryKey) throw new Error('missing_secret_key');

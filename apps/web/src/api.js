@@ -125,4 +125,31 @@ export class ApiClient {
   githubDocsAppCallback({ installationId }) {
     return this.getJson(`/api/v1/github/docs/callback?tenantId=${encodeURIComponent(this.tenantId)}&installation_id=${encodeURIComponent(String(installationId ?? ''))}`);
   }
+
+  adminOverview() {
+    return this.getJson(`/api/v1/admin/overview?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  listJobs({ status = null, limit = 50 } = {}) {
+    const s = status ? `&status=${encodeURIComponent(status)}` : '';
+    return this.getJson(`/api/v1/jobs?tenantId=${encodeURIComponent(this.tenantId)}&limit=${encodeURIComponent(String(limit))}${s}`);
+  }
+
+  listAudit({ limit = 50 } = {}) {
+    return this.getJson(`/api/v1/audit?tenantId=${encodeURIComponent(this.tenantId)}&limit=${encodeURIComponent(String(limit))}`);
+  }
+
+  secretsRewrap() {
+    return this.sendJson('POST', '/api/v1/admin/secrets/rewrap', { tenantId: this.tenantId });
+  }
+
+  async fetchMetricsText({ token = null } = {}) {
+    const url = new URL('/metrics', this.apiUrl);
+    const headers = {};
+    const t = token ?? null;
+    if (t) headers.authorization = `Bearer ${t}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  }
 }

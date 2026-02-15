@@ -1,5 +1,5 @@
 export function createRouter({ onRoute }) {
-  const routes = new Set(['onboarding', 'graph', 'docs']);
+  const routes = new Set(['onboarding', 'graph', 'docs', 'admin']);
   function current() {
     const hash = window.location.hash.replace('#', '');
     return routes.has(hash) ? hash : 'onboarding';
@@ -16,4 +16,3 @@ export function createRouter({ onRoute }) {
   }
   return { go, start, refresh };
 }
-

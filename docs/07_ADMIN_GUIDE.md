@@ -156,6 +156,11 @@ Keyring format:
 - `GRAPHFLY_SECRET_KEYS="k1:<base64-or-hex>,k2:<base64-or-hex>"`
 - The **first** key ID is used for new encryption.
 
+Rewrap procedure (recommended after rotation):
+1. Deploy with the new keyring (new primary first, old keys retained).
+2. Call `POST /api/v1/admin/secrets/rewrap` (owner-only) to re-encrypt stored org secrets with the new primary key.
+3. After confirming, remove retired key IDs from the keyring in a later deploy window.
+
 ### 6.2 Backups & restore
 Minimum:
 - Daily Postgres backups (WAL + snapshots) and restore drills.
@@ -196,6 +201,9 @@ Metrics endpoint controls:
 
 ### 7.3 Audit log
 - Use `/api/v1/audit` to review admin actions (requires DB).
+
+### 7.4 Admin dashboard
+- The web app includes an **Admin** page that surfaces: org config, indexing/docs job status, audit events, secrets rewrap, and a `/metrics` preview.
 
 ---
 

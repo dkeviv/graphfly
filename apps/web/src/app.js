@@ -2,6 +2,7 @@ import { createRouter } from './router.js';
 import { renderOnboardingPage } from './pages/onboarding.js';
 import { renderGraphPage } from './pages/graph.js';
 import { renderDocsPage } from './pages/docs.js';
+import { renderAdminPage } from './pages/admin.js';
 
 const pageEl = document.getElementById('page');
 const titleEl = document.getElementById('pageTitle');
@@ -31,6 +32,11 @@ const router = createRouter({
     if (route === 'docs') {
       titleEl.textContent = 'Docs';
       renderDocsPage(ctx);
+      return;
+    }
+    if (route === 'admin') {
+      titleEl.textContent = 'Admin';
+      renderAdminPage(ctx);
       return;
     }
     titleEl.textContent = 'Onboarding';

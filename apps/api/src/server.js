@@ -41,6 +41,7 @@ import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken 
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
 import { createLogger, createMetrics } from '../../../packages/observability/src/index.js';
+import { encryptString, decryptString, getSecretKeyringInfo } from '../../../packages/secrets/src/crypto.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -632,6 +633,73 @@ router.get('/api/v1/audit', async (req) => {
     return res.rows ?? [];
   });
   return { status: 200, body: { events: rows } };
+});
+
+router.get('/api/v1/admin/overview', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+
+  const org = (await orgs.getOrg?.({ tenantId })) ?? (await orgs.ensureOrg?.({ tenantId, name: 'default' }));
+  const reposCount = (await repos.listRepos({ tenantId }))?.length ?? 0;
+  const secretsInfo = getSecretKeyringInfo({ env: process.env });
+  const queueMode = String(process.env.GRAPHFLY_QUEUE_MODE ?? (process.env.DATABASE_URL ? 'pg' : 'memory'));
+  const indexerMode = String(process.env.GRAPHFLY_INDEXER_MODE ?? 'auto');
+  const hasIndexerCmd = Boolean(String(process.env.GRAPHFLY_INDEXER_CMD ?? '').trim());
+  const metricsToken = String(process.env.GRAPHFLY_METRICS_TOKEN ?? '');
+  const metricsPublic = String(process.env.GRAPHFLY_METRICS_PUBLIC ?? '') === '1';
+
+  return {
+    status: 200,
+    body: {
+      tenantId,
+      org,
+      reposCount,
+      queue: { mode: queueMode },
+      indexer: { mode: indexerMode, configured: hasIndexerCmd },
+      secrets: secretsInfo,
+      observability: {
+        metricsEnabled: true,
+        metricsAuth: metricsPublic ? 'public' : metricsToken ? 'token' : 'disabled'
+      },
+      database: { configured: Boolean(process.env.DATABASE_URL) }
+    }
+  };
+});
+
+router.post('/api/v1/admin/secrets/rewrap', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'owner');
+  if (forbid) return forbid;
+  if (!billingPool) return { status: 501, body: { error: 'database_required' } };
+
+  const out = await withTenantClient({ pool: billingPool, tenantId }, async (client) => {
+    await client.query('BEGIN');
+    try {
+      const res = await client.query(`SELECT key, ciphertext FROM org_secrets WHERE org_id=$1`, [tenantId]);
+      const rows = res.rows ?? [];
+      let updated = 0;
+      for (const r of rows) {
+        const key = String(r.key ?? '');
+        const ciphertext = String(r.ciphertext ?? '');
+        if (!key || !ciphertext) continue;
+        const plaintext = decryptString({ ciphertext, env: process.env });
+        const next = encryptString({ plaintext, env: process.env });
+        if (next !== ciphertext) {
+          await client.query(`UPDATE org_secrets SET ciphertext=$3, updated_at=now() WHERE org_id=$1 AND key=$2`, [tenantId, key, next]);
+          updated++;
+        }
+      }
+      await client.query('COMMIT');
+      return { ok: true, scanned: rows.length, updated };
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    }
+  });
+
+  await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'secrets.rewrap', targetType: 'org', targetId: tenantId, metadata: { scanned: out.scanned, updated: out.updated } });
+  return { status: 200, body: out };
 });
 
 async function billingSummaryHandler(req) {

@@ -244,3 +244,11 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+
+.pre {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
