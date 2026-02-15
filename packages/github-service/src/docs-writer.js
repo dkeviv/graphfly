@@ -1,4 +1,5 @@
 import { assertDocsRepoOnlyWrite } from './docs-repo-guard.js';
+import { createInstallationToken } from '../../github-app-auth/src/app-auth.js';
 
 function parseRepo(fullName) {
   const s = String(fullName ?? '');
@@ -55,12 +56,29 @@ export class GitHubDocsWriter {
     this._apiBaseUrl = apiBaseUrl;
   }
 
+  async _resolveTokenFromEnv() {
+    const appId = process.env.GITHUB_APP_ID ?? '';
+    const installationId = process.env.GITHUB_DOCS_INSTALLATION_ID ?? '';
+    const keyRaw = process.env.GITHUB_APP_PRIVATE_KEY ?? '';
+    if (!appId || !installationId || !keyRaw) return null;
+    const privateKeyPem = keyRaw.includes('BEGIN') ? keyRaw : Buffer.from(keyRaw, 'base64').toString('utf8');
+    const out = await createInstallationToken({
+      appId,
+      privateKeyPem,
+      installationId,
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._apiBaseUrl
+    });
+    return out.token;
+  }
+
   async openPullRequest({ targetRepoFullName, title, body, branchName, files }) {
     assertDocsRepoOnlyWrite({ configuredDocsRepoFullName: this._docsRepo, targetRepoFullName });
     if (!title || !branchName) throw new Error('missing_title_or_branch');
     if (!Array.isArray(files)) throw new Error('files must be array');
 
-    if (!this._token) {
+    const token = this._token || (await this._resolveTokenFromEnv());
+    if (!token) {
       // Keep the repo self-contained: allow local/demo runs without network dependencies.
       // When a token is configured, we exercise the real GitHub REST flow.
       return {
@@ -78,7 +96,7 @@ export class GitHubDocsWriter {
     const repoInfo = await ghRequest({
       fetchImpl: this._fetch,
       apiBaseUrl: this._apiBaseUrl,
-      token: this._token,
+      token,
       method: 'GET',
       path: `/repos/${owner}/${repo}`
     });
@@ -86,7 +104,7 @@ export class GitHubDocsWriter {
     const baseRef = await ghRequest({
       fetchImpl: this._fetch,
       apiBaseUrl: this._apiBaseUrl,
-      token: this._token,
+      token,
       method: 'GET',
       path: `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(baseBranch)}`
     });
@@ -98,7 +116,7 @@ export class GitHubDocsWriter {
       await ghRequest({
         fetchImpl: this._fetch,
         apiBaseUrl: this._apiBaseUrl,
-        token: this._token,
+        token,
         method: 'POST',
         path: `/repos/${owner}/${repo}/git/refs`,
         body: { ref: `refs/heads/${branchName}`, sha: baseSha },
@@ -118,7 +136,7 @@ export class GitHubDocsWriter {
         const existing = await ghRequest({
           fetchImpl: this._fetch,
           apiBaseUrl: this._apiBaseUrl,
-          token: this._token,
+          token,
           method: 'GET',
           path: `/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(branchName)}`
         });
@@ -130,7 +148,7 @@ export class GitHubDocsWriter {
       await ghRequest({
         fetchImpl: this._fetch,
         apiBaseUrl: this._apiBaseUrl,
-        token: this._token,
+        token,
         method: 'PUT',
         path: `/repos/${owner}/${repo}/contents/${filePath}`,
         body: { message: title, content, branch: branchName, sha: existingSha ?? undefined },
@@ -141,7 +159,7 @@ export class GitHubDocsWriter {
     const pr = await ghRequest({
       fetchImpl: this._fetch,
       apiBaseUrl: this._apiBaseUrl,
-      token: this._token,
+      token,
       method: 'POST',
       path: `/repos/${owner}/${repo}/pulls`,
       body: { title, body: body ?? '', head: branchName, base: baseBranch },

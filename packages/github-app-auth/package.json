@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/github-app-auth",
+  "private": true,
+  "type": "module",
+  "main": "src/app-auth.js"
+}
+

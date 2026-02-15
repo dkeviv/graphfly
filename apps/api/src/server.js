@@ -31,6 +31,7 @@ import { getBillingUsageSnapshot } from './billing-usage.js';
 import { createOrgStoreFromEnv } from '../../../packages/stores/src/org-store.js';
 import { createRepoStoreFromEnv } from '../../../packages/stores/src/repo-store.js';
 import { createCheckoutUrl, createPortalUrl } from './billing-sessions.js';
+import { createInstallationToken } from '../../../packages/github-app-auth/src/app-auth.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -54,8 +55,27 @@ function tenantIdFromStripeEvent(event) {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
-function gitCloneAuthFromEnv() {
+function privateKeyPemFromEnv() {
+  const raw = process.env.GITHUB_APP_PRIVATE_KEY ?? '';
+  if (!raw) return null;
+  return raw.includes('BEGIN') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+}
+
+async function resolveGitHubReaderToken({ tenantId, org }) {
   const token = process.env.GITHUB_READER_TOKEN ?? process.env.GITHUB_TOKEN ?? '';
+  if (token) return token;
+
+  const appId = process.env.GITHUB_APP_ID ?? '';
+  const installationId = org?.githubReaderInstallId ?? process.env.GITHUB_READER_INSTALLATION_ID ?? '';
+  const privateKeyPem = privateKeyPemFromEnv();
+  if (!appId || !installationId || !privateKeyPem) return null;
+
+  const out = await createInstallationToken({ appId, privateKeyPem, installationId });
+  return out.token ?? null;
+}
+
+async function gitCloneAuthForOrg({ tenantId, org }) {
+  const token = await resolveGitHubReaderToken({ tenantId, org });
   if (!token) return null;
   return { username: 'x-access-token', password: token };
 }
@@ -104,7 +124,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
     const orgDocsRepo = org?.docsRepoFullName ?? null;
     const effectiveDocsRepoFullName = orgDocsRepo ?? docsRepoFullName;
 
-    const cloneAuth = gitCloneAuthFromEnv();
+    const cloneAuth = await gitCloneAuthForOrg({ tenantId, org });
     const cloneSource = typeof push.cloneUrl === 'string' && push.cloneUrl.length > 0 ? push.cloneUrl : null;
 
     // Spec: push webhook triggers incremental index which triggers docs update.
