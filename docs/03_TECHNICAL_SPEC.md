@@ -777,16 +777,22 @@ async function getUndocumentedNodes(
 
 ### 2.3 Doc Agent Tools
 
-**MVP implementation note (this repo):** the current OpenClaw-backed doc agent loop is implemented as a tool-driven pipeline using these concrete tool names:
-- `flows_entrypoints_list`
-- `contracts_get`
-- `flows_trace`
-- `docs_upsert_block`
-- `github_create_pr`
+The doc agent is a **tool-driven** system (not a free-form chat loop). Tools are the only way the agent can interact with Graphfly and the outside world.
 
-These map to the same conceptual capabilities described below (graph queries, contracts/flows, doc block CRUD, and docs PR creation). A future phase can add the expanded dotted tool naming (`graph.*`, `contracts.*`, `docs.*`) once the public API surface is finalized.
+**Key properties**
+- **Schema-first**: every tool has a strict JSON Schema input definition; tool inputs are validated before execution.
+- **No code bodies by default**: tools must return contract-first data (Public Contract Graph + flow graphs + evidence locations). Tools must not return source code bodies/snippets by default.
+- **Deterministic side effects**: tools that write are limited to docs-repo-only operations and are idempotent where possible.
+- **Guarded persistence**: any persisted tool outputs must be redacted/filtered to avoid secret leakage.
 
-All tools use TypeBox schema pattern from OpenClaw (`openclaw/src/agents/openclaw-tools.ts`):
+Implementation note: schemas may be authored as JSON Schema directly or via a schema builder, but the runtime contract is **JSON Schema validation at every boundary**.
+
+**Support-safe answering readiness**
+The same tool/runtime model is used for the future “support agent”:
+- read-only by default (query PCG/flows/deps/embeddings/doc blocks)
+- bounded context with compaction
+- strict redaction and “no code bodies” policy
+- governed by org roles and audit logging
 
 ```typescript
 // packages/doc-agent/src/tools/index.ts
@@ -980,6 +986,89 @@ export const DOC_AGENT_TOOLS: Tool[] = [
 **Implementation note (dev/test mode):** In environments without GitHub network access, the `github.create_pr` tool may be backed by a local docs writer that operates on a user-provided **docs git repo path** (create branch → write files → commit). This must still enforce “docs repo only” targeting and must never write to source repos.
 
 ---
+
+### 2.4 Agent Runtime Framework (Enterprise-Grade)
+
+Graphfly uses a hardened agent runtime for both **doc generation** and (future) **support-safe Q&A**. This runtime is designed to be resilient under long-running sessions, high concurrency, and partial failures.
+
+#### 2.4.1 Execution lanes (per-tenant / per-repo serialization)
+To avoid race conditions and conflicting writes, work is executed in **lanes**:
+- Default: one active run per `(tenant_id, repo_id)` lane.
+- Allow configurable concurrency per lane for safe tasks (e.g., read-only queries) while keeping write tasks serialized.
+- Emit warnings when queue wait exceeds a threshold (backpressure visibility).
+
+#### 2.4.2 Attempt model, retries, and failure classification
+Each run is executed as a series of **attempts** with:
+- Timeouts and hard cancels for hung subprocesses/tools.
+- Failure classification for retry policy decisions:
+  - auth/config
+  - rate_limit
+  - timeout
+  - context_overflow
+  - tool_error
+  - unknown
+- Provider/model fallback ordering for LLM calls when configured (doc/support agents).
+- Optional “auth profile” ordering and cooldowns for LLM providers (to support multiple keys/accounts and avoid global brownouts).
+
+#### 2.4.3 Tool boundary and schema enforcement
+- Tools are defined with strict input schemas and are validated before execution.
+- Tool execution results are normalized into a stable “tool result” shape to support storage, auditability, and reproducibility.
+- A tool-result persistence guard prevents stored transcripts/artifacts from containing:
+  - secrets/tokens
+  - source code bodies/snippets (unless explicitly enabled for debugging and access-controlled)
+
+Additionally, Graphfly must support:
+- “Synthetic tool results” only when explicitly allowed by policy (used for recovery from interrupted runs).
+- A session write lock for any persisted session/transcript artifact, including timeouts and stale-lock recovery.
+
+#### 2.4.4 Hooks for policy injection (without core forks)
+Graphfly provides hook points so enterprise deployments can inject policy without patching core:
+- `tool_result_persist` — redact/filter tool outputs before persistence.
+- `agent_before_run` / `agent_after_run` — audit/telemetry hooks, allowlists, run gating.
+- `index_before_ingest` / `index_after_ingest` — integrity checks, sampling, diagnostics.
+- `job_before_lease` / `job_after_complete` — job lifecycle instrumentation and governance.
+
+Hook behavior requirements:
+- Best-effort (must not take down primary flows).
+- Auditable changes (who installed/changed hooks).
+- Safe defaults (errors are captured and surfaced, not silently ignored).
+
+#### 2.4.5 Context window guard + compaction (support agent readiness)
+Long-lived agent sessions require:
+- Context window minimums per model and warnings when close to limits.
+- Compaction/summarization of older turns into a structured summary preserving:
+  - decisions
+  - constraints
+  - TODOs/open questions
+  - operational caveats
+- Configurable per-session history limits.
+
+Compaction must be:
+- deterministic in format (structured sections) to enable downstream use by support tooling
+- safe by design (no secrets, no code bodies by default)
+
+---
+
+### 2.5 Graph Builder Orchestration (Indexer Worker)
+
+The graph builder pipeline is designed as a hardened orchestration loop that runs a deterministic analyzer and streams results into the database.
+
+**Core principles**
+- **Deterministic analysis**: primary graph extraction must not rely on probabilistic reasoning.
+- **Strict contracts**: analyzer output must be NDJSON with forward-compatible record types.
+- **Bounded execution**: timeouts, memory caps (where supported), and hard kill on hang.
+- **Idempotent ingest**: upserts + unique constraints prevent duplicate edges; occurrences are deduped by `(edge_id, file_path, line_start, line_end)`.
+
+**Run structure**
+1. Resolve `(tenant_id, repo_id, sha, branch)` and clone a read-only checkout (ephemeral).
+2. Run analyzer in a controlled lane; capture stderr for diagnostics (redacted).
+3. Stream NDJSON records to ingestion with batching.
+4. Materialize derived views (flow graphs, dependency mismatch tables, blast radius caches if used).
+5. Emit progress + outcome events; enqueue doc jobs if policy allows.
+
+**Safety constraints**
+- Analyzer must not execute customer code.
+- Analyzer must not emit source code bodies/snippets into persisted product data.
 
 ## 3. REST API Specification
 
@@ -1496,9 +1585,9 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 | Incremental dirty tracking (keep in Rust) | `yantra/src-tauri/src/gnn/incremental.rs` |
 | SymbolResolver for cross-file imports | `yantra/src-tauri/src/gnn/symbol_resolver.rs` |
 | Agent TurnOutcome loop (port to TypeScript) | `yantra/src-tauri/src/agent/loop_core.rs` |
-| Tool factory pattern with TypeBox schemas | `openclaw/src/agents/openclaw-tools.ts` |
-| Command queue to adapt to BullMQ | `openclaw/src/process/command-queue.ts` |
-| Webhook routing pattern | `openclaw/src/gateway/hooks-mapping.ts` |
+| Tool-driven doc agent loop (contracts/flows/docs PR) | `workers/doc-agent/` |
+| Durable queue leasing + retries | `packages/queue-pg/` |
+| Webhook verification + delivery dedupe | `apps/api/src/github-webhook.js` + `packages/github-webhooks-pg/` |
 | Graph visualization component | `yantra/src-ui-react/src/components/DependencyGraphView.tsx` |
 | Blast radius UI component | `yantra/src-ui-react/src/components/BlastRadiusCard.tsx` |
 | Node detail sidebar | `yantra/src-ui-react/src/components/CodeGraphSidebar.tsx` |
