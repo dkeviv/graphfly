@@ -32,6 +32,7 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
     const ref = payload?.ref ?? '';
     const sha = payload?.after ?? '';
     const fullName = payload?.repository?.full_name ?? '';
+    const cloneUrl = payload?.repository?.clone_url ?? payload?.repository?.html_url ?? '';
     const commits = Array.isArray(payload?.commits) ? payload.commits : [];
 
     const changedFiles = new Set();
@@ -47,6 +48,7 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
       fullName,
       ref,
       sha,
+      cloneUrl: typeof cloneUrl === 'string' && cloneUrl.length > 0 ? cloneUrl : null,
       changedFiles: Array.from(changedFiles),
       removedFiles: Array.from(removedFiles)
     });
@@ -54,4 +56,3 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
     return { status: 200, body: { ok: true } };
   };
 }
-

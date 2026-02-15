@@ -53,6 +53,12 @@ function tenantIdFromStripeEvent(event) {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
+function gitCloneAuthFromEnv() {
+  const token = process.env.GITHUB_READER_TOKEN ?? process.env.GITHUB_TOKEN ?? '';
+  if (!token) return null;
+  return { username: 'x-access-token', password: token };
+}
+
 // In-memory job plumbing (no external deps). In production this is BullMQ + Redis.
 const indexQueue = new InMemoryQueue('index');
 const docQueue = new InMemoryQueue('doc');
@@ -73,22 +79,44 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
   secret: githubSecret,
   dedupe: githubDedupe,
   onPush: async (push) => {
-    const plan = await Promise.resolve(entitlements.getPlan(DEFAULT_TENANT_ID));
+    let tenantId = DEFAULT_TENANT_ID;
+    let repoId = DEFAULT_REPO_ID;
+    try {
+      const found = await Promise.resolve(repos.findRepoByFullName?.({ fullName: push.fullName }));
+      if (found?.tenantId && found?.id) {
+        tenantId = found.tenantId;
+        repoId = found.id;
+      }
+    } catch {
+      // If ambiguous or store not configured, fall back to defaults.
+    }
+
+    const plan = await Promise.resolve(entitlements.getPlan(tenantId));
     const limits = limitsForPlan(plan);
-    const ok = await usage.consumeIndexJobOrDeny({ tenantId: DEFAULT_TENANT_ID, limitPerDay: limits.indexJobsPerDay, amount: 1 });
+    const ok = await usage.consumeIndexJobOrDeny({ tenantId, limitPerDay: limits.indexJobsPerDay, amount: 1 });
     if (!ok.ok) {
       // For webhook-triggered runs, skip quietly (GitHub will retry on non-2xx).
       return;
     }
+
+    const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+    const orgDocsRepo = org?.docsRepoFullName ?? null;
+    const effectiveDocsRepoFullName = orgDocsRepo ?? docsRepoFullName;
+
+    const cloneAuth = gitCloneAuthFromEnv();
+    const cloneSource = typeof push.cloneUrl === 'string' && push.cloneUrl.length > 0 ? push.cloneUrl : null;
+
     // Spec: push webhook triggers incremental index which triggers docs update.
     indexQueue.add('index.run', {
-      tenantId: DEFAULT_TENANT_ID,
-      repoId: DEFAULT_REPO_ID,
+      tenantId,
+      repoId,
       repoRoot: process.env.SOURCE_REPO_ROOT ?? 'fixtures/sample-repo',
       sha: push.sha,
       changedFiles: push.changedFiles,
       removedFiles: push.removedFiles,
-      docsRepoFullName
+      docsRepoFullName: effectiveDocsRepoFullName,
+      cloneSource,
+      cloneAuth
     });
     await drainOnce();
   }
