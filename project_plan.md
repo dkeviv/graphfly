@@ -32,14 +32,14 @@
 
 | Area | Item | Acceptance | Status | Gate |
 |---|---|---|---|---|
-| Auth | Multi-user auth + org roles | API requires auth; org membership enforced; audit log for admin actions | PENDING | `npm test` + integration |
+| Auth | Multi-user auth + org roles | API supports JWT sessions; `org_members` roles enforced; membership management endpoints; admin actions audited to `audit_log` | DONE | `npm test` + integration |
 | GitHub | Prefer GitHub App installs (Reader + Docs) | Installation callbacks persist IDs; clones + PRs use installation tokens (no PATs) | DONE | `npm test` |
-| GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically; replay protection (Redis) | PENDING | `npm test` + integration |
+| GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically (by `github_repo_id`); durable delivery dedupe via `webhook_deliveries` | DONE | `npm test` + integration |
 | Indexing | Real TS indexer (no mock) | Uses TypeScript compiler APIs; stable symbol IDs across refactors; incremental correctness | PENDING | `npm test` + perf |
-| Jobs | Durable queues + workers | BullMQ/Redis; retries/DLQ; job status endpoints; concurrency controls | PENDING | `npm test` + integration |
-| Storage | Required Postgres in prod | No in-memory stores in prod mode; migrations applied at startup | PENDING | `npm test` |
-| Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify writable via Docs App; show PR status | PENDING | `npm test` + integration |
-| Billing | Stripe customer lifecycle | Customer create + persisted `stripe_customer_id`; portal/checkout require stored customer | PARTIAL | `npm test` |
+| Jobs | Durable queues + workers | Postgres-backed durable jobs; retries/backoff; worker runners; job status endpoints | DONE | `npm test` + integration |
+| Storage | Required Postgres in prod | `GRAPHFLY_MODE=prod` enforces Postgres + pg queue + jwt auth + secret key | DONE | `npm test` |
+| Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify via server call using docs auth | DONE | `npm test` + integration |
+| Billing | Stripe customer lifecycle | Auto-create + persist Stripe customer when missing; checkout/portal require stored customer | DONE | `npm test` |
 | Security | Secrets management hardening | KMS-managed key + rotation; no tokens in logs; RLS verified in CI | PENDING | `npm test` + CI |
 | Observability | Metrics + tracing | Structured logs + request IDs; worker metrics; basic dashboards/runbooks | PENDING | integration |
-| UX | One-click onboarding | Connect GitHub → pick docs repo → pick source repo → auto index + docs PR | PARTIAL | manual QA |
+| UX | One-click onboarding | Connect GitHub → pick docs repo → pick source repo → auto index + docs PR | DONE | manual QA |

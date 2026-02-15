@@ -85,6 +85,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_pick ON jobs(tenant_id, queue_name, status, run_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_repo ON jobs(tenant_id, repo_id, created_at DESC);
 
+-- Audit log (admin actions; no secrets).
+CREATE TABLE IF NOT EXISTS audit_log (
+    id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id    UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    actor_user_id TEXT,
+    action       TEXT NOT NULL,
+    target_type  TEXT,
+    target_id    TEXT,
+    metadata     JSONB,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_created ON audit_log(tenant_id, created_at DESC);
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- BILLING (Stripe) + USAGE COUNTERS (enterprise scaffolding)
 -- ═══════════════════════════════════════════════════════════════════════
@@ -504,6 +517,7 @@ ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 
 -- Hardening: ensure RLS applies even for table owners.
 ALTER TABLE orgs FORCE ROW LEVEL SECURITY;
@@ -528,6 +542,7 @@ ALTER TABLE doc_blocks FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence FORCE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs FORCE ROW LEVEL SECURITY;
 ALTER TABLE jobs FORCE ROW LEVEL SECURITY;
+ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
 
 -- RLS policy pattern (replicate per table)
 DROP POLICY IF EXISTS tenant_self_orgs ON orgs;
@@ -568,6 +583,10 @@ CREATE POLICY tenant_isolation_webhook_deliveries ON webhook_deliveries
 
 DROP POLICY IF EXISTS tenant_isolation_jobs ON jobs;
 CREATE POLICY tenant_isolation_jobs ON jobs
+  USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_audit_log ON audit_log;
+CREATE POLICY tenant_isolation_audit_log ON audit_log
   USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_graph_edges ON graph_edges;

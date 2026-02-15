@@ -95,6 +95,29 @@ function tenantIdFromStripeEvent(event) {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
+async function auditEvent({ tenantId, actorUserId, action, targetType = null, targetId = null, metadata = null } = {}) {
+  if (!billingPool) return;
+  if (!tenantId || !action) return;
+  try {
+    await withTenantClient({ pool: billingPool, tenantId }, async (client) => {
+      await client.query(
+        `INSERT INTO audit_log (tenant_id, actor_user_id, action, target_type, target_id, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [
+          tenantId,
+          actorUserId ? String(actorUserId) : null,
+          String(action),
+          targetType ? String(targetType) : null,
+          targetId ? String(targetId) : null,
+          metadata ? JSON.stringify(metadata) : null
+        ]
+      );
+    });
+  } catch {
+    // best-effort: audit logging must not break primary flows
+  }
+}
+
 function privateKeyPemFromEnv() {
   const raw = process.env.GITHUB_APP_PRIVATE_KEY ?? '';
   if (!raw) return null;
@@ -272,6 +295,7 @@ router.post('/api/v1/integrations/github/connect', async (req) => {
   if (typeof token !== 'string' || token.length < 10) return { status: 400, body: { error: 'token is required' } };
   // Store encrypted; never return it.
   await secrets.setSecret({ tenantId, key: 'github.user_token', value: token });
+  await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'github.connect_user_token', targetType: 'org', targetId: tenantId });
   return { status: 200, body: { ok: true } };
 });
 
@@ -310,6 +334,14 @@ router.get('/api/v1/github/reader/callback', async (req) => {
   const n = Number(installationId);
   if (!Number.isFinite(n)) return { status: 400, body: { error: 'installation_id must be a number' } };
   await orgs.upsertOrg({ tenantId, patch: { githubReaderInstallId: Math.trunc(n) } });
+  await auditEvent({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'github.reader_app_installed',
+    targetType: 'org',
+    targetId: tenantId,
+    metadata: { installationId: Math.trunc(n) }
+  });
   return { status: 200, body: { ok: true, githubReaderInstallId: Math.trunc(n) } };
 });
 
@@ -322,6 +354,14 @@ router.get('/api/v1/github/docs/callback', async (req) => {
   const n = Number(installationId);
   if (!Number.isFinite(n)) return { status: 400, body: { error: 'installation_id must be a number' } };
   await orgs.upsertOrg({ tenantId, patch: { githubDocsInstallId: Math.trunc(n) } });
+  await auditEvent({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'github.docs_app_installed',
+    targetType: 'org',
+    targetId: tenantId,
+    metadata: { installationId: Math.trunc(n) }
+  });
   return { status: 200, body: { ok: true, githubDocsInstallId: Math.trunc(n) } };
 });
 
@@ -355,6 +395,7 @@ router.post('/api/v1/integrations/github/oauth/callback', async (req) => {
   await orgMembers.upsertMember({ tenantId, userId, role: 'owner' });
 
   const authToken = createJwtHs256({ secret: jwtSecret, claims: { tenantId, sub: userId }, ttlSec: 7 * 24 * 3600 });
+  await auditEvent({ tenantId, actorUserId: userId, action: 'auth.oauth_login', targetType: 'org', targetId: tenantId, metadata: { provider: 'github' } });
   return { status: 200, body: { ok: true, authToken, tenantId, user: { id: userId, login: user?.login ?? null } } };
 });
 
@@ -385,6 +426,38 @@ router.get('/api/v1/orgs/current', async (req) => {
   };
 });
 
+router.get('/api/v1/orgs/members', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const members = await orgMembers.listMembers({ tenantId });
+  return { status: 200, body: { members } };
+});
+
+router.post('/api/v1/orgs/members', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'owner');
+  if (forbid) return forbid;
+  const userId = req.body?.userId ?? req.body?.user_id;
+  const role = req.body?.role ?? 'viewer';
+  if (typeof userId !== 'string' || userId.length === 0) return { status: 400, body: { error: 'userId is required' } };
+  const member = await orgMembers.upsertMember({ tenantId, userId, role });
+  await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'org.member_upsert', targetType: 'member', targetId: userId, metadata: { role: member.role } });
+  return { status: 200, body: { member } };
+});
+
+router.delete('/api/v1/orgs/members/:userId', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'owner');
+  if (forbid) return forbid;
+  const userId = req.params.userId;
+  const out = await orgMembers.removeMember({ tenantId, userId });
+  if (out?.deleted) {
+    await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'org.member_remove', targetType: 'member', targetId: userId });
+  }
+  return { status: 200, body: out };
+});
+
 router.put('/api/v1/orgs/current', async (req) => {
   const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const forbid = requireRole(req, 'admin');
@@ -397,6 +470,14 @@ router.put('/api/v1/orgs/current', async (req) => {
   }
   const patch = { displayName: req.body?.displayName, docsRepoFullName };
   const org = await orgs.upsertOrg({ tenantId, patch });
+  await auditEvent({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'org.update',
+    targetType: 'org',
+    targetId: tenantId,
+    metadata: { docsRepoFullName: org?.docsRepoFullName ?? null }
+  });
   const plan = await Promise.resolve(entitlements.getPlan(tenantId));
   return {
     status: 200,
@@ -426,6 +507,13 @@ router.post('/api/v1/orgs/docs-repo/verify', async (req) => {
   const gh = new GitHubClient({ token });
   try {
     const info = await gh.getRepo({ fullName: docsRepoFullName });
+    await auditEvent({
+      tenantId,
+      actorUserId: req.auth?.userId ?? null,
+      action: 'docs_repo.verify',
+      targetType: 'repo',
+      targetId: docsRepoFullName
+    });
     return { status: 200, body: { ok: true, repo: info } };
   } catch (e) {
     return { status: 400, body: { error: 'docs_repo_verify_failed', message: String(e?.message ?? e) } };
@@ -447,6 +535,14 @@ router.post('/api/v1/repos', async (req) => {
   const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? 'main';
   if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
   const repo = await repos.createRepo({ tenantId, fullName, defaultBranch, githubRepoId });
+  await auditEvent({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'repo.create',
+    targetType: 'repo',
+    targetId: repo?.id ?? null,
+    metadata: { fullName, githubRepoId }
+  });
   // Kick off an initial full index if GitHub is connected and we can resolve the clone URL + head sha.
   try {
     const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
@@ -482,6 +578,9 @@ router.delete('/api/v1/repos/:repoId', async (req) => {
   if (forbid) return forbid;
   const repoId = req.params.repoId;
   const out = await repos.deleteRepo({ tenantId, repoId });
+  if (out?.deleted) {
+    await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'repo.delete', targetType: 'repo', targetId: repoId });
+  }
   return { status: 200, body: out };
 });
 
@@ -507,6 +606,27 @@ router.get('/api/v1/jobs/:queue/:jobId', async (req) => {
   const job = await queue.getJob({ tenantId, jobId });
   if (!job) return { status: 404, body: { error: 'not_found' } };
   return { status: 200, body: { job } };
+});
+
+router.get('/api/v1/audit', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  if (!billingPool) return { status: 501, body: { error: 'audit_not_available_without_database' } };
+  const limit = Number(req.query.limit ?? 50);
+  const n = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 50;
+  const rows = await withTenantClient({ pool: billingPool, tenantId }, async (client) => {
+    const res = await client.query(
+      `SELECT id, actor_user_id, action, target_type, target_id, metadata, created_at
+       FROM audit_log
+       WHERE tenant_id=$1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [tenantId, n]
+    );
+    return res.rows ?? [];
+  });
+  return { status: 200, body: { events: rows } };
 });
 
 async function billingSummaryHandler(req) {
@@ -556,6 +676,7 @@ async function billingCheckoutHandler(req) {
       orgStore: orgs,
       stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer }
     });
+    await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'billing.checkout_session', targetType: 'org', targetId: tenantId, metadata: { plan } });
     return { status: 200, body: out };
   } catch (e) {
     if (e?.code === 'stripe_not_configured') {
@@ -578,6 +699,7 @@ async function billingPortalHandler(req) {
       orgStore: orgs,
       stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer }
     });
+    await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'billing.portal_session', targetType: 'org', targetId: tenantId });
     return { status: 200, body: out };
   } catch (e) {
     if (e?.code === 'stripe_not_configured') {
