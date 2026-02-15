@@ -6,6 +6,17 @@ export class ApiClient {
     this.mode = mode;
   }
 
+  async sendJson(method, path, body) {
+    const url = new URL(path, this.apiUrl);
+    const res = await fetch(url, {
+      method,
+      headers: { accept: 'application/json', 'content-type': 'application/json; charset=utf-8' },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   async getJson(path) {
     const url = new URL(path, this.apiUrl);
     const res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -44,5 +55,25 @@ export class ApiClient {
 
   getDocBlock({ blockId }) {
     return this.getJson(`/docs/block?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&blockId=${encodeURIComponent(blockId)}`);
+  }
+
+  getCurrentOrg() {
+    return this.getJson(`/api/v1/orgs/current?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  updateCurrentOrg({ displayName, docsRepoFullName }) {
+    return this.sendJson('PUT', '/api/v1/orgs/current', { tenantId: this.tenantId, displayName, docsRepoFullName });
+  }
+
+  listRepos() {
+    return this.getJson(`/api/v1/repos?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  createRepo({ fullName, defaultBranch = 'main', githubRepoId = null }) {
+    return this.sendJson('POST', '/api/v1/repos', { tenantId: this.tenantId, fullName, defaultBranch, githubRepoId });
+  }
+
+  deleteRepo({ repoId }) {
+    return this.sendJson('DELETE', `/api/v1/repos/${encodeURIComponent(repoId)}?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
 }
