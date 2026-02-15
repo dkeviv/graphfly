@@ -85,6 +85,19 @@ async function resolveGitHubReaderToken({ tenantId, org }) {
   return out.token ?? null;
 }
 
+async function resolveGitHubDocsToken({ tenantId, org }) {
+  const token = process.env.GITHUB_DOCS_TOKEN ?? process.env.GITHUB_TOKEN ?? '';
+  if (token) return token;
+
+  const appId = process.env.GITHUB_APP_ID ?? '';
+  const installationId = org?.githubDocsInstallId ?? process.env.GITHUB_DOCS_INSTALLATION_ID ?? '';
+  const privateKeyPem = privateKeyPemFromEnv();
+  if (!appId || !installationId || !privateKeyPem) return null;
+
+  const out = await createInstallationToken({ appId, privateKeyPem, installationId });
+  return out.token ?? null;
+}
+
 async function gitCloneAuthForOrg({ tenantId, org }) {
   const token = await resolveGitHubReaderToken({ tenantId, org });
   if (!token) return null;
@@ -368,6 +381,26 @@ router.put('/api/v1/orgs/current', async (req) => {
       docsRepoFullName: org?.docsRepoFullName ?? null
     }
   };
+});
+
+router.post('/api/v1/orgs/docs-repo/verify', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+  const docsRepoFullName = req.body?.docsRepoFullName ?? org?.docsRepoFullName ?? null;
+  if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
+    return { status: 400, body: { error: 'docsRepoFullName is required' } };
+  }
+  const token = await resolveGitHubDocsToken({ tenantId, org });
+  if (!token) return { status: 501, body: { error: 'docs_auth_not_configured' } };
+  const gh = new GitHubClient({ token });
+  try {
+    const info = await gh.getRepo({ fullName: docsRepoFullName });
+    return { status: 200, body: { ok: true, repo: info } };
+  } catch (e) {
+    return { status: 400, body: { error: 'docs_repo_verify_failed', message: String(e?.message ?? e) } };
+  }
 });
 
 router.get('/api/v1/repos', async (req) => {

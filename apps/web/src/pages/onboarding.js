@@ -18,6 +18,7 @@ export function renderOnboardingPage({ state, pageEl }) {
   const readerAppBtn = el('button', { class: 'button' }, ['Install Reader App']);
   const docsAppBtn = el('button', { class: 'button' }, ['Install Docs App']);
   const githubReposEl = el('ul', { class: 'list' });
+  const docsCandidatesEl = el('ul', { class: 'list' });
   const docsRepoInput = el('input', { class: 'input', id: 'docsRepoInput', placeholder: 'org/docs (GitHub full name)' });
   const orgNameInput = el('input', { class: 'input', id: 'orgNameInput', placeholder: 'Display name (optional)' });
 
@@ -51,13 +52,13 @@ export function renderOnboardingPage({ state, pageEl }) {
         el('div', { class: 'card__title' }, ['1) Connect GitHub (OAuth)']),
         el('div', { class: 'small' }, ['One click: redirects to GitHub OAuth, then returns here.']),
         githubTokenInput,
-        el('div', { class: 'row' }, [githubConnectBtn, readerAppBtn, docsAppBtn]),
-        el('div', { class: 'small' }, ['Available repos:']),
-        githubReposEl
+        el('div', { class: 'row' }, [githubConnectBtn, readerAppBtn, docsAppBtn])
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'card__title' }, ['2) Docs repo (write-only)']),
         el('div', { class: 'small' }, ['This must be a separate repository from the source repo.']),
+        el('div', { class: 'small' }, ['Pick a docs repo (recommended) or enter one manually:']),
+        docsCandidatesEl,
         docsRepoInput,
         orgNameInput,
         el('div', { class: 'row' }, [
@@ -73,12 +74,26 @@ export function renderOnboardingPage({ state, pageEl }) {
                 statusEl.textContent = `Save failed: ${String(e?.message ?? e)}`;
               }
             }
-          }, ['Save'])
+          }, ['Save']),
+          el('button', {
+            class: 'button',
+            onclick: async () => {
+              try {
+                const out = await api.verifyDocsRepo({ docsRepoFullName: docsRepoInput.value.trim() || null });
+                statusEl.textContent = out?.ok ? 'Docs repo verified.' : 'Docs repo verification returned no result.';
+              } catch (e) {
+                statusEl.textContent = `Docs repo verify failed: ${String(e?.message ?? e)}`;
+              }
+            }
+          }, ['Verify'])
         ])
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'card__title' }, ['3) Projects']),
         repoHintEl,
+        el('div', { class: 'small' }, ['Available source repos (read-only):']),
+        githubReposEl,
+        el('div', { class: 'small' }, ['Existing projects:']),
         reposListEl
       ]),
       el('div', { class: 'card' }, [
@@ -223,10 +238,33 @@ export function renderOnboardingPage({ state, pageEl }) {
       const hasDocsRepo = Boolean(org.docsRepoFullName);
       let githubConnected = false;
       githubReposEl.innerHTML = '';
+      docsCandidatesEl.innerHTML = '';
       try {
         const gh = await api.githubListRepos();
         githubConnected = true;
         const available = gh.repos ?? [];
+
+        for (const r of available.slice(0, 15)) {
+          docsCandidatesEl.appendChild(
+            el('li', { class: 'list__item' }, [
+              el('div', { class: 'row' }, [
+                el('div', {}, [el('div', { class: 'h' }, [r.fullName ?? 'unknown']), el('div', { class: 'small k' }, ['Docs repo candidate'])]),
+                el('button', {
+                  class: 'button',
+                  onclick: async () => {
+                    try {
+                      await api.updateCurrentOrg({ displayName: orgNameInput.value.trim() || null, docsRepoFullName: r.fullName });
+                      await refresh();
+                    } catch (e) {
+                      statusEl.textContent = `Docs repo save failed: ${String(e?.message ?? e)}`;
+                    }
+                  }
+                }, ['Use for Docs'])
+              ])
+            ])
+          );
+        }
+
         for (const r of available.slice(0, 30)) {
           githubReposEl.appendChild(
             el('li', { class: 'list__item' }, [
@@ -238,6 +276,10 @@ export function renderOnboardingPage({ state, pageEl }) {
                 el('button', {
                   class: 'button',
                   onclick: async () => {
+                    if (!hasDocsRepo) {
+                      statusEl.textContent = 'Set a docs repo first (step 2).';
+                      return;
+                    }
                     try {
                       const created = await api.createRepo({ fullName: r.fullName, defaultBranch: r.defaultBranch, githubRepoId: r.id });
                       const repo = created?.repo ?? null;
@@ -260,6 +302,7 @@ export function renderOnboardingPage({ state, pageEl }) {
       } catch {
         githubConnected = false;
         githubReposEl.appendChild(el('li', { class: 'list__item' }, ['Not connected yet.']));
+        docsCandidatesEl.appendChild(el('li', { class: 'list__item' }, ['Connect GitHub first to see repo options.']));
       }
 
       steps[0].ok = githubConnected;

@@ -78,6 +78,10 @@ export class ApiClient {
     return this.sendJson('PUT', '/api/v1/orgs/current', { tenantId: this.tenantId, displayName, docsRepoFullName });
   }
 
+  verifyDocsRepo({ docsRepoFullName = null } = {}) {
+    return this.sendJson('POST', '/api/v1/orgs/docs-repo/verify', { tenantId: this.tenantId, docsRepoFullName });
+  }
+
   listRepos() {
     return this.getJson(`/api/v1/repos?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
