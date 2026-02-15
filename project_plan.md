@@ -27,3 +27,19 @@
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | DONE | `npm test` (webhook verify+dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; billing summary reads org_billing; checkout/portal support org stripe customer id + env price ids) |
 | Frontend onboarding + graph explorer UX | `docs/04_UX_SPEC.md` | UF-* + FR-GX-* | DONE | `npm test` (focus mode + lazy neighborhood fetch + onboarding config UI) |
 | Operations (SLOs/monitoring/runbooks) | `docs/06_OPERATIONS.md` | NFR-* | DONE | `npm test` |
+
+## Production Readiness Checklist (Enterprise)
+
+| Area | Item | Acceptance | Status | Gate |
+|---|---|---|---|---|
+| Auth | Multi-user auth + org roles | API requires auth; org membership enforced; audit log for admin actions | PENDING | `npm test` + integration |
+| GitHub | Prefer GitHub App installs (Reader + Docs) | Installation callbacks persist IDs; clones + PRs use installation tokens (no PATs) | DONE | `npm test` |
+| GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically; replay protection (Redis) | PENDING | `npm test` + integration |
+| Indexing | Real TS indexer (no mock) | Uses TypeScript compiler APIs; stable symbol IDs across refactors; incremental correctness | PENDING | `npm test` + perf |
+| Jobs | Durable queues + workers | BullMQ/Redis; retries/DLQ; job status endpoints; concurrency controls | PENDING | `npm test` + integration |
+| Storage | Required Postgres in prod | No in-memory stores in prod mode; migrations applied at startup | PENDING | `npm test` |
+| Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify writable via Docs App; show PR status | PENDING | `npm test` + integration |
+| Billing | Stripe customer lifecycle | Customer create + persisted `stripe_customer_id`; portal/checkout require stored customer | PARTIAL | `npm test` |
+| Security | Secrets management hardening | KMS-managed key + rotation; no tokens in logs; RLS verified in CI | PENDING | `npm test` + CI |
+| Observability | Metrics + tracing | Structured logs + request IDs; worker metrics; basic dashboards/runbooks | PENDING | integration |
+| UX | One-click onboarding | Connect GitHub → pick docs repo → pick source repo → auto index + docs PR | PARTIAL | manual QA |

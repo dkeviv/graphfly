@@ -90,10 +90,20 @@ const indexQueue = new InMemoryQueue('index');
 const docQueue = new InMemoryQueue('doc');
 const docsRepoFullName = process.env.DOCS_REPO_FULL_NAME ?? 'org/docs';
 const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
-const docsWriterFactory = ({ configuredDocsRepoFullName }) =>
-  docsRepoPath
+const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
+  const org = tenantId ? await Promise.resolve(orgs.getOrg?.({ tenantId })) : null;
+  const docsInstallId = org?.githubDocsInstallId ?? null;
+  const appId = process.env.GITHUB_APP_ID ?? '';
+  const privateKeyPem = privateKeyPemFromEnv();
+  return docsRepoPath
     ? new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath })
-    : new GitHubDocsWriter({ configuredDocsRepoFullName });
+    : new GitHubDocsWriter({
+        configuredDocsRepoFullName,
+        appId: appId || null,
+        privateKeyPem,
+        installationId: docsInstallId
+      });
+};
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
 const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage });
 
@@ -208,6 +218,42 @@ router.get('/api/v1/integrations/github/oauth/start', async (req) => {
   const state = oauthStates.issue({ tenantId });
   const authorizeUrl = buildGitHubAuthorizeUrl({ clientId, state, redirectUri, scope: 'repo read:user' });
   return { status: 200, body: { authorizeUrl, state } };
+});
+
+router.get('/api/v1/github/reader-app-url', async () => {
+  const url = process.env.GITHUB_READER_APP_INSTALL_URL ?? '';
+  if (url) return { status: 200, body: { installUrl: url } };
+  const slug = process.env.GITHUB_READER_APP_SLUG ?? '';
+  if (!slug) return { status: 501, body: { error: 'reader_app_not_configured' } };
+  return { status: 200, body: { installUrl: `https://github.com/apps/${slug}/installations/new` } };
+});
+
+router.get('/api/v1/github/docs-app-url', async () => {
+  const url = process.env.GITHUB_DOCS_APP_INSTALL_URL ?? '';
+  if (url) return { status: 200, body: { installUrl: url } };
+  const slug = process.env.GITHUB_DOCS_APP_SLUG ?? '';
+  if (!slug) return { status: 501, body: { error: 'docs_app_not_configured' } };
+  return { status: 200, body: { installUrl: `https://github.com/apps/${slug}/installations/new` } };
+});
+
+router.get('/api/v1/github/reader/callback', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const installationId = req.query.installation_id ?? req.query.installationId;
+  if (!installationId) return { status: 400, body: { error: 'installation_id is required' } };
+  const n = Number(installationId);
+  if (!Number.isFinite(n)) return { status: 400, body: { error: 'installation_id must be a number' } };
+  await orgs.upsertOrg({ tenantId, patch: { githubReaderInstallId: Math.trunc(n) } });
+  return { status: 200, body: { ok: true, githubReaderInstallId: Math.trunc(n) } };
+});
+
+router.get('/api/v1/github/docs/callback', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const installationId = req.query.installation_id ?? req.query.installationId;
+  if (!installationId) return { status: 400, body: { error: 'installation_id is required' } };
+  const n = Number(installationId);
+  if (!Number.isFinite(n)) return { status: 400, body: { error: 'installation_id must be a number' } };
+  await orgs.upsertOrg({ tenantId, patch: { githubDocsInstallId: Math.trunc(n) } });
+  return { status: 200, body: { ok: true, githubDocsInstallId: Math.trunc(n) } };
 });
 
 router.post('/api/v1/integrations/github/oauth/callback', async (req) => {

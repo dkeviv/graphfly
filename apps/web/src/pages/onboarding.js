@@ -1,6 +1,6 @@
 import { el, clear } from '../render.js';
 import { ApiClient } from '../api.js';
-import { parseOAuthCallbackParams, stripQueryFromUrl } from './onboarding-oauth.js';
+import { parseOAuthCallbackParams, parseGitHubAppCallbackParams, stripQueryFromUrl } from './onboarding-oauth.js';
 
 export function renderOnboardingPage({ state, pageEl }) {
   clear(pageEl);
@@ -15,6 +15,8 @@ export function renderOnboardingPage({ state, pageEl }) {
   const statusEl = el('div', { class: 'small' }, ['Loading onboarding status…']);
   const githubTokenInput = el('input', { class: 'input', id: 'githubTokenInput', placeholder: 'GitHub token (dev) — stored encrypted', type: 'password' });
   const githubConnectBtn = el('button', { class: 'button' }, ['Connect GitHub']);
+  const readerAppBtn = el('button', { class: 'button' }, ['Install Reader App']);
+  const docsAppBtn = el('button', { class: 'button' }, ['Install Docs App']);
   const githubReposEl = el('ul', { class: 'list' });
   const docsRepoInput = el('input', { class: 'input', id: 'docsRepoInput', placeholder: 'org/docs (GitHub full name)' });
   const orgNameInput = el('input', { class: 'input', id: 'orgNameInput', placeholder: 'Display name (optional)' });
@@ -49,7 +51,7 @@ export function renderOnboardingPage({ state, pageEl }) {
         el('div', { class: 'card__title' }, ['1) Connect GitHub (OAuth)']),
         el('div', { class: 'small' }, ['One click: redirects to GitHub OAuth, then returns here.']),
         githubTokenInput,
-        el('div', { class: 'row' }, [githubConnectBtn]),
+        el('div', { class: 'row' }, [githubConnectBtn, readerAppBtn, docsAppBtn]),
         el('div', { class: 'small' }, ['Available repos:']),
         githubReposEl
       ]),
@@ -119,8 +121,45 @@ export function renderOnboardingPage({ state, pageEl }) {
     }
   };
 
+  readerAppBtn.onclick = async () => {
+    try {
+      const out = await api.githubReaderAppUrl();
+      const installUrl = out?.installUrl ?? null;
+      if (!installUrl) throw new Error('reader_app_not_configured');
+      statusEl.textContent = 'Redirecting to GitHub App install…';
+      window.location.assign(installUrl);
+    } catch (e) {
+      statusEl.textContent = `Reader App install failed: ${String(e?.message ?? e)}`;
+    }
+  };
+
+  docsAppBtn.onclick = async () => {
+    try {
+      const out = await api.githubDocsAppUrl();
+      const installUrl = out?.installUrl ?? null;
+      if (!installUrl) throw new Error('docs_app_not_configured');
+      statusEl.textContent = 'Redirecting to GitHub App install…';
+      window.location.assign(installUrl);
+    } catch (e) {
+      statusEl.textContent = `Docs App install failed: ${String(e?.message ?? e)}`;
+    }
+  };
+
   async function refresh() {
     try {
+      // Handle GitHub App return: ?app=reader|docs&installation_id=...
+      const appCb = parseGitHubAppCallbackParams({ search: window.location.search });
+      if (appCb) {
+        statusEl.textContent = `Saving GitHub ${appCb.app} installation…`;
+        try {
+          if (appCb.app === 'reader') await api.githubReaderAppCallback({ installationId: appCb.installationId });
+          if (appCb.app === 'docs') await api.githubDocsAppCallback({ installationId: appCb.installationId });
+          stripQueryFromUrl();
+        } catch (e) {
+          statusEl.textContent = `App callback failed: ${String(e?.message ?? e)}`;
+        }
+      }
+
       // Handle OAuth return: code+state in query string.
       const cb = parseOAuthCallbackParams({ search: window.location.search });
       if (cb) {

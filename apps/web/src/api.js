@@ -92,4 +92,20 @@ export class ApiClient {
   githubOAuthCallback({ code, state }) {
     return this.sendJson('POST', '/api/v1/integrations/github/oauth/callback', { tenantId: this.tenantId, code, state });
   }
+
+  githubReaderAppUrl() {
+    return this.getJson('/api/v1/github/reader-app-url');
+  }
+
+  githubDocsAppUrl() {
+    return this.getJson('/api/v1/github/docs-app-url');
+  }
+
+  githubReaderAppCallback({ installationId }) {
+    return this.getJson(`/api/v1/github/reader/callback?tenantId=${encodeURIComponent(this.tenantId)}&installation_id=${encodeURIComponent(String(installationId ?? ''))}`);
+  }
+
+  githubDocsAppCallback({ installationId }) {
+    return this.getJson(`/api/v1/github/docs/callback?tenantId=${encodeURIComponent(this.tenantId)}&installation_id=${encodeURIComponent(String(installationId ?? ''))}`);
+  }
 }

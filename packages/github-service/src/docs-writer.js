@@ -49,19 +49,29 @@ async function ghRequest({ fetchImpl, apiBaseUrl, token, method, path, body = nu
 }
 
 export class GitHubDocsWriter {
-  constructor({ configuredDocsRepoFullName, token = process.env.GITHUB_DOCS_TOKEN ?? '', fetchImpl = globalThis.fetch, apiBaseUrl = 'https://api.github.com' }) {
+  constructor({
+    configuredDocsRepoFullName,
+    token = process.env.GITHUB_DOCS_TOKEN ?? '',
+    appId = process.env.GITHUB_APP_ID ?? '',
+    privateKeyPem = null,
+    installationId = process.env.GITHUB_DOCS_INSTALLATION_ID ?? '',
+    fetchImpl = globalThis.fetch,
+    apiBaseUrl = 'https://api.github.com'
+  } = {}) {
     this._docsRepo = configuredDocsRepoFullName;
     this._token = token;
+    this._appId = appId || '';
+    this._privateKeyPem = privateKeyPem;
+    this._installationId = installationId || '';
     this._fetch = fetchImpl;
     this._apiBaseUrl = apiBaseUrl;
   }
 
-  async _resolveTokenFromEnv() {
-    const appId = process.env.GITHUB_APP_ID ?? '';
-    const installationId = process.env.GITHUB_DOCS_INSTALLATION_ID ?? '';
-    const keyRaw = process.env.GITHUB_APP_PRIVATE_KEY ?? '';
-    if (!appId || !installationId || !keyRaw) return null;
-    const privateKeyPem = keyRaw.includes('BEGIN') ? keyRaw : Buffer.from(keyRaw, 'base64').toString('utf8');
+  async _resolveTokenFromInstallation() {
+    const appId = this._appId;
+    const installationId = this._installationId;
+    const privateKeyPem = this._privateKeyPem;
+    if (!appId || !installationId || !privateKeyPem) return null;
     const out = await createInstallationToken({
       appId,
       privateKeyPem,
@@ -77,7 +87,7 @@ export class GitHubDocsWriter {
     if (!title || !branchName) throw new Error('missing_title_or_branch');
     if (!Array.isArray(files)) throw new Error('files must be array');
 
-    const token = this._token || (await this._resolveTokenFromEnv());
+    const token = this._token || (await this._resolveTokenFromInstallation());
     if (!token) {
       // Keep the repo self-contained: allow local/demo runs without network dependencies.
       // When a token is configured, we exercise the real GitHub REST flow.
