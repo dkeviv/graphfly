@@ -19,6 +19,7 @@
 | 04 | [UX Specification](04_UX_SPEC.md) | All user flows, screen layouts, design system |
 | 05 | [Security](05_SECURITY.md) | Threat model, GitHub permission model, data handling, controls |
 | 06 | [Operations](06_OPERATIONS.md) | SLOs, monitoring, runbooks, scaling, backup/restore |
+| 07 | [Admin Guide](07_ADMIN_GUIDE.md) | Production deployment, onboarding, maintenance, and runbooks |
 
 ---
 

@@ -31,6 +31,14 @@ Graphfly must maintain a single canonical tracking table in `project_plan.md`.
 - Mark `Status=DONE` only when the feature is implemented end-to-end **and** the listed test gate(s) pass.
 - Keep rows aligned to spec anchors + FR-* requirement IDs (no “extra” scope without a spec update).
 
+## Admin Guide Maintenance (Required)
+
+Graphfly must keep `docs/07_ADMIN_GUIDE.md` accurate and up-to-date.
+
+**Update rule (required):** after each feature that impacts admin operations (deploy/config/auth/billing/webhooks/indexing/docs workers/queues/observability):
+- Update `docs/07_ADMIN_GUIDE.md` in the same commit as the feature change (or explicitly note why no update is needed).
+- Ensure any new env vars, migration steps, runbooks, and operational checks are documented.
+
 ## Git Workflow (Auto-Applied)
 
 After each spec-anchored feature slice is implemented and the test gate passes:

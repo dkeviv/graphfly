@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/indexer-cli",
+  "private": true,
+  "type": "module",
+  "main": "src/indexer-cli.js"
+}
+

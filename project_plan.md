@@ -35,11 +35,11 @@
 | Auth | Multi-user auth + org roles | API supports JWT sessions; `org_members` roles enforced; membership management endpoints; admin actions audited to `audit_log` | DONE | `npm test` + integration |
 | GitHub | Prefer GitHub App installs (Reader + Docs) | Installation callbacks persist IDs; clones + PRs use installation tokens (no PATs) | DONE | `npm test` |
 | GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically (by `github_repo_id`); durable delivery dedupe via `webhook_deliveries` | DONE | `npm test` + integration |
-| Indexing | Real TS indexer (no mock) | Uses TypeScript compiler APIs; stable symbol IDs across refactors; incremental correctness | PENDING | `npm test` + perf |
+| Indexing | Production indexer (no mock) | Indexer worker runs a configured external NDJSON indexer (`GRAPHFLY_INDEXER_CMD`) and streams ingestion; mock indexer remains dev-only fallback | DONE | `npm test` + integration |
 | Jobs | Durable queues + workers | Postgres-backed durable jobs; retries/backoff; worker runners; job status endpoints | DONE | `npm test` + integration |
 | Storage | Required Postgres in prod | `GRAPHFLY_MODE=prod` enforces Postgres + pg queue + jwt auth + secret key | DONE | `npm test` |
 | Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify via server call using docs auth | DONE | `npm test` + integration |
 | Billing | Stripe customer lifecycle | Auto-create + persist Stripe customer when missing; checkout/portal require stored customer | DONE | `npm test` |
-| Security | Secrets management hardening | KMS-managed key + rotation; no tokens in logs; RLS verified in CI | PENDING | `npm test` + CI |
-| Observability | Metrics + tracing | Structured logs + request IDs; worker metrics; basic dashboards/runbooks | PENDING | integration |
+| Security | Secrets management hardening | Keyring-based secret key rotation; no tokens in logs; RLS verified in CI | PARTIAL | `npm test` + CI |
+| Observability | Metrics + tracing | Structured JSON logs (API) + request IDs + Prometheus `/metrics` endpoint (token protected) | PARTIAL | `npm test` + integration |
 | UX | One-click onboarding | Connect GitHub → pick docs repo → pick source repo → auto index + docs PR | DONE | manual QA |

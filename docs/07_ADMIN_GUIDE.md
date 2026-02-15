@@ -1,0 +1,219 @@
+# Graphfly — Admin Guide (Production Operations)
+
+**Version**: 1.0  
+**Last Updated**: February 2026  
+**Status**: Draft
+
+This guide is the canonical checklist for deploying, operating, and maintaining Graphfly in production.
+
+> **Non‑negotiable safety constraints**
+> - Graphfly **must not** write to customer source repos (Reader App is read-only; Docs App writes to docs repo only).
+> - Docs output **must** go to a **separate** Git repo (docs repo) with doc blocks (no code bodies/snippets).
+> - Secrets **must** be encrypted at rest and never logged.
+
+---
+
+## 0) Architecture (Operational View)
+
+**Services**
+- `apps/api` — API gateway + webhook ingress + auth + job enqueue
+- `workers/indexer` — builds/updates the Code Intelligence Graph (CIG)
+- `workers/doc-agent` — generates doc blocks and opens docs-repo PRs
+
+**Core stores (prod)**
+- PostgreSQL (RLS enforced): orgs, repos, graph, docs, jobs, audit log, webhook dedupe, billing
+
+**Queues (prod)**
+- Postgres-backed queue (`jobs` table) with leasing (Phase‑1: one job at a time per tenant).
+
+---
+
+## 1) Prerequisites
+
+### 1.1 Postgres
+Required extensions:
+- `uuid-ossp`
+- `pgcrypto`
+- `vector` (pgvector)
+
+Required database settings:
+- Allow the app role to set `SET app.tenant_id = <uuid>` (RLS isolation contract).
+
+### 1.2 GitHub Integrations
+You need **both**:
+- **Reader App** (installed on source repos): `contents:read`, `metadata:read`, webhooks for `push`
+- **Docs App** (installed on docs repo only): `contents:write`, `pull_requests:write`, `metadata:read`
+
+Optional (for user sign-in and repo listing):
+- GitHub OAuth App (used for “Connect GitHub” in onboarding)
+
+### 1.3 Stripe (optional for billing)
+- Stripe secret key
+- Price IDs for plans
+- Webhook signing secret
+
+---
+
+## 2) Environment Configuration
+
+### 2.1 Required in production
+Graphfly enforces hard requirements when `GRAPHFLY_MODE=prod`:
+- `DATABASE_URL`
+- `GRAPHFLY_SECRET_KEY` (or `GRAPHFLY_SECRET_KEYS`, see Secrets section)
+- `GRAPHFLY_AUTH_MODE=jwt`
+- `GRAPHFLY_JWT_SECRET`
+- `GRAPHFLY_QUEUE_MODE=pg`
+
+Recommended explicit store modes:
+- `GRAPHFLY_GRAPH_STORE=pg`
+- `GRAPHFLY_DOC_STORE=pg`
+- `GRAPHFLY_REPO_STORE=pg`
+- `GRAPHFLY_ORG_STORE=pg`
+- `GRAPHFLY_ORG_MEMBER_STORE=pg`
+- `GRAPHFLY_SECRETS_STORE=pg`
+- `GRAPHFLY_ENTITLEMENTS_STORE=pg`
+- `GRAPHFLY_USAGE_COUNTERS=pg`
+
+### 2.2 GitHub OAuth (user onboarding)
+- `GITHUB_OAUTH_CLIENT_ID`
+- `GITHUB_OAUTH_CLIENT_SECRET`
+- `GITHUB_OAUTH_REDIRECT_URI` (must point back to the web onboarding page)
+
+### 2.3 GitHub App auth (installation tokens)
+- `GITHUB_APP_ID`
+- `GITHUB_APP_PRIVATE_KEY` (PEM or base64 PEM)
+
+### 2.4 Webhooks
+- `GITHUB_WEBHOOK_SECRET` (HMAC verification)
+- `STRIPE_WEBHOOK_SECRET`
+
+### 2.5 Docs output
+- `DOCS_REPO_FULL_NAME` (fallback when org has not set `docsRepoFullName`)
+- `DOCS_REPO_PATH` (local mode only; dev/test)
+
+### 2.6 Indexer (production)
+Graphfly’s indexer worker supports a production indexer as an external CLI.
+Configure one of:
+- `GRAPHFLY_INDEXER_CMD` — command to run (e.g., `yantra-indexer`)
+- `GRAPHFLY_INDEXER_ARGS_JSON` — JSON array of extra args (optional)
+
+The indexer process must emit **NDJSON records** to stdout and will receive context via env vars:
+- `GRAPHFLY_REPO_ROOT`
+- `GRAPHFLY_SHA`
+- `GRAPHFLY_CHANGED_FILES_JSON`
+- `GRAPHFLY_REMOVED_FILES_JSON`
+
+If not configured, Graphfly falls back to the mock indexer (dev only). In `GRAPHFLY_MODE=prod`, the indexer must be configured.
+
+---
+
+## 3) Database Migrations
+
+Run migrations before starting services:
+- `npm run pg:migrate`
+
+Operational notes:
+- RLS is enabled and forced for tenant-scoped tables.
+- `webhook_deliveries` provides durable webhook replay protection.
+- `jobs` provides durable queueing.
+- `audit_log` records admin actions (best-effort; does not block primary flows).
+
+---
+
+## 4) Start/Run (Production)
+
+### 4.1 Start API
+- `npm run dev:api` (prod deployments should run the same entrypoint under a process manager)
+
+### 4.2 Start workers
+Run both worker processes:
+- `npm run worker:indexer`
+- `npm run worker:doc`
+
+Workers require `TENANT_ID` in Phase‑1 (single-tenant worker loop).
+
+---
+
+## 5) Onboarding Checklist (One-Click UX)
+
+For a new org:
+1. User clicks **Connect GitHub** (OAuth) and completes authorization.
+2. Admin installs **Reader App** (source repos) and **Docs App** (docs repo).
+3. Admin selects a **docs repo** (must be separate) and clicks **Verify**.
+4. User selects a source repo and clicks **Create Project**.
+5. System enqueues index job → graph builds → docs PR opened in docs repo.
+
+---
+
+## 6) Operational Maintenance
+
+### 6.1 Secrets management & rotation
+Graphfly encrypts secrets (AES‑256‑GCM). For rotation:
+- Configure a **keyring** using `GRAPHFLY_SECRET_KEYS` (recommended) and rotate the primary key ID.
+- Old ciphertext remains decryptable as long as old key IDs remain in the keyring.
+
+Keyring format:
+- `GRAPHFLY_SECRET_KEYS="k1:<base64-or-hex>,k2:<base64-or-hex>"`
+- The **first** key ID is used for new encryption.
+
+### 6.2 Backups & restore
+Minimum:
+- Daily Postgres backups (WAL + snapshots) and restore drills.
+- Validate pgvector indexes rebuild time and store size.
+
+### 6.3 Webhook health
+Monitor:
+- webhook verification failures
+- delivery dedupe hit rate
+- job enqueue rate vs worker throughput
+
+### 6.4 Indexing health
+Monitor:
+- index job latency (p50/p95)
+- failure rate and retry counts
+- graph size growth (nodes/edges/occurrences)
+
+### 6.5 Docs PR health
+Monitor:
+- PR creation failures
+- doc block validation failures (must reject code fences)
+
+---
+
+## 7) Observability
+
+### 7.1 Logs
+- API and workers should emit structured JSON logs with request/job IDs.
+- Never log secrets/tokens.
+
+### 7.2 Metrics
+- Expose a Prometheus-style `/metrics` endpoint (protect in production).
+- Track request counts/latency and job success/failure rates.
+
+Metrics endpoint controls:
+- `GRAPHFLY_METRICS_PUBLIC=1` to expose publicly (not recommended)
+- Or set `GRAPHFLY_METRICS_TOKEN` and require `Authorization: Bearer <token>`
+
+### 7.3 Audit log
+- Use `/api/v1/audit` to review admin actions (requires DB).
+
+---
+
+## 8) Runbooks (Common Incidents)
+
+### 8.1 “Docs repo verify failed”
+Likely causes:
+- Docs App not installed on selected docs repo
+- Missing `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / docs installation id
+
+### 8.2 “Push webhook not triggering index”
+Likely causes:
+- Reader App not installed
+- Webhook secret mismatch
+- Delivery dedupe incorrectly configured or DB unavailable
+
+### 8.3 “Jobs stuck queued”
+Likely causes:
+- Workers not running
+- Wrong `TENANT_ID` for Phase‑1 worker loop
+- DB connectivity or RLS misconfiguration

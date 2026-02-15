@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
 import { createDocStoreFromEnv } from '../../../packages/stores/src/doc-store.js';
 import { ingestNdjson } from '../../../packages/ndjson/src/ingest.js';
@@ -39,6 +40,7 @@ import { GitHubClient } from '../../../packages/github-client/src/client.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
+import { createLogger, createMetrics } from '../../../packages/observability/src/index.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -71,6 +73,9 @@ function assertProdConfig(env = process.env) {
 }
 
 assertProdConfig();
+
+const log = createLogger({ service: 'graphfly-api' });
+const metrics = createMetrics({ service: 'graphfly-api' });
 
 const repoFullName = process.env.SOURCE_REPO_FULL_NAME ?? 'local/source';
 const store = await createGraphStoreFromEnv({ repoFullName });
@@ -948,15 +953,44 @@ router.get('/index/diagnostics', async (req) => {
 });
 
 const server = http.createServer(async (req, res) => {
+  const start = Date.now();
+  const requestId = String(req.headers['x-request-id'] ?? crypto.randomUUID());
+  res.setHeader('x-request-id', requestId);
+
   try {
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    if (pathname === '/metrics') {
+      const token = String(process.env.GRAPHFLY_METRICS_TOKEN ?? '');
+      const pub = String(process.env.GRAPHFLY_METRICS_PUBLIC ?? '') === '1';
+      const auth = String(req.headers.authorization ?? '');
+      const ok = pub || (token && auth.toLowerCase().startsWith('bearer ') && auth.slice('bearer '.length).trim() === token);
+      if (!ok) {
+        res.statusCode = 404;
+        res.end('not found');
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/plain; version=0.0.4; charset=utf-8');
+      res.end(metrics.renderPrometheus());
+      return;
+    }
+
     const result = await router.handle(req);
     res.statusCode = result.status;
     res.setHeader('content-type', 'application/json; charset=utf-8');
     res.end(JSON.stringify(result.body));
+
+    const dur = Date.now() - start;
+    metrics.recordHttp({ method: req.method, path: pathname, status: result.status, durationMs: dur });
+    log.info('http_request', { requestId, method: req.method, path: pathname, status: result.status, durationMs: dur });
   } catch (error) {
     res.statusCode = 500;
     res.setHeader('content-type', 'application/json; charset=utf-8');
     res.end(JSON.stringify({ error: 'internal_error', message: String(error?.message ?? error) }));
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    const dur = Date.now() - start;
+    metrics.recordHttp({ method: req.method, path: pathname, status: 500, durationMs: dur });
+    log.error('http_error', { requestId, method: req.method, path: pathname, status: 500, durationMs: dur, error: String(error?.message ?? error) });
   }
 });
 

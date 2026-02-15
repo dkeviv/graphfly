@@ -4,7 +4,8 @@ export class InMemorySecretsStore {
   constructor({ env = process.env } = {}) {
     // Dev-friendly: use a deterministic in-memory key if none configured.
     // Prod should set GRAPHFLY_SECRET_KEY explicitly.
-    this._env = env.GRAPHFLY_SECRET_KEY ? env : { ...env, GRAPHFLY_SECRET_KEY: Buffer.alloc(32, 1).toString('base64') };
+    const hasKey = Boolean(env.GRAPHFLY_SECRET_KEYS || env.GRAPHFLY_SECRET_KEY);
+    this._env = hasKey ? env : { ...env, GRAPHFLY_SECRET_KEYS: `dev:${Buffer.alloc(32, 1).toString('base64')}` };
     this._byOrg = new Map(); // orgId -> Map(key -> ciphertext)
   }
 
