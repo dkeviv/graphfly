@@ -1,5 +1,6 @@
 import { el, clear } from '../render.js';
 import { ApiClient } from '../api.js';
+import { parseOAuthCallbackParams, stripQueryFromUrl } from './onboarding-oauth.js';
 
 export function renderOnboardingPage({ state, pageEl }) {
   clear(pageEl);
@@ -13,7 +14,7 @@ export function renderOnboardingPage({ state, pageEl }) {
 
   const statusEl = el('div', { class: 'small' }, ['Loading onboarding status…']);
   const githubTokenInput = el('input', { class: 'input', id: 'githubTokenInput', placeholder: 'GitHub token (dev) — stored encrypted', type: 'password' });
-  const githubConnectBtn = el('button', { class: 'button' }, ['Connect']);
+  const githubConnectBtn = el('button', { class: 'button' }, ['Connect GitHub']);
   const githubReposEl = el('ul', { class: 'list' });
   const docsRepoInput = el('input', { class: 'input', id: 'docsRepoInput', placeholder: 'org/docs (GitHub full name)' });
   const orgNameInput = el('input', { class: 'input', id: 'orgNameInput', placeholder: 'Display name (optional)' });
@@ -46,7 +47,7 @@ export function renderOnboardingPage({ state, pageEl }) {
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'card__title' }, ['1) Connect GitHub (OAuth)']),
-        el('div', { class: 'small' }, ['Dev mode: paste a token to simulate OAuth.']),
+        el('div', { class: 'small' }, ['One click: redirects to GitHub OAuth, then returns here.']),
         githubTokenInput,
         el('div', { class: 'row' }, [githubConnectBtn]),
         el('div', { class: 'small' }, ['Available repos:']),
@@ -99,6 +100,15 @@ export function renderOnboardingPage({ state, pageEl }) {
 
   githubConnectBtn.onclick = async () => {
     try {
+      // Prefer real OAuth when configured.
+      const start = await api.githubOAuthStart();
+      const authorizeUrl = start?.authorizeUrl ?? null;
+      if (authorizeUrl) {
+        statusEl.textContent = 'Redirecting to GitHub…';
+        window.location.assign(authorizeUrl);
+        return;
+      }
+      // Fallback: dev token connect.
       const token = githubTokenInput.value.trim();
       if (!token) return;
       await api.githubConnect({ token });
@@ -111,6 +121,18 @@ export function renderOnboardingPage({ state, pageEl }) {
 
   async function refresh() {
     try {
+      // Handle OAuth return: code+state in query string.
+      const cb = parseOAuthCallbackParams({ search: window.location.search });
+      if (cb) {
+        statusEl.textContent = 'Completing GitHub connection…';
+        try {
+          await api.githubOAuthCallback(cb);
+          stripQueryFromUrl();
+        } catch (e) {
+          statusEl.textContent = `OAuth callback failed: ${String(e?.message ?? e)}`;
+        }
+      }
+
       const orgRes = await api.getCurrentOrg();
       const org = orgRes ?? {};
       docsRepoInput.value = org.docsRepoFullName ?? '';

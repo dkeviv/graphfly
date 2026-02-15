@@ -84,4 +84,12 @@ export class ApiClient {
   githubListRepos() {
     return this.getJson(`/api/v1/integrations/github/repos?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
+
+  githubOAuthStart() {
+    return this.getJson(`/api/v1/integrations/github/oauth/start?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  githubOAuthCallback({ code, state }) {
+    return this.sendJson('POST', '/api/v1/integrations/github/oauth/callback', { tenantId: this.tenantId, code, state });
+  }
 }
