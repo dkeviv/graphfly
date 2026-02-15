@@ -50,3 +50,11 @@ export async function createCustomerPortalSession({ stripe, customerId, returnUr
   return { id: session.id, url: session.url };
 }
 
+export async function createCustomer({ stripe, name = null, metadata = null } = {}) {
+  if (!stripe?.customers?.create) throw new Error('stripe_client_required');
+  const customer = await stripe.customers.create({
+    name: name ?? undefined,
+    metadata: metadata ?? undefined
+  });
+  return { id: customer.id };
+}

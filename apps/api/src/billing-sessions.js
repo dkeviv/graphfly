@@ -14,6 +14,25 @@ async function resolveCustomerId({ tenantId, orgStore, env }) {
   return fromEnv || null;
 }
 
+async function ensureCustomerId({ tenantId, orgStore, stripeService, stripe, env }) {
+  const existing = await resolveCustomerId({ tenantId, orgStore, env });
+  if (existing) return existing;
+  if (!orgStore?.upsertOrg) {
+    const err = new Error('stripe_not_configured');
+    err.code = 'stripe_not_configured';
+    err.missing = { customerId: true };
+    throw err;
+  }
+  const org = (await Promise.resolve(orgStore.getOrg?.({ tenantId }))) ?? {};
+  const created = await stripeService.createCustomer({
+    stripe,
+    name: org.displayName ?? org.name ?? null,
+    metadata: { tenantId }
+  });
+  await orgStore.upsertOrg({ tenantId, patch: { stripeCustomerId: created.id } });
+  return created.id;
+}
+
 export async function createCheckoutUrl({
   tenantId,
   plan,
@@ -23,19 +42,19 @@ export async function createCheckoutUrl({
 }) {
   if (!tenantId) throw new Error('tenantId is required');
   const apiKey = env.STRIPE_SECRET_KEY ?? '';
-  const customerId = await resolveCustomerId({ tenantId, orgStore, env });
   const priceId = pickPriceId({ plan, env });
   const successUrl = env.STRIPE_SUCCESS_URL ?? 'http://localhost/success';
   const cancelUrl = env.STRIPE_CANCEL_URL ?? 'http://localhost/cancel';
 
-  if (!apiKey || !customerId || !priceId) {
+  if (!apiKey || !priceId) {
     const err = new Error('stripe_not_configured');
     err.code = 'stripe_not_configured';
-    err.missing = { apiKey: !apiKey, customerId: !customerId, priceId: !priceId };
+    err.missing = { apiKey: !apiKey, priceId: !priceId };
     throw err;
   }
 
   const stripe = await stripeService.createStripeClient({ apiKey });
+  const customerId = await ensureCustomerId({ tenantId, orgStore, stripeService, stripe, env });
   const session = await stripeService.createCheckoutSession({
     stripe,
     customerId,
@@ -50,16 +69,15 @@ export async function createCheckoutUrl({
 export async function createPortalUrl({ tenantId, orgStore, stripeService, env = process.env }) {
   if (!tenantId) throw new Error('tenantId is required');
   const apiKey = env.STRIPE_SECRET_KEY ?? '';
-  const customerId = await resolveCustomerId({ tenantId, orgStore, env });
   const returnUrl = env.STRIPE_RETURN_URL ?? 'http://localhost/billing';
-  if (!apiKey || !customerId) {
+  if (!apiKey) {
     const err = new Error('stripe_not_configured');
     err.code = 'stripe_not_configured';
-    err.missing = { apiKey: !apiKey, customerId: !customerId };
+    err.missing = { apiKey: !apiKey };
     throw err;
   }
   const stripe = await stripeService.createStripeClient({ apiKey });
+  const customerId = await ensureCustomerId({ tenantId, orgStore, stripeService, stripe, env });
   const session = await stripeService.createCustomerPortalSession({ stripe, customerId, returnUrl });
   return { url: session.url };
 }
-

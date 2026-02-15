@@ -23,7 +23,7 @@ import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker
 import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
-import { createStripeClient, createCheckoutSession, createCustomerPortalSession } from '../../../packages/stripe-service/src/stripe.js';
+import { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer } from '../../../packages/stripe-service/src/stripe.js';
 import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-counters.js';
 import { getPgPoolFromEnv } from '../../../packages/stores/src/pg-pool.js';
 import { withTenantClient } from '../../../packages/pg-client/src/tenant.js';
@@ -554,7 +554,7 @@ async function billingCheckoutHandler(req) {
       tenantId,
       plan,
       orgStore: orgs,
-      stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession }
+      stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer }
     });
     return { status: 200, body: out };
   } catch (e) {
@@ -576,7 +576,7 @@ async function billingPortalHandler(req) {
     const out = await createPortalUrl({
       tenantId,
       orgStore: orgs,
-      stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession }
+      stripeService: { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer }
     });
     return { status: 200, body: out };
   } catch (e) {
