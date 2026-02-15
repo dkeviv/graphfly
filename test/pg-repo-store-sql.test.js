@@ -45,3 +45,19 @@ test('PgRepoStore.findRepoByFullName throws when ambiguous', async () => {
   await assert.rejects(() => store.findRepoByFullName({ fullName: 'acme/source' }), /ambiguous_repo_full_name/);
 });
 
+test('PgRepoStore.findRepoByGitHubRepoId throws when ambiguous', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.includes('FROM repos') && text.includes('WHERE github_repo_id=$1')) {
+      return {
+        rows: [
+          { id: '1', tenant_id: 't1', full_name: 'acme/source', default_branch: 'main', github_repo_id: 123 },
+          { id: '2', tenant_id: 't2', full_name: 'acme/source2', default_branch: 'main', github_repo_id: 123 }
+        ]
+      };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+
+  const store = new PgRepoStore({ client });
+  await assert.rejects(() => store.findRepoByGitHubRepoId({ githubRepoId: 123 }), /ambiguous_github_repo_id/);
+});

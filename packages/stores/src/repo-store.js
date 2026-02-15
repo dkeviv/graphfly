@@ -35,6 +35,17 @@ export class PgRepoStorePool {
     }
   }
 
+  async findRepoByGitHubRepoId({ githubRepoId }) {
+    const pool = this._pool;
+    const client = await pool.connect();
+    try {
+      const store = new PgRepoStore({ client });
+      return await store.findRepoByGitHubRepoId({ githubRepoId });
+    } finally {
+      client.release();
+    }
+  }
+
   async createRepo({ tenantId, fullName, defaultBranch, githubRepoId }) {
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
       const store = new PgRepoStore({ client });
@@ -57,4 +68,3 @@ export async function createRepoStoreFromEnv() {
   const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgRepoStorePool({ pool });
 }
-

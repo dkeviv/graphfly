@@ -35,6 +35,7 @@ import { createInstallationToken } from '../../../packages/github-app-auth/src/a
 import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-store.js';
 import { GitHubClient } from '../../../packages/github-client/src/client.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
+import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -53,6 +54,7 @@ const orgs = await createOrgStoreFromEnv();
 const repos = await createRepoStoreFromEnv();
 const secrets = await createSecretsStoreFromEnv();
 const oauthStates = new InMemoryOAuthStateStore();
+const webhookDedupe = await createWebhookDeliveryDedupeFromEnv();
 
 function tenantIdFromStripeEvent(event) {
   const md = event?.data?.object?.metadata;
@@ -119,7 +121,9 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
     let tenantId = DEFAULT_TENANT_ID;
     let repoId = DEFAULT_REPO_ID;
     try {
-      const found = await Promise.resolve(repos.findRepoByFullName?.({ fullName: push.fullName }));
+      const found = push.githubRepoId
+        ? await Promise.resolve(repos.findRepoByGitHubRepoId?.({ githubRepoId: push.githubRepoId }))
+        : await Promise.resolve(repos.findRepoByFullName?.({ fullName: push.fullName }));
       if (found?.tenantId && found?.id) {
         tenantId = found.tenantId;
         repoId = found.id;
@@ -142,6 +146,17 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
 
     const cloneAuth = await gitCloneAuthForOrg({ tenantId, org });
     const cloneSource = typeof push.cloneUrl === 'string' && push.cloneUrl.length > 0 ? push.cloneUrl : null;
+
+    if (webhookDedupe) {
+      const ins = await webhookDedupe.tryInsert({
+        provider: 'github',
+        deliveryId: push.deliveryId,
+        eventType: 'push',
+        tenantId,
+        repoId
+      });
+      if (!ins.inserted) return;
+    }
 
     // Spec: push webhook triggers incremental index which triggers docs update.
     indexQueue.add('index.run', {

@@ -72,6 +72,30 @@ export class PgRepoStore {
     };
   }
 
+  async findRepoByGitHubRepoId({ githubRepoId }) {
+    const id = Number(githubRepoId);
+    if (!Number.isFinite(id)) throw new Error('githubRepoId must be a number');
+    const res = await this._c.query(
+      `SELECT id, tenant_id, full_name, default_branch, github_repo_id
+       FROM repos
+       WHERE github_repo_id=$1
+       ORDER BY created_at DESC
+       LIMIT 2`,
+      [Math.trunc(id)]
+    );
+    const rows = res.rows ?? [];
+    if (rows.length === 0) return null;
+    if (rows.length > 1) throw new Error('ambiguous_github_repo_id');
+    const r = rows[0];
+    return {
+      id: r.id,
+      tenantId: r.tenant_id,
+      fullName: r.full_name,
+      defaultBranch: r.default_branch,
+      githubRepoId: r.github_repo_id ?? null
+    };
+  }
+
   async createRepo({ tenantId, fullName, defaultBranch = 'main', githubRepoId = null }) {
     assertUuid(tenantId, 'tenantId');
     if (typeof fullName !== 'string' || fullName.length === 0) throw new Error('fullName is required');
@@ -94,4 +118,3 @@ export class PgRepoStore {
     return { ok: true, deleted: Boolean(res.rows?.[0]?.id) };
   }
 }
-

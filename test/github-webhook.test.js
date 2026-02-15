@@ -26,7 +26,7 @@ test('GitHub webhook handler dedupes by delivery id and rejects bad signatures',
     JSON.stringify({
       ref: 'refs/heads/main',
       after: 'abc123',
-      repository: { full_name: 'org/repo' },
+      repository: { id: 123, full_name: 'org/repo' },
       commits: [{ added: ['a.js'], modified: ['b.js'], removed: ['c.js'] }]
     }),
     'utf8'
@@ -54,4 +54,3 @@ test('GitHub webhook handler dedupes by delivery id and rejects bad signatures',
   assert.equal(dup.status, 202);
   assert.equal(pushes.length, 1);
 });
-

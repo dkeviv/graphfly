@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS repos (
     UNIQUE (tenant_id, full_name)
 );
 
+-- Webhook delivery dedupe (durable replay protection).
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    provider      TEXT NOT NULL, -- github|stripe|etc
+    delivery_id   TEXT NOT NULL,
+    event_type    TEXT,
+    tenant_id     UUID REFERENCES orgs(id) ON DELETE SET NULL,
+    repo_id       UUID REFERENCES repos(id) ON DELETE SET NULL,
+    received_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (provider, delivery_id)
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_tenant ON webhook_deliveries(tenant_id, provider);
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- BILLING (Stripe) + USAGE COUNTERS (enterprise scaffolding)
 -- ═══════════════════════════════════════════════════════════════════════
@@ -452,6 +465,7 @@ ALTER TABLE index_diagnostics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE webhook_deliveries ENABLE ROW LEVEL SECURITY;
 
 -- Hardening: ensure RLS applies even for table owners.
 ALTER TABLE orgs FORCE ROW LEVEL SECURITY;
@@ -503,6 +517,10 @@ CREATE POLICY tenant_isolation_graph_nodes ON graph_nodes
 DROP POLICY IF EXISTS tenant_isolation_org_secrets ON org_secrets;
 CREATE POLICY tenant_isolation_org_secrets ON org_secrets
   USING (org_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_webhook_deliveries ON webhook_deliveries;
+CREATE POLICY tenant_isolation_webhook_deliveries ON webhook_deliveries
+  USING (tenant_id = current_setting('app.tenant_id', true)::uuid OR tenant_id IS NULL);
 
 DROP POLICY IF EXISTS tenant_isolation_graph_edges ON graph_edges;
 CREATE POLICY tenant_isolation_graph_edges ON graph_edges
@@ -561,3 +579,4 @@ CREATE POLICY tenant_isolation_pr_runs ON pr_runs
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 ALTER TABLE org_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_secrets FORCE ROW LEVEL SECURITY;
+ALTER TABLE webhook_deliveries FORCE ROW LEVEL SECURITY;

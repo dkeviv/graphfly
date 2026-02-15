@@ -32,6 +32,7 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
     const ref = payload?.ref ?? '';
     const sha = payload?.after ?? '';
     const fullName = payload?.repository?.full_name ?? '';
+    const githubRepoId = payload?.repository?.id ?? null;
     const cloneUrl = payload?.repository?.clone_url ?? payload?.repository?.html_url ?? '';
     const commits = Array.isArray(payload?.commits) ? payload.commits : [];
 
@@ -46,6 +47,7 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
     await onPush({
       deliveryId,
       fullName,
+      githubRepoId: typeof githubRepoId === 'number' ? githubRepoId : null,
       ref,
       sha,
       cloneUrl: typeof cloneUrl === 'string' && cloneUrl.length > 0 ? cloneUrl : null,

@@ -2,6 +2,7 @@ export class InMemoryRepoStore {
   constructor() {
     this._byId = new Map(); // repoId -> repo
     this._byFullName = new Map(); // tenantId::fullName -> repoId
+    this._byGitHubId = new Map(); // githubRepoId -> { tenantId, repoId }
   }
 
   _fk({ tenantId, fullName }) {
@@ -36,7 +37,15 @@ export class InMemoryRepoStore {
     const repo = { id: repoId, tenantId, fullName, defaultBranch, githubRepoId };
     this._byId.set(repoId, repo);
     this._byFullName.set(fk, repoId);
+    if (githubRepoId != null) this._byGitHubId.set(String(githubRepoId), { tenantId, repoId });
     return repo;
+  }
+
+  async findRepoByGitHubRepoId({ githubRepoId }) {
+    if (githubRepoId == null) throw new Error('githubRepoId is required');
+    const hit = this._byGitHubId.get(String(githubRepoId)) ?? null;
+    if (!hit) return null;
+    return this.getRepo({ tenantId: hit.tenantId, repoId: hit.repoId });
   }
 
   async deleteRepo({ tenantId, repoId }) {
@@ -44,7 +53,7 @@ export class InMemoryRepoStore {
     if (!repo) return { ok: true, deleted: false };
     this._byId.delete(repoId);
     this._byFullName.delete(this._fk({ tenantId, fullName: repo.fullName }));
+    if (repo.githubRepoId != null) this._byGitHubId.delete(String(repo.githubRepoId));
     return { ok: true, deleted: true };
   }
 }
-
