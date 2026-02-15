@@ -1,0 +1,7 @@
+{
+  "name": "@graphfly/queue-pg",
+  "private": true,
+  "type": "module",
+  "main": "src/pg-queue.js"
+}
+

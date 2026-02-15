@@ -61,6 +61,30 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_tenant ON webhook_deliveries(tenant_id, provider);
 
+-- Durable job queue (tenant-scoped, RLS-protected). Workers run per-tenant in Phase-1.
+CREATE TABLE IF NOT EXISTS jobs (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID REFERENCES repos(id) ON DELETE SET NULL,
+    queue_name      TEXT NOT NULL,
+    job_name        TEXT NOT NULL,
+    payload         JSONB NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'queued'
+                    CHECK (status IN ('queued','active','succeeded','failed','dead')),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    max_attempts    INTEGER NOT NULL DEFAULT 5,
+    run_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    locked_at       TIMESTAMPTZ,
+    lock_expires_at TIMESTAMPTZ,
+    lock_token      UUID,
+    completed_at    TIMESTAMPTZ,
+    last_error      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_pick ON jobs(tenant_id, queue_name, status, run_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_repo ON jobs(tenant_id, repo_id, created_at DESC);
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- BILLING (Stripe) + USAGE COUNTERS (enterprise scaffolding)
 -- ═══════════════════════════════════════════════════════════════════════
@@ -479,6 +503,7 @@ ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_deliveries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
 
 -- Hardening: ensure RLS applies even for table owners.
 ALTER TABLE orgs FORCE ROW LEVEL SECURITY;
@@ -502,6 +527,7 @@ ALTER TABLE index_diagnostics FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence FORCE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs FORCE ROW LEVEL SECURITY;
+ALTER TABLE jobs FORCE ROW LEVEL SECURITY;
 
 -- RLS policy pattern (replicate per table)
 DROP POLICY IF EXISTS tenant_self_orgs ON orgs;
@@ -539,6 +565,10 @@ CREATE POLICY tenant_isolation_org_secrets ON org_secrets
 DROP POLICY IF EXISTS tenant_isolation_webhook_deliveries ON webhook_deliveries;
 CREATE POLICY tenant_isolation_webhook_deliveries ON webhook_deliveries
   USING (tenant_id = current_setting('app.tenant_id', true)::uuid OR tenant_id IS NULL);
+
+DROP POLICY IF EXISTS tenant_isolation_jobs ON jobs;
+CREATE POLICY tenant_isolation_jobs ON jobs
+  USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_graph_edges ON graph_edges;
 CREATE POLICY tenant_isolation_graph_edges ON graph_edges

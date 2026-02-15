@@ -18,7 +18,7 @@ import { makeStripeWebhookHandler } from './stripe-webhook.js';
 import { applyStripeEventToEntitlements } from '../../../packages/billing/src/apply-stripe-event.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
 import { neighborhood } from '../../../packages/cig/src/neighborhood.js';
-import { InMemoryQueue } from '../../../packages/queue/src/in-memory.js';
+import { createQueueFromEnv } from '../../../packages/stores/src/queue.js';
 import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker.js';
 import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
@@ -91,9 +91,9 @@ async function gitCloneAuthForOrg({ tenantId, org }) {
   return { username: 'x-access-token', password: token };
 }
 
-// In-memory job plumbing (no external deps). In production this is BullMQ + Redis.
-const indexQueue = new InMemoryQueue('index');
-const docQueue = new InMemoryQueue('doc');
+// Queue: in-memory for dev/tests; Postgres-backed when configured (durable).
+const indexQueue = await createQueueFromEnv({ queueName: 'index' });
+const docQueue = await createQueueFromEnv({ queueName: 'doc' });
 const docsRepoFullName = process.env.DOCS_REPO_FULL_NAME ?? 'org/docs';
 const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
 const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
@@ -113,7 +113,8 @@ const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
 const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage });
 
-async function drainOnce() {
+async function maybeDrainOnce() {
+  if (typeof indexQueue?.drain !== 'function' || typeof docQueue?.drain !== 'function') return;
   for (const j of indexQueue.drain()) await indexerWorker.handle(j);
   for (const j of docQueue.drain()) await docWorker.handle({ payload: j.payload });
 }
@@ -174,7 +175,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
       cloneSource,
       cloneAuth
     });
-    await drainOnce();
+    await maybeDrainOnce();
   }
 });
 
@@ -405,7 +406,7 @@ router.post('/api/v1/repos', async (req) => {
         cloneSource: info.cloneUrl ?? null,
         cloneAuth
       });
-      await drainOnce();
+      await maybeDrainOnce();
     }
   } catch {
     // best-effort; explicit indexing is out of scope for this endpoint.
@@ -420,6 +421,30 @@ router.delete('/api/v1/repos/:repoId', async (req) => {
   const repoId = req.params.repoId;
   const out = await repos.deleteRepo({ tenantId, repoId });
   return { status: 200, body: out };
+});
+
+router.get('/api/v1/jobs', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const status = req.query.status ?? null;
+  const limit = Number(req.query.limit ?? 50);
+  const indexJobs = typeof indexQueue?.listJobs === 'function' ? await indexQueue.listJobs({ tenantId, status, limit }) : [];
+  const docJobs = typeof docQueue?.listJobs === 'function' ? await docQueue.listJobs({ tenantId, status, limit }) : [];
+  return { status: 200, body: { indexJobs, docJobs } };
+});
+
+router.get('/api/v1/jobs/:queue/:jobId', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const q = req.params.queue;
+  const jobId = req.params.jobId;
+  const queue = q === 'index' ? indexQueue : q === 'doc' ? docQueue : null;
+  if (!queue || typeof queue?.getJob !== 'function') return { status: 404, body: { error: 'not_found' } };
+  const job = await queue.getJob({ tenantId, jobId });
+  if (!job) return { status: 404, body: { error: 'not_found' } };
+  return { status: 200, body: { job } };
 });
 
 async function billingSummaryHandler(req) {

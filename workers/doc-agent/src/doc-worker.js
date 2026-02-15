@@ -15,7 +15,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
       if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
         throw new Error('docsRepoFullName is required');
       }
-      const writer = typeof docsWriter === 'function' ? docsWriter({ configuredDocsRepoFullName: docsRepoFullName }) : docsWriter;
+      const writer = typeof docsWriter === 'function' ? await docsWriter({ configuredDocsRepoFullName: docsRepoFullName, tenantId }) : docsWriter;
       const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
       const docPathByEntrypointKey = new Map(
         entrypoints.map((ep) => [ep.entrypoint_key, `flows/${String(ep.entrypoint_key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '')}.md`])
