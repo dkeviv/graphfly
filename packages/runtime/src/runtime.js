@@ -31,16 +31,17 @@ export function createRuntime({
   const registry = repoRegistry ?? new InMemoryRepoRegistry();
   const entitlements = entitlementsStore ?? new InMemoryEntitlementsStore();
   const usage = usageCounters ?? new InMemoryUsageCounters();
-  const writer =
+  const writerFactory =
     docsWriter ??
-    (docsRepoPath
-      ? new LocalDocsWriter({ configuredDocsRepoFullName: docsRepoFullName, docsRepoPath })
-      : new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName }));
+    (({ configuredDocsRepoFullName }) =>
+      docsRepoPath
+        ? new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath })
+        : new GitHubDocsWriter({ configuredDocsRepoFullName }));
 
   const indexer = createIndexerWorker({ store: graphStore, docQueue: dq, docStore: docsStore });
   const docWorker = createDocWorker({
     store: graphStore,
-    docsWriter: writer,
+    docsWriter: writerFactory,
     docStore: docsStore,
     entitlementsStore: entitlements,
     usageCounters: usage

@@ -79,6 +79,21 @@ CREATE TABLE IF NOT EXISTS stripe_events (
     error_message   TEXT
 );
 
+-- ═══════════════════════════════════════════════════════════════════════
+-- ORG SECRETS (encrypted at app layer; never log; RLS protected)
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS org_secrets (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id      UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    key         TEXT NOT NULL,
+    ciphertext  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (org_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_secrets_org_key ON org_secrets(org_id, key);
+
 CREATE TABLE IF NOT EXISTS usage_counters (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id        UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -483,7 +498,11 @@ CREATE POLICY tenant_isolation_usage_counters ON usage_counters
 
 DROP POLICY IF EXISTS tenant_isolation_graph_nodes ON graph_nodes;
 CREATE POLICY tenant_isolation_graph_nodes ON graph_nodes
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_org_secrets ON org_secrets;
+CREATE POLICY tenant_isolation_org_secrets ON org_secrets
+  USING (org_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_graph_edges ON graph_edges;
 CREATE POLICY tenant_isolation_graph_edges ON graph_edges
@@ -540,3 +559,5 @@ CREATE POLICY tenant_isolation_doc_evidence ON doc_evidence
 DROP POLICY IF EXISTS tenant_isolation_pr_runs ON pr_runs;
 CREATE POLICY tenant_isolation_pr_runs ON pr_runs
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+ALTER TABLE org_secrets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_secrets FORCE ROW LEVEL SECURITY;

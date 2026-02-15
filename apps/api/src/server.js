@@ -32,6 +32,9 @@ import { createOrgStoreFromEnv } from '../../../packages/stores/src/org-store.js
 import { createRepoStoreFromEnv } from '../../../packages/stores/src/repo-store.js';
 import { createCheckoutUrl, createPortalUrl } from './billing-sessions.js';
 import { createInstallationToken } from '../../../packages/github-app-auth/src/app-auth.js';
+import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-store.js';
+import { GitHubClient } from '../../../packages/github-client/src/client.js';
+import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -48,6 +51,8 @@ const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 const billingPool = await getPgPoolFromEnv({ connectionString: process.env.DATABASE_URL ?? '', max: Number(process.env.PG_POOL_MAX ?? 10) });
 const orgs = await createOrgStoreFromEnv();
 const repos = await createRepoStoreFromEnv();
+const secrets = await createSecretsStoreFromEnv();
+const oauthStates = new InMemoryOAuthStateStore();
 
 function tenantIdFromStripeEvent(event) {
   const md = event?.data?.object?.metadata;
@@ -85,11 +90,12 @@ const indexQueue = new InMemoryQueue('index');
 const docQueue = new InMemoryQueue('doc');
 const docsRepoFullName = process.env.DOCS_REPO_FULL_NAME ?? 'org/docs';
 const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
-const docsWriter = docsRepoPath
-  ? new LocalDocsWriter({ configuredDocsRepoFullName: docsRepoFullName, docsRepoPath })
-  : new GitHubDocsWriter({ configuredDocsRepoFullName: docsRepoFullName });
+const docsWriterFactory = ({ configuredDocsRepoFullName }) =>
+  docsRepoPath
+    ? new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath })
+    : new GitHubDocsWriter({ configuredDocsRepoFullName });
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
-const docWorker = createDocWorker({ store, docsWriter, docStore, entitlementsStore: entitlements, usageCounters: usage });
+const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage });
 
 async function drainOnce() {
   for (const j of indexQueue.drain()) await indexerWorker.handle(j);
@@ -185,6 +191,50 @@ router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
   return handleStripeWebhook({ headers, rawBody });
 });
 
+router.post('/api/v1/integrations/github/connect', async (req) => {
+  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const token = req.body?.token ?? '';
+  if (typeof token !== 'string' || token.length < 10) return { status: 400, body: { error: 'token is required' } };
+  // Store encrypted; never return it.
+  await secrets.setSecret({ tenantId, key: 'github.user_token', value: token });
+  return { status: 200, body: { ok: true } };
+});
+
+router.get('/api/v1/integrations/github/oauth/start', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const clientId = process.env.GITHUB_OAUTH_CLIENT_ID ?? '';
+  const redirectUri = process.env.GITHUB_OAUTH_REDIRECT_URI ?? '';
+  if (!clientId || !redirectUri) return { status: 501, body: { error: 'oauth_not_configured' } };
+  const state = oauthStates.issue({ tenantId });
+  const authorizeUrl = buildGitHubAuthorizeUrl({ clientId, state, redirectUri, scope: 'repo read:user' });
+  return { status: 200, body: { authorizeUrl, state } };
+});
+
+router.post('/api/v1/integrations/github/oauth/callback', async (req) => {
+  const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
+  const code = req.body?.code ?? '';
+  const state = req.body?.state ?? '';
+  if (!oauthStates.consume({ tenantId, state })) return { status: 400, body: { error: 'invalid_state' } };
+
+  const clientId = process.env.GITHUB_OAUTH_CLIENT_ID ?? '';
+  const clientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET ?? '';
+  const redirectUri = process.env.GITHUB_OAUTH_REDIRECT_URI ?? '';
+  if (!clientId || !clientSecret || !redirectUri) return { status: 501, body: { error: 'oauth_not_configured' } };
+
+  const out = await exchangeCodeForToken({ clientId, clientSecret, code, redirectUri });
+  await secrets.setSecret({ tenantId, key: 'github.user_token', value: out.token });
+  return { status: 200, body: { ok: true } };
+});
+
+router.get('/api/v1/integrations/github/repos', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const token = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
+  if (!token) return { status: 401, body: { error: 'github_not_connected' } };
+  const gh = new GitHubClient({ token });
+  const list = await gh.listUserRepos();
+  return { status: 200, body: { repos: list } };
+});
+
 router.get('/api/v1/orgs/current', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const org = (await orgs.getOrg?.({ tenantId })) ?? (await orgs.ensureOrg?.({ tenantId, name: 'default' }));
@@ -205,10 +255,13 @@ router.get('/api/v1/orgs/current', async (req) => {
 
 router.put('/api/v1/orgs/current', async (req) => {
   const tenantId = req.body?.tenantId ?? DEFAULT_TENANT_ID;
-  const patch = {
-    displayName: req.body?.displayName,
-    docsRepoFullName: req.body?.docsRepoFullName
-  };
+  const docsRepoFullName = req.body?.docsRepoFullName;
+  if (docsRepoFullName) {
+    const list = await repos.listRepos({ tenantId });
+    const collision = (list ?? []).some((r) => String(r?.fullName ?? '') === String(docsRepoFullName));
+    if (collision) return { status: 400, body: { error: 'docs_repo_must_be_separate' } };
+  }
+  const patch = { displayName: req.body?.displayName, docsRepoFullName };
   const org = await orgs.upsertOrg({ tenantId, patch });
   const plan = await Promise.resolve(entitlements.getPlan(tenantId));
   return {
@@ -238,6 +291,32 @@ router.post('/api/v1/repos', async (req) => {
   const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? 'main';
   if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
   const repo = await repos.createRepo({ tenantId, fullName, defaultBranch, githubRepoId });
+  // Kick off an initial full index if GitHub is connected and we can resolve the clone URL + head sha.
+  try {
+    const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+    const docsRepo = org?.docsRepoFullName ?? docsRepoFullName;
+    const token = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
+    if (token) {
+      const gh = new GitHubClient({ token });
+      const info = await gh.getRepo({ fullName });
+      const sha = await gh.getBranchHeadSha({ fullName, branch: info.defaultBranch ?? defaultBranch });
+      const cloneAuth = { username: 'x-access-token', password: token };
+      indexQueue.add('index.run', {
+        tenantId,
+        repoId: repo.id,
+        repoRoot: process.env.SOURCE_REPO_ROOT ?? 'fixtures/sample-repo',
+        sha: sha ?? 'mock',
+        changedFiles: [],
+        removedFiles: [],
+        docsRepoFullName: docsRepo,
+        cloneSource: info.cloneUrl ?? null,
+        cloneAuth
+      });
+      await drainOnce();
+    }
+  } catch {
+    // best-effort; explicit indexing is out of scope for this endpoint.
+  }
   return { status: 200, body: { repo } };
 });
 

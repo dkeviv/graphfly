@@ -3,6 +3,8 @@
 | Area | Spec Anchor | Requirement IDs | Status | Test Gate |
 |---|---|---|---|---|
 | Repo scaffolding (apps/workers/packages) | `plan.md` + `agents.md` | N/A | DONE | `npm test` |
+| Encrypted secrets store (org-scoped) | `docs/05_SECURITY.md` | NFR-SEC-* | DONE | `npm test` |
+| GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | DONE | `npm test` (OAuth endpoints + dev token connect; repo list + project creation triggers index) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | DONE | `npm test` |
 | Dev harness: mock indexer PCG enrichment (functions/classes + allowables/constraints) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |

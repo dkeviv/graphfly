@@ -28,4 +28,3 @@ test('runtime: push webhook enqueues index and produces docs PR', async () => {
   const blocks = rt.docsStore.listBlocks({ tenantId: 't-1', repoId: 'r-1' });
   assert.ok(blocks.length >= 1);
 });
-

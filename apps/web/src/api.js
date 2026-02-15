@@ -76,4 +76,12 @@ export class ApiClient {
   deleteRepo({ repoId }) {
     return this.sendJson('DELETE', `/api/v1/repos/${encodeURIComponent(repoId)}?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
+
+  githubConnect({ token }) {
+    return this.sendJson('POST', '/api/v1/integrations/github/connect', { tenantId: this.tenantId, token });
+  }
+
+  githubListRepos() {
+    return this.getJson(`/api/v1/integrations/github/repos?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
 }
