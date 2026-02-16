@@ -251,15 +251,26 @@ function extractImportsFromAst(ts, sf) {
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && isStringLiteralLike(ts, node.moduleSpecifier)) {
       const spec = node.moduleSpecifier.text;
       const names = [];
+      const bindings = [];
       const clause = node.importClause;
-      if (clause?.name?.text) names.push(clause.name.text);
-      const bindings = clause?.namedBindings;
-      if (bindings && ts.isNamedImports(bindings)) {
-        for (const el of bindings.elements) {
-          if (el?.name?.text) names.push(el.name.text);
-        }
+      if (clause?.name?.text) {
+        names.push(clause.name.text);
+        bindings.push({ local: clause.name.text, imported: 'default', kind: 'default' });
       }
-      out.push({ spec, names, line: posToLine(sf, node.getStart(sf)) });
+      const named = clause?.namedBindings;
+      if (named && ts.isNamedImports(named)) {
+        for (const el of named.elements) {
+          const local = el?.name?.text ?? null;
+          const imported = (el?.propertyName?.text ?? el?.name?.text) ?? null;
+          if (local) names.push(local);
+          if (local && imported) bindings.push({ local, imported, kind: 'named' });
+        }
+      } else if (named && ts.isNamespaceImport(named)) {
+        const local = named.name?.text ?? null;
+        if (local) names.push(local);
+        if (local) bindings.push({ local, imported: '*', kind: 'namespace' });
+      }
+      out.push({ spec, names, bindings, line: posToLine(sf, node.getStart(sf)) });
     }
 
     if (ts.isCallExpression(node)) {
@@ -267,14 +278,14 @@ function extractImportsFromAst(ts, sf) {
       if (ts.isIdentifier(node.expression) && node.expression.text === 'require' && node.arguments?.length >= 1) {
         const arg = node.arguments[0];
         if (isStringLiteralLike(ts, arg)) {
-          out.push({ spec: arg.text, names: [], line: posToLine(sf, node.getStart(sf)) });
+          out.push({ spec: arg.text, names: [], bindings: [], line: posToLine(sf, node.getStart(sf)) });
         }
       }
       // import('x')
       if (node.expression?.kind === ts.SyntaxKind.ImportKeyword && node.arguments?.length >= 1) {
         const arg = node.arguments[0];
         if (isStringLiteralLike(ts, arg)) {
-          out.push({ spec: arg.text, names: [], line: posToLine(sf, node.getStart(sf)) });
+          out.push({ spec: arg.text, names: [], bindings: [], line: posToLine(sf, node.getStart(sf)) });
         }
       }
     }
@@ -308,6 +319,24 @@ function extractExportedDeclsFromAst(ts, sf) {
         line: posToLine(sf, st.getStart(sf)),
         isDefault: hasDefaultModifier(ts, st)
       });
+    } else if (ts.isVariableStatement(st) && hasExportModifier(ts, st)) {
+      for (const d of st.declarationList?.declarations ?? []) {
+        const name = d.name && ts.isIdentifier(d.name) ? d.name.text : null;
+        if (!name) continue;
+        const init = d.initializer ?? null;
+        const isFn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
+        if (!isFn) continue;
+        const params = (init.parameters ?? [])
+          .map((p) => extractIdentifierParamName(ts, p.name))
+          .filter((x) => Boolean(x));
+        decls.push({
+          kind: 'function',
+          name,
+          params,
+          line: posToLine(sf, d.getStart(sf)),
+          isDefault: false
+        });
+      }
     }
   }
   return decls;
@@ -362,6 +391,28 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
       const sf = ts.createSourceFile(String(filePath ?? 'file.ts'), String(text ?? ''), ts.ScriptTarget.Latest, true, kind);
       return { ok: true, ast: sf, diagnostics: [] };
     },
+    precomputeExports({ filePath, language, ast, lines, sha, containerUid }) {
+      const sf = ast;
+      const decls = extractExportedDeclsFromAst(ts, sf);
+      const byName = new Map();
+      for (const d of decls) {
+        const jsdoc = parseJsDoc(findJsDocBlock(lines ?? [], Math.max(0, Number(d.line ?? 1) - 1)));
+        const node = makeExportedSymbolNode({
+          kind: d.kind,
+          name: d.name,
+          params: d.params ?? [],
+          jsdoc,
+          filePath,
+          line: d.line,
+          sha,
+          language,
+          containerUid
+        });
+        byName.set(d.name, node.symbol_uid);
+        if (d.isDefault) byName.set('default', node.symbol_uid);
+      }
+      return byName;
+    },
     *extractRecords({
       filePath,
       language,
@@ -395,6 +446,7 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
             containerUid: sourceUid
           });
           byName.set(d.name, node.symbol_uid);
+          if (d.isDefault) byName.set('default', node.symbol_uid);
           yield { type: 'node', data: node };
           yield {
             type: 'edge',
@@ -482,6 +534,7 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
       }
 
       const imports = extractImportsFromAst(ts, sf);
+      const localToImport = new Map(); // local -> { resolvedFile, importedName }
       for (const imp of imports) {
         const aliasResolved = typeof resolveAliasImport === 'function' ? resolveAliasImport(imp.spec) : null;
         const resolved = aliasResolved || resolveImport(filePath, imp.spec, fileExists ?? sourceFileExists);
@@ -516,6 +569,11 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
               sha
             }
           };
+
+          for (const b of imp.bindings ?? []) {
+            if (!b?.local || !b?.imported) continue;
+            localToImport.set(b.local, { resolvedFile: resolved, importedName: b.imported });
+          }
         }
 
         const pkgName = packageNameFromImport(imp.spec);
@@ -555,6 +613,96 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
           };
         }
       }
+
+      // Call graph: conservative, deterministic resolution for identifier calls.
+      const localExports = exportedByFile?.get?.(filePath) ?? new Map();
+      function resolveCallee(name) {
+        if (!name) return null;
+        // Calls to other exported symbols in same file.
+        if (localExports.has(name)) return localExports.get(name);
+        const imp = localToImport.get(name);
+        if (!imp) return null;
+        const targetFile = imp.resolvedFile;
+        const importedName = imp.importedName;
+        const targets = exportedByFile?.get?.(targetFile) ?? null;
+        if (!targets) return null;
+        // default import maps to 'default' if present.
+        const key = importedName === 'default' ? 'default' : importedName;
+        return targets.get(key) ?? null;
+      }
+
+      const fileCallSourceUid = sourceUid;
+      const exportUidByName = localExports;
+
+      function containerUidForNode(node) {
+        // Only attribute calls to exported functions we can identify by name.
+        if (!node) return fileCallSourceUid;
+        if (ts.isFunctionDeclaration(node) && node.name?.text && hasExportModifier(ts, node)) {
+          return exportUidByName.get(node.name.text) ?? fileCallSourceUid;
+        }
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+          return exportUidByName.get(node.name.text) ?? fileCallSourceUid;
+        }
+        return fileCallSourceUid;
+      }
+
+      const callEdges = [];
+      const callOccs = [];
+
+      function recordCall({ containerUid, callee, node }) {
+        const targetUid = resolveCallee(callee);
+        if (!targetUid) return;
+        const line = posToLine(sf, node.getStart(sf));
+        callEdges.push({
+          type: 'edge',
+          data: {
+            source_symbol_uid: containerUid,
+            target_symbol_uid: targetUid,
+            edge_type: 'Calls',
+            metadata: { callee },
+            first_seen_sha: sha,
+            last_seen_sha: sha
+          }
+        });
+        callOccs.push({
+          type: 'edge_occurrence',
+          data: {
+            source_symbol_uid: containerUid,
+            target_symbol_uid: targetUid,
+            edge_type: 'Calls',
+            file_path: filePath,
+            line_start: line,
+            line_end: line,
+            occurrence_kind: 'call',
+            sha
+          }
+        });
+      }
+
+      function visit(node, containerUid) {
+        if (!node) return;
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+          recordCall({ containerUid, callee: node.expression.text, node });
+        }
+
+        // Track exported containers for attribution when we can identify them.
+        if (ts.isFunctionDeclaration(node) && hasExportModifier(ts, node)) {
+          const nextContainer = containerUidForNode(node);
+          ts.forEachChild(node, (child) => visit(child, nextContainer));
+          return;
+        }
+        if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+          const nextContainer = containerUidForNode(node);
+          ts.forEachChild(node.initializer, (child) => visit(child, nextContainer));
+          return;
+        }
+
+        ts.forEachChild(node, (child) => visit(child, containerUid));
+      }
+
+      for (const st of sf.statements ?? []) visit(st, fileCallSourceUid);
+      for (const r of callEdges) yield r;
+      for (const r of callOccs) yield r;
     }
   };
 }

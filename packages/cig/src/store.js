@@ -16,6 +16,7 @@ export class InMemoryGraphStore {
     this._depMismatchesByRepo = new Map(); // repoKey -> Map(mismatch_key -> mismatch)
     this._indexDiagnosticsByRepo = new Map(); // repoKey -> Array(diagnostic)
     this._flowGraphsByRepo = new Map(); // repoKey -> Map(flow_graph_key -> flow graph)
+    this._annotationsByRepo = new Map(); // repoKey -> Map(annotationKey -> annotation)
   }
 
   upsertNode({ tenantId, repoId, node }) {
@@ -188,5 +189,25 @@ export class InMemoryGraphStore {
   listFlowGraphs({ tenantId, repoId }) {
     const repoKey = key({ tenantId, repoId });
     return Array.from(this._flowGraphsByRepo.get(repoKey)?.values() ?? []);
+  }
+
+  upsertGraphAnnotation({ tenantId, repoId, annotation }) {
+    assert(isPlainObject(annotation), 'annotation must be an object');
+    assert(typeof annotation.symbol_uid === 'string' && annotation.symbol_uid.length > 0, 'annotation.symbol_uid required');
+    assert(typeof annotation.annotation_type === 'string' && annotation.annotation_type.length > 0, 'annotation.annotation_type required');
+    const repoKey = key({ tenantId, repoId });
+    if (!this._annotationsByRepo.has(repoKey)) this._annotationsByRepo.set(repoKey, new Map());
+    const k = `${annotation.symbol_uid}::${annotation.annotation_type}`;
+    const existing = this._annotationsByRepo.get(repoKey).get(k);
+    this._annotationsByRepo.get(repoKey).set(k, existing ? { ...existing, ...annotation } : annotation);
+  }
+
+  listGraphAnnotations({ tenantId, repoId }) {
+    const repoKey = key({ tenantId, repoId });
+    return Array.from(this._annotationsByRepo.get(repoKey)?.values() ?? []);
+  }
+
+  listGraphAnnotationsBySymbolUid({ tenantId, repoId, symbolUid }) {
+    return this.listGraphAnnotations({ tenantId, repoId }).filter((a) => a.symbol_uid === symbolUid);
   }
 }

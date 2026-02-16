@@ -183,6 +183,27 @@ export class PgGraphStorePool {
       return store.semanticSearch({ tenantId, repoId, query, limit });
     });
   }
+
+  async upsertGraphAnnotation({ tenantId, repoId, annotation }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.upsertGraphAnnotation({ tenantId, repoId, annotation });
+    });
+  }
+
+  async listGraphAnnotations({ tenantId, repoId, limit = 500 }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listGraphAnnotations({ tenantId, repoId, limit });
+    });
+  }
+
+  async listGraphAnnotationsBySymbolUid({ tenantId, repoId, symbolUid }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listGraphAnnotationsBySymbolUid({ tenantId, repoId, symbolUid });
+    });
+  }
 }
 
 export async function createGraphStoreFromEnv({ repoFullName = 'local/unknown' } = {}) {

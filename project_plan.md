@@ -7,6 +7,7 @@
 | GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | DONE | `npm test` (OAuth endpoints + dev token connect; repo list + project creation triggers index) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` (imports resolve to real files + tsconfig paths/baseUrl) |
 | AST engine (TypeScript AST; tree-sitter later) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | DONE | `npm test` (vendored TypeScript AST engine; JS/TS parsing uses AST by default; prod fail-fast if an unavailable AST engine is requested) |
+| Call graph (JS/TS identifier calls) + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | PARTIAL | `npm test` (Calls edges + callsite occurrences for JS/TS identifier calls; member/dynamic calls pending) |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | DONE | `npm test` |
 | Dev harness: mock indexer PCG enrichment (functions/classes + allowables/constraints) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` |
@@ -23,6 +24,7 @@
 | Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | DONE | `npm test` (docs-repo-only guard + LocalDocsWriter; GitHubDocsWriter can open PR via REST when `GITHUB_DOCS_TOKEN` configured; org/repo onboarding APIs added) |
 | Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | DONE | `npm test` |
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
+| Graph enrichment agent (flow_summary annotations) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-09, FR-CIG-11 | DONE | `npm test` (graph worker enqueued after index; annotations stored separately from canonical graph) |
 | Support-safe mode enforcement | `docs/05_SECURITY.md` | FR-CIG-11 | DONE | `npm test` |
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | DONE | `npm test` |
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | DONE | `npm test` (webhook verify+dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; billing summary reads org_billing; checkout/portal support org stripe customer id + env price ids) |

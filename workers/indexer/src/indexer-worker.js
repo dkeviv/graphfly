@@ -9,7 +9,7 @@ import { cloneAtSha } from '../../../packages/git/src/clone.js';
 import { runIndexerNdjson } from '../../../packages/indexer-cli/src/indexer-cli.js';
 import { runBuiltinIndexerNdjson } from '../../../packages/indexer-engine/src/indexer.js';
 
-export function createIndexerWorker({ store, docQueue, docStore }) {
+export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null }) {
   return {
     async handle(job) {
       const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [], docsRepoFullName = null } = job.payload ?? {};
@@ -121,6 +121,9 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
         await store.upsertFlowGraph({ tenantId, repoId, flowGraph: fg });
       }
 
+      if (graphQueue?.add) {
+        graphQueue.add('graph.enrich', { tenantId, repoId, sha, changedFiles });
+      }
       docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName });
       return { ok: true };
     }

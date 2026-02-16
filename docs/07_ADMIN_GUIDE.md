@@ -118,6 +118,23 @@ Graphfly supports a pluggable AST engine for AST‑grade extraction. Configure:
 
 Operational constraint:
 - In `GRAPHFLY_MODE=prod`, if an AST engine is requested but unavailable, the index job **fails fast** (prevents silently indexing at lower fidelity).
+
+### 2.6C Graph enrichment agent (recommended)
+
+Graphfly can run a post-index **graph enrichment agent** to create non-canonical annotations (e.g., `flow_summary`) that improve docs/support usability without changing the canonical graph.
+
+Enable by running the worker:
+- `npm run worker:graph`
+
+Key env vars (guardrails):
+- `GRAPHFLY_GRAPH_AGENT_MAX_TURNS` (default 12)
+- `GRAPHFLY_GRAPH_AGENT_MAX_TOOL_CALLS` (default 300)
+- `GRAPHFLY_GRAPH_AGENT_MAX_ENTRYPOINTS` (default 25)
+- `GRAPHFLY_GRAPH_AGENT_MAX_DEPTH` (default 4)
+
+Optional (LLM-backed) mode:
+- `OPENCLAW_GATEWAY_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_MODEL`
+- If not configured, Graphfly uses a deterministic local policy so enrichment remains reproducible and testable.
 - In dev, Graphfly records an `index_diagnostic` and falls back to deterministic adapters.
 
 ### 2.7 Docs sync fence (recommended)

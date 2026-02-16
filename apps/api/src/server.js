@@ -165,6 +165,7 @@ async function gitCloneAuthForOrg({ tenantId, org }) {
 // Queue: in-memory for dev/tests; Postgres-backed when configured (durable).
 const indexQueue = await createQueueFromEnv({ queueName: 'index' });
 const docQueue = await createQueueFromEnv({ queueName: 'doc' });
+const graphQueue = await createQueueFromEnv({ queueName: 'graph' });
 const docsRepoFullName = process.env.DOCS_REPO_FULL_NAME ?? 'org/docs';
 const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
 const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
@@ -181,12 +182,20 @@ const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
         installationId: docsInstallId
       });
 };
-const indexerWorker = createIndexerWorker({ store, docQueue, docStore });
+const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue });
 const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage });
 
 async function maybeDrainOnce() {
-  if (typeof indexQueue?.drain !== 'function' || typeof docQueue?.drain !== 'function') return;
+  if (typeof indexQueue?.drain !== 'function' || typeof docQueue?.drain !== 'function' || typeof graphQueue?.drain !== 'function') return;
   for (const j of indexQueue.drain()) await indexerWorker.handle(j);
+  // Graph enrichment runs after indexing; it uses the same graph store and is safe to run in-process for dev/tests.
+  // Avoids the need for a separate worker in local mode.
+  for (const j of graphQueue.drain()) {
+    // Lazy import to keep API server startup light.
+    const { createGraphAgentWorker } = await import('../../../workers/graph-agent/src/graph-agent-worker.js');
+    const graphWorker = createGraphAgentWorker({ store });
+    await graphWorker.handle({ payload: j.payload });
+  }
   for (const j of docQueue.drain()) await docWorker.handle({ payload: j.payload });
 }
 
@@ -887,6 +896,23 @@ router.get('/graph/edge-occurrences', async (req) => {
   }
   const occurrences = await store.listEdgeOccurrencesForEdge({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid });
   return { status: 200, body: { occurrences } };
+});
+
+router.get('/graph/annotations', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const symbolUid = req.query.symbolUid ?? null;
+  const limit = Number(req.query.limit ?? 200);
+  if (symbolUid && typeof store.listGraphAnnotationsBySymbolUid === 'function') {
+    return { status: 200, body: { annotations: await store.listGraphAnnotationsBySymbolUid({ tenantId, repoId, symbolUid }) } };
+  }
+  if (typeof store.listGraphAnnotations === 'function') {
+    return {
+      status: 200,
+      body: { annotations: await store.listGraphAnnotations({ tenantId, repoId, limit: Number.isFinite(limit) ? Math.trunc(limit) : 200 }) }
+    };
+  }
+  return { status: 200, body: { annotations: [] } };
 });
 
 router.get('/contracts/get', async (req) => {

@@ -15,6 +15,7 @@
     "dev:web": "node apps/web/dev-server.js",
     "worker:indexer": "node workers/indexer/src/queue-runner.js",
     "worker:doc": "node workers/doc-agent/src/queue-runner.js",
+    "worker:graph": "node workers/graph-agent/src/queue-runner.js",
     "local:run": "node apps/cli/src/graphfly.js local-run",
     "pg:migrate": "node apps/cli/src/graphfly.js pg-migrate",
     "index:mock": "node workers/indexer/src/mock-indexer.js",

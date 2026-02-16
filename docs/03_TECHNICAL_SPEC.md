@@ -1085,6 +1085,31 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 - Analyzer must not execute customer code.
 - Analyzer must not emit source code bodies/snippets into persisted product data.
 
+---
+
+### 2.6 Graph Enrichment Agent (Non-Canonical)
+
+Graphfly includes an **agentic enrichment loop** that iteratively explores the already-ingested Code Intelligence Graph and writes **non-canonical** annotations that improve usability (docs, support, semantic retrieval) without weakening correctness.
+
+**Key principle: do not mix inference with facts**
+- **Canonical graph** (nodes/edges/edge_occurrences) is produced only by deterministic parsing/resolution (AST/compiler + resolvers).
+- **Enrichment annotations** are derived and/or inferred summaries and MUST be stored separately so “ground truth” queries remain correct.
+
+**What enrichment writes**
+- `flow_summary` annotations for detected entrypoints (routes/jobs/CLI), grounded in `flows_trace` evidence.
+- Optional symbol summaries/tags (future), grounded in contract fields + graph neighborhoods.
+
+**Persistence**
+- Enrichment is stored in `graph_annotations` keyed by `(tenant_id, repo_id, symbol_uid, annotation_type)`.
+- Annotation payloads are structured JSON (`payload`) plus optional human text (`content`).
+- Annotations may also store embeddings in pgvector for fast retrieval (HNSW), but must not embed code bodies/snippets.
+
+**Agent loop guardrails (hard requirements)**
+- **Hard turn limit** (`maxTurns`) and **hard tool-call budget** (max tool invocations per run).
+- **Bounded exploration**: max entrypoints, max depth, max nodes surfaced per tool response.
+- **No code bodies by default**: tools provide contracts + evidence pointers; enrichment rejects code fences.
+- **Deterministic fallback**: if an LLM gateway is not configured, Graphfly runs a deterministic enrichment policy to keep behavior testable and stable.
+
 ## 3. REST API Specification
 
 ### 3.1 Authentication

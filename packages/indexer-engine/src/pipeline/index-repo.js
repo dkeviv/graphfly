@@ -197,6 +197,35 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     yield rec;
   }
 
+  // Precompute exports for JS/TS files when the AST engine supports it.
+  // This enables stable import/call resolution independent of file traversal order.
+  if (astEngine && typeof astEngine.precomputeExports === 'function') {
+    for (const absFile of sourceFiles) {
+      const filePath = rel(absRoot, absFile);
+      const kind = classify(filePath);
+      if (kind !== 'source:js') continue;
+      try {
+        const text = fs.readFileSync(absFile, 'utf8');
+        const lines = text.split('\n');
+        const language = jsLikeLanguageForFile(filePath);
+        const res = astEngine.parse({ filePath, language, text });
+        if (!res?.ok) continue;
+        const byName = astEngine.precomputeExports({
+          filePath,
+          language,
+          ast: res.ast,
+          lines,
+          sha,
+          containerUid: fileToUid.get(filePath) ?? null
+        });
+        if (byName && typeof byName.get === 'function') exportedByFile.set(filePath, byName);
+      } catch (e) {
+        // Non-fatal: extraction will still work; call graph may be less complete.
+        yield emitParseError({ filePath, phase: 'precompute_exports', err: e });
+      }
+    }
+  }
+
   // Manifests + declared deps.
   for (const absManifest of manifestFiles) {
     const filePath = rel(absRoot, absManifest);

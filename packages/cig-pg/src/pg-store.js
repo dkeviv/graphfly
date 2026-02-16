@@ -287,6 +287,83 @@ export class PgGraphStore {
     }));
   }
 
+  async upsertGraphAnnotation({ tenantId, repoId, annotation }) {
+    if (!annotation || typeof annotation !== 'object') throw new Error('annotation must be an object');
+    const symbolUid = annotation.symbol_uid ?? annotation.symbolUid;
+    const annotationType = annotation.annotation_type ?? annotation.annotationType;
+    if (typeof symbolUid !== 'string' || symbolUid.length === 0) throw new Error('annotation.symbol_uid required');
+    if (typeof annotationType !== 'string' || annotationType.length === 0) throw new Error('annotation.annotation_type required');
+    const payload = annotation.payload ?? null;
+    const content = typeof annotation.content === 'string' ? annotation.content : null;
+    const embeddingText = typeof annotation.embedding_text === 'string' ? annotation.embedding_text : annotation.embeddingText ?? null;
+    const embedding = Array.isArray(annotation.embedding) ? annotation.embedding : null;
+    const firstSeenSha = annotation.first_seen_sha ?? annotation.firstSeenSha ?? 'mock';
+    const lastSeenSha = annotation.last_seen_sha ?? annotation.lastSeenSha ?? firstSeenSha;
+
+    await this._ensureOrgRepo({ tenantId, repoId });
+    await this._c.query(
+      `INSERT INTO graph_annotations (
+         tenant_id, repo_id, symbol_uid, annotation_type, payload, content, embedding, embedding_text, first_seen_sha, last_seen_sha, created_at, updated_at
+       ) VALUES (
+         $1, $2, $3, $4, $5::jsonb, $6, $7::vector, $8, $9, $10, now(), now()
+       )
+       ON CONFLICT (tenant_id, repo_id, symbol_uid, annotation_type) DO UPDATE SET
+         payload=EXCLUDED.payload,
+         content=EXCLUDED.content,
+         embedding=EXCLUDED.embedding,
+         embedding_text=EXCLUDED.embedding_text,
+         last_seen_sha=EXCLUDED.last_seen_sha,
+         updated_at=now()`,
+      [tenantId, repoId, symbolUid, annotationType, payload ? JSON.stringify(payload) : null, content, embedding, embeddingText, firstSeenSha, lastSeenSha]
+    );
+  }
+
+  async listGraphAnnotations({ tenantId, repoId, limit = 500 }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const rows = await this._c.query(
+      `SELECT symbol_uid, annotation_type, payload, content, embedding_text, first_seen_sha, last_seen_sha, created_at, updated_at
+       FROM graph_annotations
+       WHERE tenant_id=$1 AND repo_id=$2
+       ORDER BY updated_at DESC
+       LIMIT $3`,
+      [tenantId, repoId, limit]
+    );
+    return rows.rows.map((r) => ({
+      symbol_uid: r.symbol_uid,
+      annotation_type: r.annotation_type,
+      payload: r.payload ?? null,
+      content: r.content ?? null,
+      embedding_text: r.embedding_text ?? null,
+      first_seen_sha: r.first_seen_sha,
+      last_seen_sha: r.last_seen_sha,
+      created_at: r.created_at,
+      updated_at: r.updated_at
+    }));
+  }
+
+  async listGraphAnnotationsBySymbolUid({ tenantId, repoId, symbolUid }) {
+    if (typeof symbolUid !== 'string' || symbolUid.length === 0) throw new Error('symbolUid is required');
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const rows = await this._c.query(
+      `SELECT symbol_uid, annotation_type, payload, content, embedding_text, first_seen_sha, last_seen_sha, created_at, updated_at
+       FROM graph_annotations
+       WHERE tenant_id=$1 AND repo_id=$2 AND symbol_uid=$3
+       ORDER BY updated_at DESC`,
+      [tenantId, repoId, symbolUid]
+    );
+    return rows.rows.map((r) => ({
+      symbol_uid: r.symbol_uid,
+      annotation_type: r.annotation_type,
+      payload: r.payload ?? null,
+      content: r.content ?? null,
+      embedding_text: r.embedding_text ?? null,
+      first_seen_sha: r.first_seen_sha,
+      last_seen_sha: r.last_seen_sha,
+      created_at: r.created_at,
+      updated_at: r.updated_at
+    }));
+  }
+
   async semanticSearch({ tenantId, repoId, query, limit = 10 }) {
     await this._ensureOrgRepo({ tenantId, repoId });
     const q = String(query ?? '').trim();
