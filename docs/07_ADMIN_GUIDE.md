@@ -158,8 +158,11 @@ Graphfly supports a Tree-sitter AST engine for **consistent multi-language symbo
 Enable:
 - `GRAPHFLY_AST_ENGINE=treesitter`
 
+SaaS default (prod):
+- When `GRAPHFLY_MODE=prod` and `GRAPHFLY_AST_ENGINE` is unset, Graphfly defaults to `treesitter`.
+
 Recommended enforcement (prod):
-- `GRAPHFLY_AST_REQUIRED=1` (fails fast if Tree-sitter is unavailable)
+- `GRAPHFLY_AST_REQUIRED=1` (fails fast if Tree-sitter is unavailable; prevents silent downgrade)
 
 Operational verification:
 - `node apps/cli/src/graphfly.js treesitter-check`
