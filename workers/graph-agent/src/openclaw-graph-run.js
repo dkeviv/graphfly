@@ -1,6 +1,39 @@
 import { runOpenClawToolLoop } from '../../../packages/openclaw-client/src/openresponses.js';
 import { embedText384 } from '../../../packages/cig/src/embedding.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
+import { sanitizeNodeForMode, GraphflyMode } from '../../../packages/security/src/safe-mode.js';
+import http from 'node:http';
+import https from 'node:https';
+
+function truncateString(s, maxLen) {
+  const str = String(s ?? '');
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen) + '…';
+}
+
+function looksLikeCodeBody(s) {
+  const str = String(s ?? '');
+  if (str.includes('```')) return true;
+  if (str.length < 240) return false;
+  const newlines = (str.match(/\n/g) ?? []).length;
+  const braces = (str.match(/[{}]/g) ?? []).length;
+  const semis = (str.match(/;/g) ?? []).length;
+  return newlines >= 3 && braces >= 2 && semis >= 2;
+}
+
+function sanitizeJsonValue(value, { maxString = 2000 } = {}) {
+  if (typeof value === 'string') {
+    if (looksLikeCodeBody(value)) return '[REDACTED_CODE_LIKE]';
+    return truncateString(value, maxString);
+  }
+  if (Array.isArray(value)) return value.map((v) => sanitizeJsonValue(v, { maxString }));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = sanitizeJsonValue(v, { maxString });
+    return out;
+  }
+  return value;
+}
 
 function clampInt(x, { min, max, fallback }) {
   const n = Number(x);
@@ -158,6 +191,8 @@ export async function runGraphEnrichmentWithOpenClaw({
   const maxEntrypoints = clampInt(process.env.GRAPHFLY_GRAPH_AGENT_MAX_ENTRYPOINTS ?? 25, { min: 1, max: 200, fallback: 25 });
   const maxDepth = clampInt(process.env.GRAPHFLY_GRAPH_AGENT_MAX_DEPTH ?? 4, { min: 1, max: 10, fallback: 4 });
   const maxToolCalls = clampInt(process.env.GRAPHFLY_GRAPH_AGENT_MAX_TOOL_CALLS ?? 300, { min: 10, max: 5000, fallback: 300 });
+  const maxTraceNodes = clampInt(process.env.GRAPHFLY_GRAPH_AGENT_MAX_TRACE_NODES ?? 200, { min: 10, max: 5000, fallback: 200 });
+  const maxTraceEdges = clampInt(process.env.GRAPHFLY_GRAPH_AGENT_MAX_TRACE_EDGES ?? 300, { min: 10, max: 10_000, fallback: 300 });
 
   let toolCalls = 0;
   function guardTool(handler) {
@@ -166,6 +201,92 @@ export async function runGraphEnrichmentWithOpenClaw({
       if (toolCalls > maxToolCalls) throw new Error(`graph_agent_tool_budget_exceeded: maxToolCalls=${maxToolCalls}`);
       return handler(args);
     };
+  }
+
+  async function safeTrace({ startSymbolUid, depth }) {
+    const t = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
+    const nodes = Array.isArray(t.nodes) ? t.nodes : [];
+    const edges = Array.isArray(t.edges) ? t.edges : [];
+
+    const safeNodes = nodes.map((n) => sanitizeNodeForMode(n, GraphflyMode.SUPPORT_SAFE));
+    const safeEdges = edges.map((e) => ({
+      sourceSymbolUid: e.source_symbol_uid,
+      targetSymbolUid: e.target_symbol_uid,
+      edgeType: e.edge_type,
+      metadata: e.metadata ? sanitizeJsonValue(e.metadata, { maxString: 500 }) : null
+    }));
+
+    const truncated = safeNodes.length > maxTraceNodes || safeEdges.length > maxTraceEdges;
+    return sanitizeJsonValue(
+      {
+        startSymbolUid,
+        depth: t.depth,
+        truncated,
+        nodesTotal: safeNodes.length,
+        edgesTotal: safeEdges.length,
+        nodes: safeNodes.slice(0, maxTraceNodes),
+        edges: safeEdges.slice(0, maxTraceEdges)
+      },
+      { maxString: 2000 }
+    );
+  }
+
+  function makeRetryingRequestJson(baseRequestJson, { maxAttempts = 4, baseMs = 300, maxMs = 10_000 } = {}) {
+    return async (args) => {
+      let last = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const res = await baseRequestJson(args);
+          last = res;
+          const status = res?.status ?? 0;
+          if (status === 429 || (status >= 500 && status < 600)) {
+            if (attempt === maxAttempts) return res;
+            const backoff = Math.min(maxMs, baseMs * 2 ** (attempt - 1));
+            await new Promise((r) => setTimeout(r, backoff));
+            continue;
+          }
+          return res;
+        } catch (e) {
+          last = { status: 0, json: null, text: String(e?.message ?? e) };
+          if (attempt === maxAttempts) throw e;
+          const backoff = Math.min(maxMs, baseMs * 2 ** (attempt - 1));
+          await new Promise((r) => setTimeout(r, backoff));
+        }
+      }
+      return last;
+    };
+  }
+
+  function httpRequestJson({ url, method, headers, body }) {
+    return new Promise((resolve, reject) => {
+      const u = new URL(url);
+      const lib = u.protocol === 'https:' ? https : http;
+      const req = lib.request(
+        {
+          method,
+          hostname: u.hostname,
+          port: u.port || (u.protocol === 'https:' ? 443 : 80),
+          path: u.pathname + u.search,
+          headers
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch {
+              // ignore
+            }
+            resolve({ status: res.statusCode ?? 0, json, text });
+          });
+        }
+      );
+      req.on('error', reject);
+      req.end(body ? JSON.stringify(body) : undefined);
+    });
   }
 
   const tools = [
@@ -189,8 +310,7 @@ export async function runGraphEnrichmentWithOpenClaw({
       },
       handler: guardTool(async ({ startSymbolUid, depth = 3 }) => {
         const d = clampInt(depth, { min: 0, max: 10, fallback: 3 });
-        const t = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth: d });
-        return t;
+        return safeTrace({ startSymbolUid, depth: d });
       })
     },
     {
@@ -234,7 +354,9 @@ export async function runGraphEnrichmentWithOpenClaw({
       handler: guardTool(async ({ symbolUid, annotationType, payload = null, content = null, sha }) => {
         const v = validateAnnotationContent(content ?? '');
         if (!v.ok) throw new Error(`graph_annotation_invalid:${v.reason}`);
-        const embeddingText = typeof content === 'string' && content.length > 0 ? content : JSON.stringify(payload ?? {});
+        const safePayload = payload ? sanitizeJsonValue(payload, { maxString: 2000 }) : null;
+        const safeContent = content ? sanitizeJsonValue(content, { maxString: 4000 }) : null;
+        const embeddingText = typeof safeContent === 'string' && safeContent.length > 0 ? safeContent : JSON.stringify(safePayload ?? {});
         await Promise.resolve(
           store.upsertGraphAnnotation?.({
             tenantId,
@@ -242,8 +364,8 @@ export async function runGraphEnrichmentWithOpenClaw({
             annotation: {
               symbol_uid: symbolUid,
               annotation_type: annotationType,
-              payload,
-              content,
+              payload: safePayload,
+              content: safeContent,
               embedding_text: embeddingText,
               embedding: embedText384(embeddingText),
               first_seen_sha: sha,
@@ -260,17 +382,20 @@ export async function runGraphEnrichmentWithOpenClaw({
   const token = openclaw?.token ?? process.env.OPENCLAW_TOKEN ?? '';
   const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
 
-  const requestJson =
-    gatewayUrl && token
-      ? undefined
-      : makeLocalGraphAgentGateway({
-          tenantId,
-          repoId,
-          store,
-          triggerSha,
-          maxEntrypoints,
-          maxDepth
-        });
+  const requestJson = gatewayUrl && token
+    ? makeRetryingRequestJson(httpRequestJson, {
+        maxAttempts: clampInt(process.env.GRAPHFLY_GRAPH_AGENT_HTTP_MAX_ATTEMPTS ?? 4, { min: 1, max: 10, fallback: 4 }),
+        baseMs: clampInt(process.env.GRAPHFLY_GRAPH_AGENT_HTTP_RETRY_BASE_MS ?? 300, { min: 50, max: 5000, fallback: 300 }),
+        maxMs: clampInt(process.env.GRAPHFLY_GRAPH_AGENT_HTTP_RETRY_MAX_MS ?? 10_000, { min: 500, max: 60_000, fallback: 10_000 })
+      })
+    : makeLocalGraphAgentGateway({
+        tenantId,
+        repoId,
+        store,
+        triggerSha,
+        maxEntrypoints,
+        maxDepth
+      });
 
   const instructions =
     'You are Graphfly Graph Agent. Build evidence-backed enrichment annotations from the Code Intelligence Graph.\n' +
@@ -288,6 +413,6 @@ export async function runGraphEnrichmentWithOpenClaw({
     user: { tenantId, repoId },
     tools,
     maxTurns,
-    requestJson: requestJson ? async ({ url, method, headers, body }) => requestJson({ body }) : undefined
+    requestJson: async ({ url, method, headers, body }) => (!gatewayUrl || !token ? requestJson({ body }) : requestJson({ url, method, headers, body }))
   });
 }

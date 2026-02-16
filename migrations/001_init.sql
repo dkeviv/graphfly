@@ -283,6 +283,21 @@ CREATE INDEX IF NOT EXISTS idx_geo_edge ON graph_edge_occurrences(tenant_id, rep
 CREATE INDEX IF NOT EXISTS idx_geo_file ON graph_edge_occurrences(tenant_id, repo_id, file_path);
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- AGENT LOCKS (lane serialization for agent runs)
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS agent_locks (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    lock_name       TEXT NOT NULL,
+    lock_token      UUID NOT NULL,
+    locked_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    lock_expires_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, repo_id, lock_name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_locks_repo ON agent_locks(tenant_id, repo_id, lock_name);
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- GRAPH ANNOTATIONS (agent enrichment; non-canonical)
 -- ═══════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS graph_annotations (
@@ -527,6 +542,7 @@ ALTER TABLE usage_counters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_nodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_edge_occurrences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_locks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_annotations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE flow_entrypoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE flow_graphs ENABLE ROW LEVEL SECURITY;
@@ -554,6 +570,7 @@ ALTER TABLE usage_counters FORCE ROW LEVEL SECURITY;
 ALTER TABLE graph_nodes FORCE ROW LEVEL SECURITY;
 ALTER TABLE graph_edges FORCE ROW LEVEL SECURITY;
 ALTER TABLE graph_edge_occurrences FORCE ROW LEVEL SECURITY;
+ALTER TABLE agent_locks FORCE ROW LEVEL SECURITY;
 ALTER TABLE graph_annotations FORCE ROW LEVEL SECURITY;
 ALTER TABLE flow_entrypoints FORCE ROW LEVEL SECURITY;
 ALTER TABLE flow_graphs FORCE ROW LEVEL SECURITY;
@@ -621,6 +638,10 @@ CREATE POLICY tenant_isolation_graph_edges ON graph_edges
 
 DROP POLICY IF EXISTS tenant_isolation_graph_edge_occurrences ON graph_edge_occurrences;
 CREATE POLICY tenant_isolation_graph_edge_occurrences ON graph_edge_occurrences
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_agent_locks ON agent_locks;
+CREATE POLICY tenant_isolation_agent_locks ON agent_locks
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_graph_annotations ON graph_annotations;

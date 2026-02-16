@@ -1,4 +1,5 @@
 import { assert, isPlainObject } from './types.js';
+import { sanitizeAnnotationForPersistence } from './no-code.js';
 
 function key({ tenantId, repoId }) {
   return `${tenantId}::${repoId}`;
@@ -199,7 +200,8 @@ export class InMemoryGraphStore {
     if (!this._annotationsByRepo.has(repoKey)) this._annotationsByRepo.set(repoKey, new Map());
     const k = `${annotation.symbol_uid}::${annotation.annotation_type}`;
     const existing = this._annotationsByRepo.get(repoKey).get(k);
-    this._annotationsByRepo.get(repoKey).set(k, existing ? { ...existing, ...annotation } : annotation);
+    const next = existing ? { ...existing, ...annotation } : annotation;
+    this._annotationsByRepo.get(repoKey).set(k, sanitizeAnnotationForPersistence(next));
   }
 
   listGraphAnnotations({ tenantId, repoId }) {

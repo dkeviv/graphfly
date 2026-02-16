@@ -1,6 +1,7 @@
 import { parseNdjsonText } from './parse.js';
 import { parseNdjsonStream } from './stream.js';
 import { validateEdgeOccurrenceRecord, validateEdgeRecord, validateNodeRecord } from '../../cig/src/validate.js';
+import { sanitizeEdgeForPersistence, sanitizeNodeForPersistence } from '../../cig/src/no-code.js';
 
 function assertRecordShape(record) {
   if (!record || typeof record !== 'object') throw new Error('invalid ndjson record');
@@ -14,18 +15,21 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
     for (const record of parseNdjsonText(ndjsonText)) {
       assertRecordShape(record);
       if (record.type === 'node') {
+        record.data = sanitizeNodeForPersistence(record.data);
         const v = validateNodeRecord(record.data);
         if (!v.ok) throw new Error(`invalid_node:${v.reason}`);
         records.push(record);
         continue;
       }
       if (record.type === 'edge') {
+        record.data = sanitizeEdgeForPersistence(record.data);
         const v = validateEdgeRecord(record.data);
         if (!v.ok) throw new Error(`invalid_edge:${v.reason}`);
         records.push(record);
         continue;
       }
       if (record.type === 'edge_occurrence') {
+        record.data = sanitizeEdgeForPersistence(record.data);
         const v = validateEdgeOccurrenceRecord(record.data);
         if (!v.ok) throw new Error(`invalid_edge_occurrence:${v.reason}`);
         records.push(record);
@@ -52,18 +56,21 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
   for (const record of parseNdjsonText(ndjsonText)) {
     assertRecordShape(record);
     if (record.type === 'node') {
+      record.data = sanitizeNodeForPersistence(record.data);
       const v = validateNodeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_node:${v.reason}`);
       await store.upsertNode({ tenantId, repoId, node: record.data });
       continue;
     }
     if (record.type === 'edge') {
+      record.data = sanitizeEdgeForPersistence(record.data);
       const v = validateEdgeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_edge:${v.reason}`);
       await store.upsertEdge({ tenantId, repoId, edge: record.data });
       continue;
     }
     if (record.type === 'edge_occurrence') {
+      record.data = sanitizeEdgeForPersistence(record.data);
       const v = validateEdgeOccurrenceRecord(record.data);
       if (!v.ok) throw new Error(`invalid_edge_occurrence:${v.reason}`);
       await store.addEdgeOccurrence({ tenantId, repoId, occurrence: record.data });
@@ -115,14 +122,17 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
     for await (const record of parseNdjsonStream(readable)) {
       assertRecordShape(record);
       if (record.type === 'node') {
+        record.data = sanitizeNodeForPersistence(record.data);
         const v = validateNodeRecord(record.data);
         if (!v.ok) throw new Error(`invalid_node:${v.reason}`);
         batch.push(record);
       } else if (record.type === 'edge') {
+        record.data = sanitizeEdgeForPersistence(record.data);
         const v = validateEdgeRecord(record.data);
         if (!v.ok) throw new Error(`invalid_edge:${v.reason}`);
         batch.push(record);
       } else if (record.type === 'edge_occurrence') {
+        record.data = sanitizeEdgeForPersistence(record.data);
         const v = validateEdgeOccurrenceRecord(record.data);
         if (!v.ok) throw new Error(`invalid_edge_occurrence:${v.reason}`);
         batch.push(record);

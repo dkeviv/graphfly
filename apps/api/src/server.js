@@ -42,6 +42,7 @@ import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
 import { createLogger, createMetrics } from '../../../packages/observability/src/index.js';
 import { encryptString, decryptString, getSecretKeyringInfo } from '../../../packages/secrets/src/crypto.js';
+import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -166,6 +167,7 @@ async function gitCloneAuthForOrg({ tenantId, org }) {
 const indexQueue = await createQueueFromEnv({ queueName: 'index' });
 const docQueue = await createQueueFromEnv({ queueName: 'doc' });
 const graphQueue = await createQueueFromEnv({ queueName: 'graph' });
+const lockStore = await createLockStoreFromEnv();
 const docsRepoFullName = process.env.DOCS_REPO_FULL_NAME ?? 'org/docs';
 const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
 const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
@@ -193,7 +195,7 @@ async function maybeDrainOnce() {
   for (const j of graphQueue.drain()) {
     // Lazy import to keep API server startup light.
     const { createGraphAgentWorker } = await import('../../../workers/graph-agent/src/graph-agent-worker.js');
-    const graphWorker = createGraphAgentWorker({ store });
+    const graphWorker = createGraphAgentWorker({ store, lockStore });
     await graphWorker.handle({ payload: j.payload });
   }
   for (const j of docQueue.drain()) await docWorker.handle({ payload: j.payload });

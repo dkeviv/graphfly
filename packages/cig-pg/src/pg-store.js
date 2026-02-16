@@ -1,4 +1,5 @@
 import { embedText384 } from '../../cig/src/embedding.js';
+import { sanitizeAnnotationForPersistence } from '../../cig/src/no-code.js';
 
 function isNonEmptyString(v) {
   return typeof v === 'string' && v.length > 0;
@@ -289,16 +290,17 @@ export class PgGraphStore {
 
   async upsertGraphAnnotation({ tenantId, repoId, annotation }) {
     if (!annotation || typeof annotation !== 'object') throw new Error('annotation must be an object');
-    const symbolUid = annotation.symbol_uid ?? annotation.symbolUid;
-    const annotationType = annotation.annotation_type ?? annotation.annotationType;
+    const safe = sanitizeAnnotationForPersistence(annotation);
+    const symbolUid = safe.symbol_uid ?? safe.symbolUid;
+    const annotationType = safe.annotation_type ?? safe.annotationType;
     if (typeof symbolUid !== 'string' || symbolUid.length === 0) throw new Error('annotation.symbol_uid required');
     if (typeof annotationType !== 'string' || annotationType.length === 0) throw new Error('annotation.annotation_type required');
-    const payload = annotation.payload ?? null;
-    const content = typeof annotation.content === 'string' ? annotation.content : null;
-    const embeddingText = typeof annotation.embedding_text === 'string' ? annotation.embedding_text : annotation.embeddingText ?? null;
-    const embedding = Array.isArray(annotation.embedding) ? annotation.embedding : null;
-    const firstSeenSha = annotation.first_seen_sha ?? annotation.firstSeenSha ?? 'mock';
-    const lastSeenSha = annotation.last_seen_sha ?? annotation.lastSeenSha ?? firstSeenSha;
+    const payload = safe.payload ?? null;
+    const content = typeof safe.content === 'string' ? safe.content : null;
+    const embeddingText = typeof safe.embedding_text === 'string' ? safe.embedding_text : safe.embeddingText ?? null;
+    const embedding = Array.isArray(safe.embedding) ? safe.embedding : null;
+    const firstSeenSha = safe.first_seen_sha ?? safe.firstSeenSha ?? 'mock';
+    const lastSeenSha = safe.last_seen_sha ?? safe.lastSeenSha ?? firstSeenSha;
 
     await this._ensureOrgRepo({ tenantId, repoId });
     await this._c.query(

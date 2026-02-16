@@ -1,5 +1,6 @@
 import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
 import { createQueueFromEnv } from '../../../packages/stores/src/queue.js';
+import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
 import { createGraphAgentWorker } from './graph-agent-worker.js';
 
 function sleep(ms) {
@@ -11,12 +12,13 @@ async function main() {
   if (!tenantId) throw new Error('TENANT_ID is required');
 
   const store = await createGraphStoreFromEnv({ repoFullName: 'worker' });
+  const lockStore = await createLockStoreFromEnv();
   const graphQueue = await createQueueFromEnv({ queueName: 'graph' });
   if (typeof graphQueue.lease !== 'function') {
     throw new Error('queue_mode_not_supported: set GRAPHFLY_QUEUE_MODE=pg and DATABASE_URL to enable durable workers');
   }
 
-  const worker = createGraphAgentWorker({ store });
+  const worker = createGraphAgentWorker({ store, lockStore });
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -46,4 +48,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-

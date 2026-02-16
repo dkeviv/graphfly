@@ -36,9 +36,11 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         "import _ from 'lodash';",
         "import leftPad from 'left-pad';",
         "import { b } from './b';",
+        "import * as bmod from './b';",
         "import { util } from '@/util';",
         '',
         'export function callB() { return b(); }',
+        'export function callB2() { return bmod.b(); }',
         'export function callUtil() { return util(); }',
         '',
         '/**',
@@ -119,11 +121,16 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(nodes.some((n) => n.node_type === 'ApiEndpoint' && n.signature === 'GET /ping'));
       assert.ok(nodes.some((n) => n.node_type === 'Function' && n.name === 'hello' && n.file_path === 'src/mod.ts'));
       const callB = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB' && n.file_path === 'src/mod.ts');
+      const callB2 = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB2' && n.file_path === 'src/mod.ts');
       const fnB = nodes.find((n) => n.node_type === 'Function' && n.name === 'b' && n.file_path === 'src/b.ts');
-      assert.ok(callB && fnB, 'expected Function nodes callB and b');
+      assert.ok(callB && callB2 && fnB, 'expected Function nodes callB, callB2 and b');
       assert.ok(
         edges.some((e) => e.edge_type === 'Calls' && e.source_symbol_uid === callB.symbol_uid && e.target_symbol_uid === fnB.symbol_uid),
         'expected Calls edge callB -> b'
+      );
+      assert.ok(
+        edges.some((e) => e.edge_type === 'Calls' && e.source_symbol_uid === callB2.symbol_uid && e.target_symbol_uid === fnB.symbol_uid),
+        'expected Calls edge callB2 -> b (namespace import member call)'
       );
       assert.ok(
         occs.some(
@@ -134,6 +141,16 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
             o.file_path === 'src/mod.ts'
         ),
         'expected Calls edge_occurrence in src/mod.ts'
+      );
+      assert.ok(
+        occs.some(
+          (o) =>
+            o.edge_type === 'Calls' &&
+            o.source_symbol_uid === callB2.symbol_uid &&
+            o.target_symbol_uid === fnB.symbol_uid &&
+            o.file_path === 'src/mod.ts'
+        ),
+        'expected Calls edge_occurrence for callB2 in src/mod.ts'
       );
       assert.ok(nodes.some((n) => n.node_type === 'Class' && n.name === 'Greeter' && n.file_path === 'src/app.py'));
       assert.ok(nodes.some((n) => n.language === 'go' && n.name === 'Hello'));

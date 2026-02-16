@@ -4,10 +4,13 @@
 |---|---|---|---|---|
 | Repo scaffolding (apps/workers/packages) | `plan.md` + `agents.md` | N/A | DONE | `npm test` |
 | Encrypted secrets store (org-scoped) | `docs/05_SECURITY.md` | NFR-SEC-* | DONE | `npm test` |
-| GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | DONE | `npm test` (OAuth endpoints + dev token connect; repo list + project creation triggers index) |
+| Orgs + members + RBAC (JWT mode) | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md` | FR-TM-01, FR-TM-02 | DONE | `npm test` |
+| GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-GH-02 | DONE | `npm test` (OAuth endpoints + token storage; onboarding repo list + project creation triggers index) |
+| GitHub Reader App install + webhook indexing | `docs/02_REQUIREMENTS.md` | FR-GH-01, FR-GH-04, FR-CIG-02 | PARTIAL | `npm test` (install URL + callback store install id; webhook verify+dedupe; indexing uses App token when configured) |
+| GitHub Docs App install + docs-repo-only writes | `docs/02_REQUIREMENTS.md` | FR-GH-01B, FR-GH-03, FR-GH-05, FR-DOC-06 | DONE | `npm test` (docs repo verification + docs writer guard + PR creation stubbed when creds missing) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` (imports resolve to real files + tsconfig paths/baseUrl) |
 | AST engine (TypeScript AST; tree-sitter later) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | DONE | `npm test` (vendored TypeScript AST engine; JS/TS parsing uses AST by default; prod fail-fast if an unavailable AST engine is requested) |
-| Call graph (JS/TS identifier calls) + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | PARTIAL | `npm test` (Calls edges + callsite occurrences for JS/TS identifier calls; member/dynamic calls pending) |
+| Call graph (JS/TS) + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | PARTIAL | `npm test` (Calls edges + callsite occurrences for identifier calls + namespace import member calls; dynamic/member-object calls pending) |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | DONE | `npm test` |
 | Dev harness: mock indexer PCG enrichment (functions/classes + allowables/constraints) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` |
@@ -25,6 +28,7 @@
 | Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | DONE | `npm test` |
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Graph enrichment agent (flow_summary annotations) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-09, FR-CIG-11 | DONE | `npm test` (graph worker enqueued after index; annotations stored separately from canonical graph) |
+| Graph builder agent hardening (locks/retries/compaction/redaction) | `docs/03_TECHNICAL_SPEC.md` + `docs/07_ADMIN_GUIDE.md` | FR-CIG-11 | DONE | `npm test` (agent locks; HTTP/tool retry budgets; trace compaction; tool output redaction) |
 | Support-safe mode enforcement | `docs/05_SECURITY.md` | FR-CIG-11 | DONE | `npm test` |
 | Rate limiting + entitlements | `docs/02_REQUIREMENTS.md` | FR-* | DONE | `npm test` |
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | DONE | `npm test` (webhook verify+dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; billing summary reads org_billing; checkout/portal support org stripe customer id + env price ids) |
@@ -48,3 +52,11 @@
 | Security | Secrets management hardening | Keyring-based secret key rotation + rewrap endpoint; no tokens in logs; RLS verified in CI | DONE | `npm test` + CI |
 | Observability | Metrics + tracing | Structured JSON logs (API) + request IDs + Prometheus `/metrics` (token protected) + Admin dashboard | DONE | `npm test` + integration |
 | UX | One-click onboarding | Connect GitHub → pick docs repo → pick source repo → auto index + docs PR | DONE | manual QA |
+
+## Gaps (Tracked, Phase-1 Blockers)
+
+| Area | Spec Anchor | Requirement IDs | Status | Test Gate |
+|---|---|---|---|---|
+| Coverage dashboard (CIG completeness) | `docs/02_REQUIREMENTS.md` | FR-CV-01, FR-CV-02, FR-CV-03 | PENDING | `npm test` + integration |
+| Team management (member invites) | `docs/02_REQUIREMENTS.md` | FR-TM-03 | PENDING | `npm test` + integration |
+| Real-time progress streaming | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md` | FR-RT-01, FR-RT-02 | PENDING | `npm test` + integration |

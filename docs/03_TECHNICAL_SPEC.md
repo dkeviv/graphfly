@@ -323,6 +323,46 @@ CREATE TABLE flow_graph_edges (
 );
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- GRAPH ANNOTATIONS (Non-canonical enrichment)
+-- Derived summaries/tags stored separately from canonical nodes/edges.
+-- Must not contain source code bodies/snippets.
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE graph_annotations (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id     UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id       UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    symbol_uid    TEXT NOT NULL,
+    annotation_type TEXT NOT NULL, -- e.g. flow_summary
+    payload       JSONB,
+    content       TEXT,
+    embedding     vector(384),
+    embedding_text TEXT,
+    first_seen_sha TEXT NOT NULL,
+    last_seen_sha  TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, symbol_uid, annotation_type)
+);
+CREATE INDEX idx_ga_repo ON graph_annotations(tenant_id, repo_id);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- AGENT LOCKS (Lane serialization for enrichment/doc sessions)
+-- Prevents concurrent enrichment runs per (tenant, repo, lock_name).
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE agent_locks (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id   UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id     UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    lock_name   TEXT NOT NULL,
+    holder_id   TEXT NOT NULL, -- worker id / session id
+    expires_at  TIMESTAMPTZ NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, lock_name)
+);
+CREATE INDEX idx_al_repo ON agent_locks(tenant_id, repo_id);
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- DEPENDENCY & MANIFEST INTELLIGENCE
 -- Capture declared dependencies (manifests) and observed dependencies (code),
 -- without assuming either view is correct.
@@ -1084,6 +1124,7 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 **Safety constraints**
 - Analyzer must not execute customer code.
 - Analyzer must not emit source code bodies/snippets into persisted product data.
+- **No-code persistence invariant (hard requirement):** ingestion sanitizes any multi-line or code-fenced strings before persistence. If a string looks code-like (e.g., markdown fences), it is replaced with a redacted sentinel (e.g., `[REDACTED_CODE_LIKE]`). This applies to node fields (docstring/declaration/etc.), edge metadata, and non-canonical annotation payloads.
 
 ---
 
@@ -1103,12 +1144,15 @@ Graphfly includes an **agentic enrichment loop** that iteratively explores the a
 - Enrichment is stored in `graph_annotations` keyed by `(tenant_id, repo_id, symbol_uid, annotation_type)`.
 - Annotation payloads are structured JSON (`payload`) plus optional human text (`content`).
 - Annotations may also store embeddings in pgvector for fast retrieval (HNSW), but must not embed code bodies/snippets.
+- Enrichment runs are serialized with an expiring write lock in `agent_locks` (lock name: `graph_enrich`) so multiple workers cannot concurrently write annotations for the same repo.
 
 **Agent loop guardrails (hard requirements)**
 - **Hard turn limit** (`maxTurns`) and **hard tool-call budget** (max tool invocations per run).
 - **Bounded exploration**: max entrypoints, max depth, max nodes surfaced per tool response.
 - **No code bodies by default**: tools provide contracts + evidence pointers; enrichment rejects code fences.
 - **Deterministic fallback**: if an LLM gateway is not configured, Graphfly runs a deterministic enrichment policy to keep behavior testable and stable.
+- **Retry + backoff classification (loop level):** retryable failures (429/5xx/network timeouts) use bounded exponential backoff; non-retryable failures (invalid tool args/output, budget exceeded, policy violations) stop immediately and emit diagnostics.
+- **Context compaction:** graph-trace tool outputs are compacted and bounded (max nodes/edges per response) to keep token usage predictable and prevent runaway context growth.
 
 ## 3. REST API Specification
 

@@ -187,50 +187,73 @@ function extractIdentifierParamName(ts, nameNode) {
   return null;
 }
 
-function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language, containerUid = null }) {
-  const qualifiedName = `${filePath}::${name}`;
-  const signature = kind === 'class' ? `class ${name}` : `function ${name}(${params.join(', ')})`;
-  const signatureHash = computeSignatureHash({ signature });
-  const symbolUid = makeSymbolUid({ language, qualifiedName, signatureHash });
-  const embeddingText = `${qualifiedName} ${signature} ${jsdoc?.description ?? ''}`.trim();
+	function makeSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language, containerUid = null, visibility = 'internal' }) {
+	  const qualifiedName = `${filePath}::${name}`;
+	  const signature =
+	    kind === 'class'
+	      ? `class ${name}`
+	      : kind === 'method'
+	        ? `method ${name}(${params.join(', ')})`
+	        : `function ${name}(${params.join(', ')})`;
+	  const signatureHash = computeSignatureHash({ signature });
+	  const symbolUid = makeSymbolUid({ language, qualifiedName, signatureHash });
+	  const embeddingText = `${qualifiedName} ${signature} ${jsdoc?.description ?? ''}`.trim();
 
   const parameters = params.map((p) => {
     const info = jsdoc?.params?.get?.(p) ?? null;
     return { name: p, type: info?.type ?? null, optional: Boolean(info?.optional) || undefined, description: info?.description ?? null };
   });
 
-  const contract =
-    kind === 'class'
-      ? { kind: 'class', name, constructor: { parameters } }
-      : { kind: 'function', name, parameters, returns: jsdoc?.returnsType ? { type: jsdoc.returnsType } : null, description: jsdoc?.description ?? null };
+	  const contract =
+	    kind === 'class'
+	      ? { kind: 'class', name, constructor: { parameters } }
+	      : {
+	          kind: kind === 'method' ? 'method' : 'function',
+	          name,
+	          parameters,
+	          returns: jsdoc?.returnsType ? { type: jsdoc.returnsType } : null,
+	          description: jsdoc?.description ?? null
+	        };
 
   const constraints = jsdoc?.constraints && Object.keys(jsdoc.constraints).length > 0 ? jsdoc.constraints : null;
   const allowableValues = jsdoc?.allowableValues && Object.keys(jsdoc.allowableValues).length > 0 ? jsdoc.allowableValues : null;
 
-  return {
-    symbol_uid: symbolUid,
-    qualified_name: qualifiedName,
-    name,
-    node_type: kind === 'class' ? 'Class' : 'Function',
-    symbol_kind: kind === 'class' ? 'class' : 'function',
-    container_uid: containerUid,
-    file_path: filePath,
-    line_start: line,
-    line_end: line,
-    language,
-    visibility: 'public',
-    signature,
-    signature_hash: signatureHash,
-    parameters,
-    contract,
-    constraints,
-    allowable_values: allowableValues,
-    embedding_text: embeddingText,
-    embedding: embedText384(embeddingText),
-    first_seen_sha: sha ?? 'mock',
-    last_seen_sha: sha ?? 'mock'
-  };
-}
+	  return {
+	    symbol_uid: symbolUid,
+	    qualified_name: qualifiedName,
+	    name,
+	    node_type: kind === 'class' ? 'Class' : 'Function',
+	    symbol_kind: kind === 'class' ? 'class' : kind === 'method' ? 'method' : 'function',
+	    container_uid: containerUid,
+	    file_path: filePath,
+	    line_start: line,
+	    line_end: line,
+	    language,
+	    visibility,
+	    signature,
+	    signature_hash: signatureHash,
+	    parameters,
+	    contract,
+	    constraints,
+	    allowable_values: allowableValues,
+	    embedding_text: embeddingText,
+	    embedding: embedText384(embeddingText),
+	    first_seen_sha: sha ?? 'mock',
+	    last_seen_sha: sha ?? 'mock'
+	  };
+	}
+
+	function uidForDecl({ kind, name, params, filePath, language }) {
+	  const qualifiedName = `${filePath}::${name}`;
+	  const signature =
+	    kind === 'class'
+	      ? `class ${name}`
+	      : kind === 'method'
+	        ? `method ${name}(${(params ?? []).join(', ')})`
+	        : `function ${name}(${(params ?? []).join(', ')})`;
+	  const signatureHash = computeSignatureHash({ signature });
+	  return makeSymbolUid({ language, qualifiedName, signatureHash });
+	}
 
 function hasExportModifier(ts, node) {
   const mods = node?.modifiers;
@@ -297,9 +320,9 @@ function extractImportsFromAst(ts, sf) {
   return out;
 }
 
-function extractExportedDeclsFromAst(ts, sf) {
-  const decls = [];
-  for (const st of sf.statements ?? []) {
+	function extractExportedDeclsFromAst(ts, sf) {
+	  const decls = [];
+	  for (const st of sf.statements ?? []) {
     if (ts.isFunctionDeclaration(st) && st.name?.text && hasExportModifier(ts, st)) {
       const params = (st.parameters ?? [])
         .map((p) => extractIdentifierParamName(ts, p.name))
@@ -339,8 +362,96 @@ function extractExportedDeclsFromAst(ts, sf) {
       }
     }
   }
-  return decls;
-}
+	  return decls;
+	}
+
+	function isPrivateLike(ts, node) {
+	  const mods = node?.modifiers;
+	  if (!mods) return false;
+	  return mods.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword || m.kind === ts.SyntaxKind.ProtectedKeyword);
+	}
+
+	function extractTopLevelDeclsAndMethodsFromAst(ts, sf) {
+	  const decls = [];
+
+	  for (const st of sf.statements ?? []) {
+	    if (ts.isFunctionDeclaration(st) && st.name?.text) {
+	      const params = (st.parameters ?? [])
+	        .map((p) => extractIdentifierParamName(ts, p.name))
+	        .filter((x) => Boolean(x));
+	      decls.push({
+	        kind: 'function',
+	        name: st.name.text,
+	        params,
+	        line: posToLine(sf, st.getStart(sf)),
+	        isExported: hasExportModifier(ts, st),
+	        isDefault: hasDefaultModifier(ts, st),
+	        visibility: hasExportModifier(ts, st) ? 'public' : 'internal'
+	      });
+	      continue;
+	    }
+
+	    if (ts.isClassDeclaration(st) && st.name?.text) {
+	      const exported = hasExportModifier(ts, st);
+	      const classLine = posToLine(sf, st.getStart(sf));
+	      decls.push({
+	        kind: 'class',
+	        name: st.name.text,
+	        params: [],
+	        line: classLine,
+	        isExported: exported,
+	        isDefault: hasDefaultModifier(ts, st),
+	        visibility: exported ? 'public' : 'internal'
+	      });
+
+	      for (const m of st.members ?? []) {
+	        if (!ts.isMethodDeclaration(m)) continue;
+	        const mName = m.name && ts.isIdentifier(m.name) ? m.name.text : null;
+	        if (!mName) continue;
+	        const params = (m.parameters ?? [])
+	          .map((p) => extractIdentifierParamName(ts, p.name))
+	          .filter((x) => Boolean(x));
+	        const privateLike = isPrivateLike(ts, m);
+	        decls.push({
+	          kind: 'method',
+	          name: `${st.name.text}.${mName}`,
+	          methodName: mName,
+	          className: st.name.text,
+	          params,
+	          line: posToLine(sf, m.getStart(sf)),
+	          isExported: exported,
+	          isDefault: false,
+	          visibility: privateLike ? 'private' : exported ? 'public' : 'internal'
+	        });
+	      }
+	      continue;
+	    }
+
+	    if (ts.isVariableStatement(st)) {
+	      const exported = hasExportModifier(ts, st);
+	      for (const d of st.declarationList?.declarations ?? []) {
+	        const name = d.name && ts.isIdentifier(d.name) ? d.name.text : null;
+	        if (!name) continue;
+	        const init = d.initializer ?? null;
+	        const isFn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
+	        if (!isFn) continue;
+	        const params = (init.parameters ?? [])
+	          .map((p) => extractIdentifierParamName(ts, p.name))
+	          .filter((x) => Boolean(x));
+	        decls.push({
+	          kind: 'function',
+	          name,
+	          params,
+	          line: posToLine(sf, d.getStart(sf)),
+	          isExported: exported,
+	          isDefault: false,
+	          visibility: exported ? 'public' : 'internal'
+	        });
+	      }
+	    }
+	  }
+	  return decls;
+	}
 
 function parseExpressRoutes(lines) {
   const routes = [];
@@ -391,28 +502,17 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
       const sf = ts.createSourceFile(String(filePath ?? 'file.ts'), String(text ?? ''), ts.ScriptTarget.Latest, true, kind);
       return { ok: true, ast: sf, diagnostics: [] };
     },
-    precomputeExports({ filePath, language, ast, lines, sha, containerUid }) {
-      const sf = ast;
-      const decls = extractExportedDeclsFromAst(ts, sf);
-      const byName = new Map();
-      for (const d of decls) {
-        const jsdoc = parseJsDoc(findJsDocBlock(lines ?? [], Math.max(0, Number(d.line ?? 1) - 1)));
-        const node = makeExportedSymbolNode({
-          kind: d.kind,
-          name: d.name,
-          params: d.params ?? [],
-          jsdoc,
-          filePath,
-          line: d.line,
-          sha,
-          language,
-          containerUid
-        });
-        byName.set(d.name, node.symbol_uid);
-        if (d.isDefault) byName.set('default', node.symbol_uid);
-      }
-      return byName;
-    },
+	    precomputeExports({ filePath, language, ast, lines, sha, containerUid }) {
+	      const sf = ast;
+	      const decls = extractExportedDeclsFromAst(ts, sf);
+	      const byName = new Map();
+	      for (const d of decls) {
+	        const uid = uidForDecl({ kind: d.kind, name: d.name, params: d.params ?? [], filePath, language });
+	        byName.set(d.name, uid);
+	        if (d.isDefault) byName.set('default', uid);
+	      }
+	      return byName;
+	    },
     *extractRecords({
       filePath,
       language,
@@ -426,55 +526,81 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
       sourceFileExists: fileExists,
       resolveAliasImport
     }) {
-      const sourceUid = containerUid ?? null;
-      const sf = ast;
+	      const sourceUid = containerUid ?? null;
+	      const sf = ast;
 
-      const decls = extractExportedDeclsFromAst(ts, sf);
-      if (decls.length > 0) {
-        const byName = new Map();
-        for (const d of decls) {
-          const jsdoc = parseJsDoc(findJsDocBlock(lines ?? [], Math.max(0, Number(d.line ?? 1) - 1)));
-          const node = makeExportedSymbolNode({
-            kind: d.kind,
-            name: d.name,
-            params: d.params ?? [],
-            jsdoc,
-            filePath,
-            line: d.line,
-            sha,
-            language,
-            containerUid: sourceUid
-          });
-          byName.set(d.name, node.symbol_uid);
-          if (d.isDefault) byName.set('default', node.symbol_uid);
-          yield { type: 'node', data: node };
-          yield {
-            type: 'edge',
-            data: {
-              source_symbol_uid: sourceUid,
-              target_symbol_uid: node.symbol_uid,
-              edge_type: 'Defines',
-              metadata: { kind: d.kind },
-              first_seen_sha: sha,
+	      const decls = extractTopLevelDeclsAndMethodsFromAst(ts, sf);
+	      if (decls.length > 0) {
+	        const exportedByName = new Map();
+	        const localByName = new Map();
+	        const classUidByName = new Map();
+	        const methodUidByClassAndName = new Map(); // `${classUid}::${methodName}` -> methodUid
+	        const methodOwnerByUid = new Map(); // methodUid -> classUid
+	        for (const d of decls) {
+	          const jsdoc = parseJsDoc(findJsDocBlock(lines ?? [], Math.max(0, Number(d.line ?? 1) - 1)));
+	          const container =
+	            d.kind === 'method'
+	              ? classUidByName.get(d.className) ?? sourceUid
+	              : sourceUid;
+	          const nodeName = d.kind === 'method' ? d.methodName : d.name;
+	          const node = makeSymbolNode({
+	            kind: d.kind,
+	            name: nodeName,
+	            params: d.params ?? [],
+	            jsdoc,
+	            filePath,
+	            line: d.line,
+	            sha,
+	            language,
+	            containerUid: container,
+	            visibility: d.visibility ?? (d.isExported ? 'public' : 'internal')
+	          });
+	          localByName.set(d.name, node.symbol_uid);
+	          if (d.kind === 'class') classUidByName.set(d.name, node.symbol_uid);
+	          if (d.kind === 'method') {
+	            methodUidByClassAndName.set(`${container}::${d.methodName}`, node.symbol_uid);
+	            methodOwnerByUid.set(node.symbol_uid, container);
+	          }
+
+	          if (d.isExported && d.kind !== 'method') {
+	            exportedByName.set(d.name, node.symbol_uid);
+	            if (d.isDefault) exportedByName.set('default', node.symbol_uid);
+	          }
+	          yield { type: 'node', data: node };
+	          yield {
+	            type: 'edge',
+	            data: {
+	              source_symbol_uid: d.kind === 'method' ? (classUidByName.get(d.className) ?? sourceUid) : sourceUid,
+	              target_symbol_uid: node.symbol_uid,
+	              edge_type: 'Defines',
+	              metadata: { kind: d.kind },
+	              first_seen_sha: sha,
               last_seen_sha: sha
             }
           };
-          yield {
-            type: 'edge_occurrence',
-            data: {
-              source_symbol_uid: sourceUid,
-              target_symbol_uid: node.symbol_uid,
-              edge_type: 'Defines',
-              file_path: filePath,
-              line_start: d.line,
-              line_end: d.line,
-              occurrence_kind: 'other',
-              sha
-            }
-          };
-        }
-        exportedByFile?.set?.(filePath, byName);
-      }
+	          yield {
+	            type: 'edge_occurrence',
+	            data: {
+	              source_symbol_uid: d.kind === 'method' ? (classUidByName.get(d.className) ?? sourceUid) : sourceUid,
+	              target_symbol_uid: node.symbol_uid,
+	              edge_type: 'Defines',
+	              file_path: filePath,
+	              line_start: d.line,
+	              line_end: d.line,
+	              occurrence_kind: 'other',
+	              sha
+	            }
+	          };
+	        }
+	        // Only exported top-level decls are visible cross-file.
+	        exportedByFile?.set?.(filePath, exportedByName);
+
+	        // Store local symbol maps for call attribution and `this.method()` resolution.
+	        // (Not persisted; used only within this file extraction.)
+	        sf.__graphflyLocalByName = localByName;
+	        sf.__graphflyMethodByClassAndName = methodUidByClassAndName;
+	        sf.__graphflyMethodOwnerByUid = methodOwnerByUid;
+	      }
 
       for (const r of parseExpressRoutes(lines ?? [])) {
         const ep = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha, containerUid: sourceUid });
@@ -615,12 +741,16 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
       }
 
       // Call graph: conservative, deterministic resolution for identifier calls.
-      const localExports = exportedByFile?.get?.(filePath) ?? new Map();
-      function resolveCallee(name) {
-        if (!name) return null;
-        // Calls to other exported symbols in same file.
-        if (localExports.has(name)) return localExports.get(name);
-        const imp = localToImport.get(name);
+	      const localExports = exportedByFile?.get?.(filePath) ?? new Map();
+	      const localDecls = sf.__graphflyLocalByName ?? new Map();
+	      const methodByClassAndName = sf.__graphflyMethodByClassAndName ?? new Map();
+	      const methodOwnerByUid = sf.__graphflyMethodOwnerByUid ?? new Map();
+	      function resolveCallee(name) {
+	        if (!name) return null;
+	        if (localDecls.has(name)) return localDecls.get(name);
+	        // Calls to other exported symbols in same file.
+	        if (localExports.has(name)) return localExports.get(name);
+	        const imp = localToImport.get(name);
         if (!imp) return null;
         const targetFile = imp.resolvedFile;
         const importedName = imp.importedName;
@@ -646,59 +776,104 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
         return fileCallSourceUid;
       }
 
-      const callEdges = [];
-      const callOccs = [];
+	      const callEdges = [];
+	      const callOccs = [];
 
-      function recordCall({ containerUid, callee, node }) {
-        const targetUid = resolveCallee(callee);
-        if (!targetUid) return;
-        const line = posToLine(sf, node.getStart(sf));
-        callEdges.push({
-          type: 'edge',
-          data: {
-            source_symbol_uid: containerUid,
-            target_symbol_uid: targetUid,
-            edge_type: 'Calls',
-            metadata: { callee },
-            first_seen_sha: sha,
-            last_seen_sha: sha
-          }
-        });
-        callOccs.push({
-          type: 'edge_occurrence',
-          data: {
-            source_symbol_uid: containerUid,
-            target_symbol_uid: targetUid,
-            edge_type: 'Calls',
-            file_path: filePath,
-            line_start: line,
-            line_end: line,
-            occurrence_kind: 'call',
-            sha
-          }
-        });
-      }
+	      function recordResolvedCall({ containerUid, targetUid, callee, node }) {
+	        if (!targetUid) return;
+	        const line = posToLine(sf, node.getStart(sf));
+	        callEdges.push({
+	          type: 'edge',
+	          data: {
+	            source_symbol_uid: containerUid,
+	            target_symbol_uid: targetUid,
+	            edge_type: 'Calls',
+	            metadata: { callee },
+	            first_seen_sha: sha,
+	            last_seen_sha: sha
+	          }
+	        });
+	        callOccs.push({
+	          type: 'edge_occurrence',
+	          data: {
+	            source_symbol_uid: containerUid,
+	            target_symbol_uid: targetUid,
+	            edge_type: 'Calls',
+	            file_path: filePath,
+	            line_start: line,
+	            line_end: line,
+	            occurrence_kind: 'call',
+	            sha
+	          }
+	        });
+	      }
 
-      function visit(node, containerUid) {
-        if (!node) return;
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-          recordCall({ containerUid, callee: node.expression.text, node });
-        }
+	      function recordCall({ containerUid, callee, node }) {
+	        const targetUid = resolveCallee(callee);
+	        recordResolvedCall({ containerUid, targetUid, callee, node });
+	      }
 
-        // Track exported containers for attribution when we can identify them.
-        if (ts.isFunctionDeclaration(node) && hasExportModifier(ts, node)) {
-          const nextContainer = containerUidForNode(node);
-          ts.forEachChild(node, (child) => visit(child, nextContainer));
-          return;
-        }
-        if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
-          const nextContainer = containerUidForNode(node);
-          ts.forEachChild(node.initializer, (child) => visit(child, nextContainer));
-          return;
-        }
+	      function visit(node, containerUid) {
+	        if (!node) return;
+	        if (ts.isCallExpression(node)) {
+	          if (ts.isIdentifier(node.expression)) {
+	            recordCall({ containerUid, callee: node.expression.text, node });
+	          } else if (ts.isPropertyAccessExpression(node.expression) || ts.isPropertyAccessChain?.(node.expression)) {
+	            const expr = node.expression;
+	            const base = expr.expression;
+	            const member = expr.name?.text ?? null;
 
-        ts.forEachChild(node, (child) => visit(child, containerUid));
-      }
+	            // namespace import call: ns.fn()
+	            if (member && base && ts.isIdentifier(base)) {
+	              const imp = localToImport.get(base.text);
+	              if (imp?.importedName === '*') {
+	                const targets = exportedByFile?.get?.(imp.resolvedFile) ?? null;
+	                const targetUid = targets?.get?.(member) ?? null;
+	                if (targetUid) recordResolvedCall({ containerUid, targetUid, callee: member, node });
+	              }
+	            }
+
+	            // this.method() within class method: resolve to sibling method nodes.
+	            if (member && base && base.kind === ts.SyntaxKind.ThisKeyword) {
+	              const classUid = methodOwnerByUid.get(containerUid) ?? null;
+	              const sibling = classUid ? methodByClassAndName.get(`${classUid}::${member}`) ?? null : null;
+	              if (sibling) recordResolvedCall({ containerUid, targetUid: sibling, callee: member, node });
+	            }
+	          }
+	        }
+
+	        // Track containers for attribution when we can identify them.
+	        if (ts.isClassDeclaration(node) && node.name?.text) {
+	          const nextContainer = localDecls.get(node.name.text) ?? containerUid;
+	          ts.forEachChild(node, (child) => visit(child, nextContainer));
+	          return;
+	        }
+	        if (ts.isFunctionDeclaration(node) && node.name?.text) {
+	          const nextContainer = localDecls.get(node.name.text) ?? containerUidForNode(node);
+	          ts.forEachChild(node, (child) => visit(child, nextContainer));
+	          return;
+	        }
+	        if (
+	          ts.isVariableDeclaration(node) &&
+	          ts.isIdentifier(node.name) &&
+	          node.initializer &&
+	          (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+	        ) {
+	          const nextContainer = localDecls.get(node.name.text) ?? containerUidForNode(node);
+	          ts.forEachChild(node.initializer, (child) => visit(child, nextContainer));
+	          return;
+	        }
+	        if (ts.isMethodDeclaration(node) && node.name && ts.isIdentifier(node.name)) {
+	          // containerUid becomes method uid when we have it.
+	          const classUid = containerUid;
+	          const key = `${classUid}::${node.name.text}`;
+	          const nextContainer = methodByClassAndName.get(key) ?? containerUid;
+	          ts.forEachChild(node, (child) => visit(child, nextContainer));
+	          return;
+	        }
+
+	        ts.forEachChild(node, (child) => visit(child, containerUid));
+	      }
 
       for (const st of sf.statements ?? []) visit(st, fileCallSourceUid);
       for (const r of callEdges) yield r;
