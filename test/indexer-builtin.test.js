@@ -31,6 +31,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       [
         "import _ from 'lodash';",
         "import leftPad from 'left-pad';",
+        "import { b } from './b';",
         '',
         '/**',
         " * Says hello.",
@@ -41,6 +42,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         "app.get('/health', () => 'ok');"
       ].join('\n')
     );
+    write(path.join(tmp, 'src', 'b.ts'), ['export function b() { return 1; }'].join('\n'));
     write(
       path.join(tmp, 'src', 'app.py'),
       [
@@ -83,6 +85,10 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       const nodes = await store.listNodes({ tenantId: 't-1', repoId: 'r-1' });
       const edges = await store.listEdges({ tenantId: 't-1', repoId: 'r-1' });
       const mismatches = await store.listDependencyMismatches({ tenantId: 't-1', repoId: 'r-1' });
+
+      const fileB = nodes.find((n) => n.node_type === 'File' && n.file_path === 'src/b.ts');
+      assert.ok(fileB, 'expected File node for src/b.ts');
+      assert.ok(edges.some((e) => e.edge_type === 'Imports' && e.target_symbol_uid === fileB.symbol_uid), 'expected Imports edge to src/b.ts');
 
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'package.json'));
       assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'npm:lodash'));

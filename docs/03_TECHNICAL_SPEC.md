@@ -1069,6 +1069,7 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 - Languages (initial adapters): JavaScript/TypeScript, Python, Go, Rust, Java, C# (plus basic Ruby/PHP heuristics).
 - Manifests (initial adapters): `package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `composer.json`.
 - Coverage expands via modular adapters without changing the NDJSON ingestion contract.
+- Cross-file import edges must resolve to **real files** when possible (e.g., TS import `./x` resolves to `./x.ts` / `./x.tsx` / `./x/index.ts` etc) to keep impacted-node and traversal correctness.
 
 **Run structure**
 1. Resolve `(tenant_id, repo_id, sha, branch)` and clone a read-only checkout (ephemeral).

@@ -36,10 +36,20 @@ function parseExpressRoutes(lines) {
   return routes;
 }
 
-function resolveImport(fromFileRel, spec) {
+function resolveImport(fromFileRel, spec, sourceFileExists = null) {
   if (!spec.startsWith('.')) return null;
   const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFileRel), spec));
-  return `${base}.js`;
+  if (base.endsWith('.ts') || base.endsWith('.tsx') || base.endsWith('.js') || base.endsWith('.jsx')) return base;
+  const exts = ['.ts', '.tsx', '.js', '.jsx'];
+  const candidates = [];
+  for (const ext of exts) candidates.push(`${base}${ext}`);
+  for (const ext of exts) candidates.push(`${base}/index${ext}`);
+  if (typeof sourceFileExists === 'function') {
+    for (const c of candidates) {
+      if (sourceFileExists(c)) return c;
+    }
+  }
+  return candidates[0] ?? null;
 }
 
 function packageNameFromImport(spec) {
@@ -285,7 +295,7 @@ function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha
   };
 }
 
-export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid }) {
+export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const language = filePath.endsWith('.ts') || filePath.endsWith('.tsx') ? 'ts' : 'js';
   const sourceUid = containerUid ?? null;
 
@@ -383,7 +393,7 @@ export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFil
   }
 
   for (const imp of parseImports(lines)) {
-    const resolved = resolveImport(filePath, imp.spec);
+    const resolved = resolveImport(filePath, imp.spec, sourceFileExists);
     if (resolved) {
       const targetUid = makeSymbolUid({
         language,

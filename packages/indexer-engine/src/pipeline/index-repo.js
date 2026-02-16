@@ -85,6 +85,11 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     else if (kind && kind.startsWith('source:')) sourceFiles.push(abs);
   }
 
+  const sourceFileRelSet = new Set(sourceFiles.map((p) => rel(absRoot, p)));
+  function sourceFileExists(relPath) {
+    return sourceFileRelSet.has(String(relPath ?? ''));
+  }
+
   // Index diagnostics (always emitted; useful for incremental correctness visibility).
   yield {
     type: 'index_diagnostic',
@@ -104,6 +109,12 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   const packageToUid = new Map(); // package_key -> symbol_uid
   const depDeclared = new Map(); // package_key -> { ranges: Map(version_range -> Set(file_path)), declaredIn: Set(file_path), scopes: Set(scope) }
   const depObserved = new Map(); // package_key -> Set(file_path)
+
+  function jsLikeLanguageForFile(filePath) {
+    const p = String(filePath);
+    if (p.endsWith('.ts') || p.endsWith('.tsx')) return 'ts';
+    return 'js';
+  }
 
   function trackRecord(record) {
     if (!record || typeof record !== 'object') return;
@@ -150,7 +161,9 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
                   ? 'ruby'
                   : kind === 'source:php'
                     ? 'php'
-                    : languageHint ?? 'js';
+                    : kind === 'source:js'
+                      ? jsLikeLanguageForFile(filePath)
+                      : languageHint ?? 'js';
     const node = makeFileNode({ filePath, language: lang, sha });
     fileToUid.set(filePath, node.symbol_uid);
     const rec = { type: 'node', data: node };
@@ -204,7 +217,7 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     const kind = classify(filePath);
     try {
       if (kind === 'source:python') {
-        for (const record of parsePythonFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+        for (const record of parsePythonFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           trackRecord(record);
           yield record;
         }
@@ -239,7 +252,7 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
           yield record;
         }
       } else {
-        for (const record of parseJsFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+        for (const record of parseJsFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           trackRecord(record);
           yield record;
         }

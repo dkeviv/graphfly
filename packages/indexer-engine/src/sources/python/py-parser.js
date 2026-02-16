@@ -151,7 +151,7 @@ function makeExportedSymbolNode({ kind, name, params, filePath, line, sha, conta
   };
 }
 
-export function* parsePythonFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid }) {
+export function* parsePythonFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const sourceUid = containerUid ?? null;
 
   for (const d of parsePyPublicDecls(lines)) {
