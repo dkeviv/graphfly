@@ -1058,6 +1058,17 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 - **Strict contracts**: analyzer output must be NDJSON with forward-compatible record types.
 - **Bounded execution**: timeouts, memory caps (where supported), and hard kill on hang.
 - **Idempotent ingest**: upserts + unique constraints prevent duplicate edges; occurrences are deduped by `(edge_id, file_path, line_start, line_end)`.
+- **Fault isolation**: a single file parse failure must not fail the whole indexing job; emit per-file diagnostics and continue.
+
+**Parsing strategy (AST vs LLM/agent)**
+- The graph builder uses **deterministic parsing** to extract syntactic truth: symbols, imports, declarations, and reference sites (edge occurrences).
+- LLM/agent logic is **not** trusted for syntactic extraction because it is probabilistic and can hallucinate or miss edge cases.
+- LLM/agent logic is used later for **semantic enrichment** and doc generation, and must be grounded in evidence (graph node + file path + line ranges + SHA).
+
+**Language & manifest coverage (V1 built-in analyzer)**
+- Languages (initial adapters): JavaScript/TypeScript, Python, Go, Rust, Java, C# (plus basic Ruby/PHP heuristics).
+- Manifests (initial adapters): `package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `composer.json`.
+- Coverage expands via modular adapters without changing the NDJSON ingestion contract.
 
 **Run structure**
 1. Resolve `(tenant_id, repo_id, sha, branch)` and clone a read-only checkout (ephemeral).

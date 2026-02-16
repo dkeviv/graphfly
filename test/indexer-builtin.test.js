@@ -20,6 +20,10 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       path.join(tmp, 'package.json'),
       JSON.stringify({ name: 'x', version: '1.0.0', dependencies: { lodash: '^4.17.0' } }, null, 2)
     );
+    write(path.join(tmp, 'go.mod'), ['module example.com/foo', '', 'require (', '  github.com/gin-gonic/gin v1.9.1', ')'].join('\n'));
+    write(path.join(tmp, 'Cargo.toml'), ['[package]', 'name="foo"', '', '[dependencies]', 'serde = "1.0"'].join('\n'));
+    write(path.join(tmp, 'requirements.txt'), ['fastapi==0.100.0', 'requests>=2.0'].join('\n'));
+    write(path.join(tmp, 'composer.json'), JSON.stringify({ require: { 'monolog/monolog': '^3.0' } }, null, 2));
     write(
       path.join(tmp, 'src', 'mod.ts'),
       [
@@ -48,6 +52,15 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         '    pass'
       ].join('\n')
     );
+    write(
+      path.join(tmp, 'src', 'main.go'),
+      ['package main', 'import "github.com/gin-gonic/gin"', 'func Hello() {}', 'type Thing struct {}'].join('\n')
+    );
+    write(path.join(tmp, 'src', 'lib.rs'), ['use serde::Serialize;', 'pub fn hi() {}', 'pub struct S {}'].join('\n'));
+    write(path.join(tmp, 'src', 'A.java'), ['package a;', 'public class A { public void m() {} }'].join('\n'));
+    write(path.join(tmp, 'src', 'B.cs'), ['using System;', 'public class B { public void M() {} }'].join('\n'));
+    write(path.join(tmp, 'src', 'c.rb'), ['require \"json\"', 'class C; end', 'def f; end'].join('\n'));
+    write(path.join(tmp, 'src', 'd.php'), ['<?php', 'class D {}', 'function f() {}'].join('\n'));
 
     const prevCmd = process.env.GRAPHFLY_INDEXER_CMD;
     const prevMode = process.env.GRAPHFLY_INDEXER_MODE;
@@ -69,10 +82,24 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
 
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'package.json'));
       assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'npm:lodash'));
+      assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'go.mod'));
+      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'go:github.com/gin-gonic/gin'));
+      assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'Cargo.toml'));
+      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'cargo:serde'));
+      assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'requirements.txt'));
+      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'pypi:fastapi'));
+      assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'composer.json'));
+      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'composer:monolog/monolog'));
       assert.ok(nodes.some((n) => n.node_type === 'ApiEndpoint' && n.signature === 'GET /health'));
       assert.ok(nodes.some((n) => n.node_type === 'ApiEndpoint' && n.signature === 'GET /ping'));
       assert.ok(nodes.some((n) => n.node_type === 'Function' && n.name === 'hello' && n.file_path === 'src/mod.ts'));
       assert.ok(nodes.some((n) => n.node_type === 'Class' && n.name === 'Greeter' && n.file_path === 'src/app.py'));
+      assert.ok(nodes.some((n) => n.language === 'go' && n.name === 'Hello'));
+      assert.ok(nodes.some((n) => n.language === 'rust' && n.name === 'hi'));
+      assert.ok(nodes.some((n) => n.language === 'java' && n.name === 'A'));
+      assert.ok(nodes.some((n) => n.language === 'csharp' && n.name === 'B'));
+      assert.ok(nodes.some((n) => n.language === 'ruby' && n.name === 'C'));
+      assert.ok(nodes.some((n) => n.language === 'php' && n.name === 'D'));
 
       assert.ok(edges.some((e) => e.edge_type === 'UsesPackage'));
     } finally {
@@ -87,4 +114,3 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
     } catch {}
   }
 });
-
