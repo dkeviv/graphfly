@@ -18,8 +18,10 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
   try {
     write(
       path.join(tmp, 'package.json'),
-      JSON.stringify({ name: 'x', version: '1.0.0', dependencies: { lodash: '^4.17.0' } }, null, 2)
+      JSON.stringify({ name: 'x', version: '1.0.0', dependencies: { lodash: '^4.17.0', unusedpkg: '^1.0.0' } }, null, 2)
     );
+    write(path.join(tmp, 'packages', 'a', 'package.json'), JSON.stringify({ name: 'a', dependencies: { lodash: '^4.0.0' } }, null, 2));
+    write(path.join(tmp, 'packages', 'b', 'package.json'), JSON.stringify({ name: 'b', dependencies: { lodash: '^3.0.0' } }, null, 2));
     write(path.join(tmp, 'go.mod'), ['module example.com/foo', '', 'require (', '  github.com/gin-gonic/gin v1.9.1', ')'].join('\n'));
     write(path.join(tmp, 'Cargo.toml'), ['[package]', 'name="foo"', '', '[dependencies]', 'serde = "1.0"'].join('\n'));
     write(path.join(tmp, 'requirements.txt'), ['fastapi==0.100.0', 'requests>=2.0'].join('\n'));
@@ -28,6 +30,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       path.join(tmp, 'src', 'mod.ts'),
       [
         "import _ from 'lodash';",
+        "import leftPad from 'left-pad';",
         '',
         '/**',
         " * Says hello.",
@@ -79,9 +82,12 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
 
       const nodes = await store.listNodes({ tenantId: 't-1', repoId: 'r-1' });
       const edges = await store.listEdges({ tenantId: 't-1', repoId: 'r-1' });
+      const mismatches = await store.listDependencyMismatches({ tenantId: 't-1', repoId: 'r-1' });
 
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'package.json'));
       assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'npm:lodash'));
+      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'npm:left-pad'));
+      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'npm:unusedpkg'));
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'go.mod'));
       assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'go:github.com/gin-gonic/gin'));
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'Cargo.toml'));
@@ -102,6 +108,9 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(nodes.some((n) => n.language === 'php' && n.name === 'D'));
 
       assert.ok(edges.some((e) => e.edge_type === 'UsesPackage'));
+      assert.ok(mismatches.some((m) => m.mismatch_type === 'used_but_undeclared' && m.package_key === 'npm:left-pad'));
+      assert.ok(mismatches.some((m) => m.mismatch_type === 'declared_but_unused' && m.package_key === 'npm:unusedpkg'));
+      assert.ok(mismatches.some((m) => m.mismatch_type === 'version_conflict' && m.package_key === 'npm:lodash'));
     } finally {
       if (prevCmd === undefined) delete process.env.GRAPHFLY_INDEXER_CMD;
       else process.env.GRAPHFLY_INDEXER_CMD = prevCmd;

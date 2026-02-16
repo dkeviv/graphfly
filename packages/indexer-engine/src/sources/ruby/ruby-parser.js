@@ -1,6 +1,39 @@
 import { computeSignatureHash, makeSymbolUid } from '../../../../cig/src/identity.js';
 import { embedText384 } from '../../../../cig/src/embedding.js';
 
+function ensurePackageNode({ packageKey, sha, packageToUid }) {
+  if (!packageKey) return null;
+  if (packageToUid?.has?.(packageKey)) return { uid: packageToUid.get(packageKey), node: null };
+  const [ecosystem, ...rest] = String(packageKey).split(':');
+  const name = rest.join(':');
+  const qualifiedName = `${ecosystem}:${name}`;
+  const signature = `package ${qualifiedName}`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language: 'pkg', qualifiedName, signatureHash });
+  const node = {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name,
+    node_type: 'Package',
+    symbol_kind: 'package',
+    file_path: '',
+    line_start: 1,
+    line_end: 1,
+    language: 'external',
+    visibility: 'public',
+    signature,
+    signature_hash: signatureHash,
+    contract: null,
+    constraints: null,
+    allowable_values: null,
+    external_ref: { ecosystem, name },
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
+  packageToUid?.set?.(packageKey, symbolUid);
+  return { uid: symbolUid, node };
+}
+
 function parseRubyRequires(lines) {
   const req = [];
   for (let i = 0; i < lines.length; i++) {
@@ -92,34 +125,37 @@ export function* parseRubyFile({ filePath, lines, sha, containerUid, exportedByF
   for (const r of parseRubyRequires(lines)) {
     const name = r.spec.split('/')[0];
     const packageKey = `gem:${name}`;
-    if (packageToUid?.has?.(packageKey)) {
-      const pkgUid = packageToUid.get(packageKey);
-      yield { type: 'observed_dependency', data: { file_path: filePath, sha, package_key: packageKey, evidence: { require: r.spec, line: r.line } } };
-      yield {
-        type: 'edge',
-        data: {
-          source_symbol_uid: sourceUid,
-          target_symbol_uid: pkgUid,
-          edge_type: 'UsesPackage',
-          metadata: { require: r.spec },
-          first_seen_sha: sha,
-          last_seen_sha: sha
-        }
-      };
-      yield {
-        type: 'edge_occurrence',
-        data: {
-          source_symbol_uid: sourceUid,
-          target_symbol_uid: pkgUid,
-          edge_type: 'UsesPackage',
-          file_path: filePath,
-          line_start: r.line,
-          line_end: r.line,
-          occurrence_kind: 'use',
-          sha
-        }
-      };
-    }
+    const ensured = ensurePackageNode({ packageKey, sha, packageToUid });
+    if (ensured?.node) yield { type: 'node', data: ensured.node };
+    const pkgUid = ensured?.uid ?? null;
+    if (!pkgUid) continue;
+    yield {
+      type: 'observed_dependency',
+      data: { source_symbol_uid: sourceUid, file_path: filePath, sha, package_key: packageKey, evidence: { require: r.spec, line: r.line } }
+    };
+    yield {
+      type: 'edge',
+      data: {
+        source_symbol_uid: sourceUid,
+        target_symbol_uid: pkgUid,
+        edge_type: 'UsesPackage',
+        metadata: { require: r.spec },
+        first_seen_sha: sha,
+        last_seen_sha: sha
+      }
+    };
+    yield {
+      type: 'edge_occurrence',
+      data: {
+        source_symbol_uid: sourceUid,
+        target_symbol_uid: pkgUid,
+        edge_type: 'UsesPackage',
+        file_path: filePath,
+        line_start: r.line,
+        line_end: r.line,
+        occurrence_kind: 'use',
+        sha
+      }
+    };
   }
 }
-

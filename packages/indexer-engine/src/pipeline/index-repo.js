@@ -102,6 +102,34 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   const fileToUid = new Map(); // file_path -> symbol_uid
   const exportedByFile = new Map(); // file_path -> Map(name -> symbol_uid)
   const packageToUid = new Map(); // package_key -> symbol_uid
+  const depDeclared = new Map(); // package_key -> { ranges: Map(version_range -> Set(file_path)), declaredIn: Set(file_path), scopes: Set(scope) }
+  const depObserved = new Map(); // package_key -> Set(file_path)
+
+  function trackRecord(record) {
+    if (!record || typeof record !== 'object') return;
+    if (record.type === 'declared_dependency') {
+      const d = record.data ?? {};
+      const pk = String(d.package_key ?? '');
+      if (!pk) return;
+      const manifestKey = String(d.manifest_key ?? '');
+      const filePath = manifestKey.includes('::') ? manifestKey.split('::')[0] : null;
+      const versionRange = String(d.version_range ?? '*');
+      const scope = String(d.scope ?? 'prod');
+      if (!depDeclared.has(pk)) depDeclared.set(pk, { ranges: new Map(), declaredIn: new Set(), scopes: new Set() });
+      const entry = depDeclared.get(pk);
+      entry.scopes.add(scope);
+      if (filePath) entry.declaredIn.add(filePath);
+      if (!entry.ranges.has(versionRange)) entry.ranges.set(versionRange, new Set());
+      if (filePath) entry.ranges.get(versionRange).add(filePath);
+    } else if (record.type === 'observed_dependency') {
+      const o = record.data ?? {};
+      const pk = String(o.package_key ?? '');
+      const filePath = String(o.file_path ?? '');
+      if (!pk || !filePath) return;
+      if (!depObserved.has(pk)) depObserved.set(pk, new Set());
+      depObserved.get(pk).add(filePath);
+    }
+  }
 
   // Emit File nodes first.
   for (const absFile of sourceFiles) {
@@ -125,7 +153,9 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
                     : languageHint ?? 'js';
     const node = makeFileNode({ filePath, language: lang, sha });
     fileToUid.set(filePath, node.symbol_uid);
-    yield { type: 'node', data: node };
+    const rec = { type: 'node', data: node };
+    trackRecord(rec);
+    yield rec;
   }
 
   // Manifests + declared deps.
@@ -145,7 +175,10 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
               : kind === 'manifest:composer.json'
                 ? parseComposerJsonManifest(common)
                 : [];
-    for (const record of records) yield record;
+    for (const record of records) {
+      trackRecord(record);
+      yield record;
+    }
   }
 
   function emitParseError({ filePath, phase, err }) {
@@ -171,24 +204,98 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     const kind = classify(filePath);
     try {
       if (kind === 'source:python') {
-        for (const record of parsePythonFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parsePythonFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else if (kind === 'source:go') {
-        for (const record of parseGoFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parseGoFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else if (kind === 'source:rust') {
-        for (const record of parseRustFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parseRustFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else if (kind === 'source:java') {
-        for (const record of parseJavaFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parseJavaFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else if (kind === 'source:csharp') {
-        for (const record of parseCSharpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parseCSharpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else if (kind === 'source:ruby') {
-        for (const record of parseRubyFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parseRubyFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else if (kind === 'source:php') {
-        for (const record of parsePhpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parsePhpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       } else {
-        for (const record of parseJsFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) yield record;
+        for (const record of parseJsFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
+          trackRecord(record);
+          yield record;
+        }
       }
     } catch (e) {
       yield emitParseError({ filePath, phase: 'parse_source', err: e });
     }
+  }
+
+  // Dependency mismatches (declared vs observed) without assuming code or manifest is “correct”.
+  const declaredKeys = new Set(depDeclared.keys());
+  const observedKeys = new Set(depObserved.keys());
+
+  for (const pk of declaredKeys) {
+    if (observedKeys.has(pk)) continue;
+    const entry = depDeclared.get(pk);
+    yield {
+      type: 'dependency_mismatch',
+      data: {
+        mismatch_type: 'declared_but_unused',
+        package_key: pk,
+        details: {
+          declared_in_files: Array.from(entry?.declaredIn ?? []).sort(),
+          scopes: Array.from(entry?.scopes ?? []).sort(),
+          version_ranges: Array.from(entry?.ranges?.keys?.() ?? []).sort()
+        },
+        sha
+      }
+    };
+  }
+
+  for (const pk of observedKeys) {
+    if (declaredKeys.has(pk)) continue;
+    const files = Array.from(depObserved.get(pk) ?? []).sort();
+    yield {
+      type: 'dependency_mismatch',
+      data: {
+        mismatch_type: 'used_but_undeclared',
+        package_key: pk,
+        details: { observed_in_files: files },
+        sha
+      }
+    };
+  }
+
+  for (const [pk, entry] of depDeclared.entries()) {
+    const ranges = entry?.ranges;
+    if (!ranges || ranges.size <= 1) continue;
+    const details = {
+      package_key: pk,
+      version_ranges: Array.from(ranges.keys()).sort(),
+      manifests: Array.from(ranges.entries()).map(([range, files]) => ({ version_range: range, files: Array.from(files).sort() }))
+    };
+    yield {
+      type: 'dependency_mismatch',
+      data: { mismatch_type: 'version_conflict', package_key: pk, details, sha }
+    };
   }
 }
