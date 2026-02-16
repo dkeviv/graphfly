@@ -1,5 +1,6 @@
 import { computeSignatureHash, makeSymbolUid } from '../../../../cig/src/identity.js';
 import { embedText384 } from '../../../../cig/src/embedding.js';
+import path from 'node:path';
 
 function ensurePackageNode({ packageKey, sha, packageToUid }) {
   if (!packageKey) return null;
@@ -54,8 +55,8 @@ function parseRustUses(lines) {
   const uses = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    const m = line.match(/^use\s+([A-Za-z0-9_]+)::/);
-    if (m) uses.push({ crate: m[1], line: i + 1 });
+    const m = line.match(/^use\s+([A-Za-z0-9_]+)::(.+?);/);
+    if (m) uses.push({ root: m[1], path: m[2], line: i + 1 });
   }
   return uses;
 }
@@ -91,12 +92,46 @@ function makeSymbolNode({ kind, name, filePath, line, sha, containerUid }) {
   };
 }
 
-export function* parseRustFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid }) {
+function resolveRustUseToFile({ fromFilePath, useRoot, usePath, sourceFileExists }) {
+  if (typeof sourceFileExists !== 'function') return null;
+  const root = String(useRoot ?? '');
+  if (root !== 'crate' && root !== 'self' && root !== 'super') return null;
+  const cleaned = String(usePath ?? '').replaceAll('{', '').replaceAll('}', '').trim();
+  const parts = cleaned.split('::').map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+
+  // Determine a repo-relative base: prefer "src/" if present in the current file path.
+  const from = String(fromFilePath ?? '');
+  const idx = from.indexOf('src/');
+  const base = idx >= 0 ? from.slice(0, idx + 4) : '';
+  const rel = parts.join('/');
+  const candidates = [
+    path.posix.join(base, `${rel}.rs`),
+    path.posix.join(base, rel, 'mod.rs')
+  ];
+  for (const c of candidates) if (sourceFileExists(c)) return c;
+  return null;
+}
+
+function parseRustCalls(lines) {
+  const calls = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('fn ') || line.trim().startsWith('pub fn ')) continue;
+    const m = line.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+    if (m) calls.push({ name: m[1], line: i + 1 });
+  }
+  return calls;
+}
+
+export function* parseRustFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const sourceUid = containerUid ?? null;
+  const localByName = new Map();
 
   for (const d of parseRustPublicDecls(lines)) {
     const node = makeSymbolNode({ kind: d.kind, name: d.name, filePath, line: d.line, sha, containerUid: sourceUid });
     yield { type: 'node', data: node };
+    localByName.set(d.name, node.symbol_uid);
     yield {
       type: 'edge',
       data: {
@@ -126,38 +161,32 @@ export function* parseRustFile({ filePath, lines, sha, containerUid, exportedByF
   }
 
   for (const u of parseRustUses(lines)) {
-    const packageKey = `cargo:${u.crate}`;
+    const resolvedFile = resolveRustUseToFile({ fromFilePath: filePath, useRoot: u.root, usePath: u.path, sourceFileExists });
+    if (resolvedFile) {
+      const targetUid = makeSymbolUid({
+        language: 'rust',
+        qualifiedName: resolvedFile.replaceAll('/', '.'),
+        signatureHash: computeSignatureHash({ signature: `file ${resolvedFile}` })
+      });
+      yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', metadata: { use: `${u.root}::${u.path}` }, first_seen_sha: sha, last_seen_sha: sha } };
+      yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', file_path: filePath, line_start: u.line, line_end: u.line, occurrence_kind: 'import', sha } };
+      continue;
+    }
+
+    const packageKey = `cargo:${u.root}`;
     const ensured = ensurePackageNode({ packageKey, sha, packageToUid });
     if (ensured?.node) yield { type: 'node', data: ensured.node };
     const pkgUid = ensured?.uid ?? null;
     if (!pkgUid) continue;
-    yield {
-      type: 'observed_dependency',
-      data: { source_symbol_uid: sourceUid, file_path: filePath, sha, package_key: packageKey, evidence: { use_crate: u.crate, line: u.line } }
-    };
-    yield {
-      type: 'edge',
-      data: {
-        source_symbol_uid: sourceUid,
-        target_symbol_uid: pkgUid,
-        edge_type: 'UsesPackage',
-        metadata: { use_crate: u.crate },
-        first_seen_sha: sha,
-        last_seen_sha: sha
-      }
-    };
-    yield {
-      type: 'edge_occurrence',
-      data: {
-        source_symbol_uid: sourceUid,
-        target_symbol_uid: pkgUid,
-        edge_type: 'UsesPackage',
-        file_path: filePath,
-        line_start: u.line,
-        line_end: u.line,
-        occurrence_kind: 'use',
-        sha
-      }
-    };
+    yield { type: 'observed_dependency', data: { source_symbol_uid: sourceUid, file_path: filePath, sha, package_key: packageKey, evidence: { use: `${u.root}::${u.path}`, line: u.line } } };
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: pkgUid, edge_type: 'UsesPackage', metadata: { use: `${u.root}::${u.path}` }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: pkgUid, edge_type: 'UsesPackage', file_path: filePath, line_start: u.line, line_end: u.line, occurrence_kind: 'use', sha } };
+  }
+
+  for (const c of parseRustCalls(lines)) {
+    const targetUid = localByName.get(c.name) ?? null;
+    if (!targetUid) continue;
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee: c.name }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', file_path: filePath, line_start: c.line, line_end: c.line, occurrence_kind: 'call', sha } };
   }
 }

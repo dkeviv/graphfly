@@ -60,3 +60,16 @@
 | Coverage dashboard (CIG completeness) | `docs/02_REQUIREMENTS.md` | FR-CV-01, FR-CV-02, FR-CV-03 | DONE | `npm test` |
 | Team management (member invites) | `docs/02_REQUIREMENTS.md` | FR-TM-03 | DONE | `npm test` |
 | Real-time progress streaming | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md` | FR-RT-01, FR-RT-02 | DONE | `npm test` |
+
+## Code Intelligence Graph (CIG) Quality Checklist (Blockers)
+
+| Item | Spec Anchor | Requirement IDs | Status | Evidence / Gate |
+|---|---|---|---|---|
+| Call graph + per-callsite edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | DONE | `npm test` (`test/indexer-builtin.test.js`) |
+| Cross-file/module resolution (JS/TS paths, Python modules, Go module imports, basic Java/C#/Rust/Ruby/PHP internal imports) | `docs/02_REQUIREMENTS.md` | FR-CIG-04, FR-CIG-12 | DONE | `npm test` + unresolved imports dashboard |
+| Incremental indexing correctness (importer closure + impacted symbols + diagnostics) | `docs/02_REQUIREMENTS.md` | FR-CIG-02, FR-CIG-12 | DONE | `npm test` (`test/index-diagnostics.test.js`, `test/impact.test.js`) |
+| Manifest/lockfile coverage expansion (npm, Go, Rust, Python, Ruby, Java, C#/.NET, PHP; incl. common lockfiles) | `docs/02_REQUIREMENTS.md` | FR-CIG-10 | DONE | `npm test` |
+| Framework entrypoints + flow fidelity (HTTP + queue + cron across common stacks) | `docs/02_REQUIREMENTS.md` | FR-CIG-09 | DONE | `npm test` |
+| Embeddings “real path” (provider-backed ingest + query + backfill tooling; HNSW) | `docs/03_TECHNICAL_SPEC.md` + `docs/07_ADMIN_GUIDE.md` | FR-CIG-05 | DONE | `npm test` |
+| Performance + robustness hardening (file size caps, batch queries, isolation diagnostics) | `docs/06_OPERATIONS.md` + `docs/07_ADMIN_GUIDE.md` | NFR-* | DONE | `npm test` |
+| Strict “no code bodies” enforcement (sanitization + doc block validation) | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md` | FR-CIG-07, FR-CIG-11 | DONE | `npm test` (`test/no-code-persistence.test.js`) |

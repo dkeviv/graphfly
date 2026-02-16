@@ -1,5 +1,6 @@
 import { computeSignatureHash, makeSymbolUid } from '../../../../cig/src/identity.js';
 import { embedText384 } from '../../../../cig/src/embedding.js';
+import path from 'node:path';
 
 function ensurePackageNode({ packageKey, sha, packageToUid }) {
   if (!packageKey) return null;
@@ -44,6 +45,16 @@ function parsePhpUses(lines) {
   return uses;
 }
 
+function parsePhpRequires(lines) {
+  const req = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const m = line.match(/^(require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]/);
+    if (m) req.push({ kind: m[1], spec: m[2], line: i + 1 });
+  }
+  return req;
+}
+
 function parsePhpDecls(lines) {
   const decls = [];
   for (let i = 0; i < lines.length; i++) {
@@ -58,6 +69,45 @@ function parsePhpDecls(lines) {
     if (pm) decls.push({ kind: 'method', name: pm[1], line: i + 1 });
   }
   return decls;
+}
+
+function parseLaravelRoutes(lines) {
+  const routes = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] ?? '');
+    const m = line.match(/\bRoute::(get|post|put|delete|patch)\(\s*['"]([^'"]+)['"]/i);
+    if (m) routes.push({ method: m[1].toUpperCase(), path: m[2], line: i + 1 });
+  }
+  return routes;
+}
+
+function makeApiEndpointNode({ method, routePath, filePath, line, sha, containerUid = null }) {
+  const qualifiedName = `http.${method}.${routePath}`;
+  const signature = `${method} ${routePath}`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language: 'http', qualifiedName, signatureHash });
+  return {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name: signature,
+    node_type: 'ApiEndpoint',
+    symbol_kind: 'api_endpoint',
+    container_uid: containerUid,
+    file_path: filePath,
+    line_start: line,
+    line_end: line,
+    language: 'http',
+    visibility: 'public',
+    signature,
+    signature_hash: signatureHash,
+    contract: { kind: 'http_route', method, path: routePath },
+    constraints: null,
+    allowable_values: null,
+    embedding_text: `${signature} endpoint`,
+    embedding: embedText384(`${signature} endpoint`),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
 }
 
 function makeSymbolNode({ kind, name, filePath, line, sha, containerUid }) {
@@ -91,12 +141,42 @@ function makeSymbolNode({ kind, name, filePath, line, sha, containerUid }) {
   };
 }
 
-export function* parsePhpFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid }) {
+function resolvePhpUseToFile({ ns, sourceFileExists }) {
+  if (typeof sourceFileExists !== 'function') return null;
+  const spec = String(ns ?? '').replaceAll('\\\\', '/');
+  const candidates = [`${spec}.php`, `${spec}.inc.php`];
+  for (const c of candidates) if (sourceFileExists(c)) return c;
+  return null;
+}
+
+function resolvePhpRequireToFile({ fromFilePath, spec, sourceFileExists }) {
+  if (typeof sourceFileExists !== 'function') return null;
+  const s = String(spec ?? '');
+  if (!s) return null;
+  if (s.startsWith('/')) return null;
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFilePath), s));
+  const candidates = base.endsWith('.php') ? [base] : [`${base}.php`, base];
+  for (const c of candidates) if (sourceFileExists(c)) return c;
+  return null;
+}
+
+export function* parsePhpFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const sourceUid = containerUid ?? null;
+  const localByName = new Map();
+
+  for (const r of parseLaravelRoutes(lines)) {
+    const ep = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha, containerUid: sourceUid });
+    yield { type: 'node', data: ep };
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: ep.symbol_uid, edge_type: 'Defines', metadata: { kind: 'api_endpoint' }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: ep.symbol_uid, edge_type: 'Defines', file_path: filePath, line_start: r.line, line_end: r.line, occurrence_kind: 'route_map', sha } };
+    yield { type: 'edge', data: { source_symbol_uid: ep.symbol_uid, target_symbol_uid: sourceUid, edge_type: 'ControlFlow', metadata: { kind: 'route_handler_file' }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'flow_entrypoint', data: { entrypoint_key: `http:${r.method}:${r.path}`, entrypoint_type: 'http_route', method: r.method, path: r.path, symbol_uid: ep.symbol_uid, entrypoint_symbol_uid: ep.symbol_uid, file_path: filePath, line_start: r.line, line_end: r.line, sha } };
+  }
 
   for (const d of parsePhpDecls(lines)) {
     const node = makeSymbolNode({ kind: d.kind, name: d.name, filePath, line: d.line, sha, containerUid: sourceUid });
     yield { type: 'node', data: node };
+    localByName.set(d.name, node.symbol_uid);
     yield {
       type: 'edge',
       data: {
@@ -126,6 +206,17 @@ export function* parsePhpFile({ filePath, lines, sha, containerUid, exportedByFi
   }
 
   for (const u of parsePhpUses(lines)) {
+    const resolved = resolvePhpUseToFile({ ns: u.ns, sourceFileExists });
+    if (resolved) {
+      const targetUid = makeSymbolUid({
+        language: 'php',
+        qualifiedName: resolved.replaceAll('/', '.'),
+        signatureHash: computeSignatureHash({ signature: `file ${resolved}` })
+      });
+      yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', metadata: { use_ns: u.ns }, first_seen_sha: sha, last_seen_sha: sha } };
+      yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', file_path: filePath, line_start: u.line, line_end: u.line, occurrence_kind: 'import', sha } };
+      continue;
+    }
     const root = u.ns.split('\\')[0];
     if (!root) continue;
     const packageKey = `composer:${root.toLowerCase()}/${root.toLowerCase()}`;
@@ -161,5 +252,30 @@ export function* parsePhpFile({ filePath, lines, sha, containerUid, exportedByFi
         sha
       }
     };
+  }
+
+  for (const r of parsePhpRequires(lines)) {
+    const resolved = resolvePhpRequireToFile({ fromFilePath: filePath, spec: r.spec, sourceFileExists });
+    if (!resolved) continue;
+    const targetUid = makeSymbolUid({
+      language: 'php',
+      qualifiedName: resolved.replaceAll('/', '.'),
+      signatureHash: computeSignatureHash({ signature: `file ${resolved}` })
+    });
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', metadata: { require: r.spec }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', file_path: filePath, line_start: r.line, line_end: r.line, occurrence_kind: 'import', sha } };
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.includes('function ')) continue;
+    const m = line.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+    if (!m) continue;
+    const name = m[1];
+    const targetUid = localByName.get(name) ?? null;
+    if (!targetUid) continue;
+    const lineNo = i + 1;
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee: name }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', file_path: filePath, line_start: lineNo, line_end: lineNo, occurrence_kind: 'call', sha } };
   }
 }

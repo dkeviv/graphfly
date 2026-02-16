@@ -72,6 +72,13 @@ export class PgGraphStorePool {
     });
   }
 
+  async replaceDependencyMismatches({ tenantId, repoId, sha = 'mock', mismatches = [] } = {}) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.replaceDependencyMismatches({ tenantId, repoId, sha, mismatches });
+    });
+  }
+
   async addIndexDiagnostic({ tenantId, repoId, diagnostic }) {
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
       const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
@@ -97,6 +104,27 @@ export class PgGraphStorePool {
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
       const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
       return store.listUnresolvedImports({ tenantId, repoId, limit });
+    });
+  }
+
+  async listImportersForFilePaths({ tenantId, repoId, filePaths }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listImportersForFilePaths({ tenantId, repoId, filePaths });
+    });
+  }
+
+  async listSymbolUidsForFilePaths({ tenantId, repoId, filePaths }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listSymbolUidsForFilePaths({ tenantId, repoId, filePaths });
+    });
+  }
+
+  async listFilePathsForSymbolUids({ tenantId, repoId, symbolUids }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listFilePathsForSymbolUids({ tenantId, repoId, symbolUids });
     });
   }
 
@@ -227,4 +255,22 @@ export async function createGraphStoreFromEnv({ repoFullName = 'local/unknown' }
 
   const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgGraphStorePool({ pool, repoFullName });
+}
+
+export async function recomputeDependencyMismatches({ store, tenantId, repoId, sha = 'mock' } = {}) {
+  if (!store) throw new Error('store is required');
+  if (typeof store.listDeclaredDependencies !== 'function' || typeof store.listObservedDependencies !== 'function') {
+    return { ok: false, skipped: true };
+  }
+  const { computeDependencyMismatches } = await import('../../cig/src/dependency-mismatches.js');
+  const declared = await Promise.resolve(store.listDeclaredDependencies({ tenantId, repoId }));
+  const observed = await Promise.resolve(store.listObservedDependencies({ tenantId, repoId }));
+  const mismatches = computeDependencyMismatches({ declared, observed, sha });
+
+  if (typeof store.replaceDependencyMismatches === 'function') {
+    await Promise.resolve(store.replaceDependencyMismatches({ tenantId, repoId, sha, mismatches }));
+    return { ok: true, count: mismatches.length, replaced: true };
+  }
+  for (const mm of mismatches) await Promise.resolve(store.addDependencyMismatch?.({ tenantId, repoId, mismatch: mm }));
+  return { ok: true, count: mismatches.length, replaced: false };
 }

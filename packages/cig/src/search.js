@@ -1,4 +1,5 @@
 import { embedText384, cosineSimilarity } from './embedding.js';
+import { createEmbeddingProviderFromEnv } from './embeddings-provider.js';
 
 export async function textSearch({ store, tenantId, repoId, query, limit = 10 }) {
   const q = String(query ?? '').toLowerCase().trim();
@@ -24,7 +25,15 @@ export async function semanticSearch({ store, tenantId, repoId, query, limit = 1
     return store.semanticSearch({ tenantId, repoId, query: q, limit });
   }
 
-  const qVec = embedText384(q);
+  // In-memory fallback: prefer provider-backed embeddings when configured.
+  let qVec = null;
+  try {
+    const embed = createEmbeddingProviderFromEnv({ env: process.env });
+    qVec = await embed(q);
+  } catch {
+    qVec = embedText384(q);
+  }
+
   const nodes = (await store.listNodes({ tenantId, repoId })).filter((n) => Array.isArray(n.embedding) && n.embedding.length === 384);
   const scored = nodes
     .map((n) => ({ node: n, score: cosineSimilarity(qVec, n.embedding) }))

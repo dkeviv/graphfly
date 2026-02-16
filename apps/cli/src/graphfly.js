@@ -4,6 +4,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createRuntimeFromEnv } from '../../../packages/runtime/src/runtime-from-env.js';
 import { computeGitHubSignature256 } from '../../../packages/github-webhooks/src/verify.js';
+import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
+import { createEmbeddingProviderFromEnv } from '../../../packages/cig/src/embeddings-provider.js';
 
 function runGit(args, cwd) {
   const p = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -18,6 +20,7 @@ function usage() {
   return [
     'graphfly local-run --docs-repo-path <path> [options]',
     'graphfly pg-migrate --database-url <postgres-url> [options]',
+    'graphfly embeddings-backfill --tenant-id <uuid> --repo-id <uuid> [options]',
     '',
     'Options:',
     '  --docs-repo-path <path>        Required. Local docs git repo path.',
@@ -28,10 +31,12 @@ function usage() {
     '  --repo-id <uuid>               Default: 00000000-0000-0000-0000-000000000002',
     '  --database-url <url>           Postgres connection string (pg-migrate)',
     '  --migration-file <path>        Default: migrations/001_init.sql',
+    '  --limit <n>                    Default: 500 (embeddings-backfill)',
     '',
     'Example:',
     '  node apps/cli/src/graphfly.js local-run --docs-repo-path ../my-docs-repo',
-    '  node apps/cli/src/graphfly.js pg-migrate --database-url postgres://...'
+    '  node apps/cli/src/graphfly.js pg-migrate --database-url postgres://...',
+    '  node apps/cli/src/graphfly.js embeddings-backfill --tenant-id ... --repo-id ... --limit 1000'
   ].join('\n');
 }
 
@@ -114,6 +119,32 @@ async function localRun(args) {
   console.log(JSON.stringify({ ok: true, tenantId, repoId, sourceRepoRoot: resolvedSourceRepoRoot, docsRepoPath: resolvedDocsRepoPath }, null, 2));
 }
 
+async function embeddingsBackfill(args) {
+  const tenantId = args['tenant-id'];
+  const repoId = args['repo-id'];
+  if (!tenantId || !repoId) throw new Error('tenant-id and repo-id are required');
+  const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(5000, Math.trunc(Number(args.limit)))) : 500;
+
+  const store = await createGraphStoreFromEnv({ repoFullName: 'cli/backfill' });
+  const embed = createEmbeddingProviderFromEnv({ env: process.env });
+
+  const nodes = await store.listNodes({ tenantId, repoId });
+  const missing = nodes.filter(
+    (n) => (!Array.isArray(n.embedding) || n.embedding.length !== 384) && typeof n.embedding_text === 'string' && n.embedding_text.trim().length > 0
+  );
+  const toProcess = missing.slice(0, limit);
+
+  let updated = 0;
+  for (const n of toProcess) {
+    const vec = await embed(n.embedding_text);
+    await store.upsertNode({ tenantId, repoId, node: { ...n, embedding: vec } });
+    updated++;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(JSON.stringify({ ok: true, tenantId, repoId, scanned: nodes.length, missing: missing.length, updated }, null, 2));
+}
+
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
@@ -121,6 +152,10 @@ async function main() {
     if (!cmd) throw new Error('missing_command');
     if (cmd === 'local-run') {
       await localRun(args);
+      return;
+    }
+    if (cmd === 'embeddings-backfill') {
+      await embeddingsBackfill(args);
       return;
     }
     if (cmd === 'pg-migrate') {

@@ -113,6 +113,9 @@ The indexer process must emit **NDJSON records** to stdout and will receive cont
 - `cli`: force external (fails if not configured)
 - `mock`: dev-only legacy parser (not recommended)
 
+Indexer performance/safety caps:
+- `GRAPHFLY_INDEXER_MAX_FILE_BYTES` (default `2000000`) — skip parsing files larger than this and emit an `index_diagnostic` (`skip_large_file`). This prevents outliers from blowing up memory.
+
 ### 2.6B AST engine (recommended)
 Graphfly supports a pluggable AST engine for AST‑grade extraction. Configure:
 - `GRAPHFLY_AST_ENGINE=typescript` (default; **vendored in-repo** so it is always available)
@@ -147,6 +150,31 @@ Optional (LLM-backed) mode:
 - `OPENCLAW_GATEWAY_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_MODEL`
 - If not configured, Graphfly uses a deterministic local policy so enrichment remains reproducible and testable.
 - In dev, Graphfly records an `index_diagnostic` and falls back to deterministic adapters.
+
+### 2.6D Embeddings (semantic search)
+
+Graphfly stores 384‑dim embeddings on `graph_nodes.embedding` and uses `pgvector` + HNSW for fast semantic search.
+
+Modes:
+- `GRAPHFLY_EMBEDDINGS_MODE=deterministic` (default) — deterministic local embedding (dev/test friendly; not semantically strong).
+- `GRAPHFLY_EMBEDDINGS_MODE=http` — calls an embedding HTTP endpoint during ingest and for query-time semantic search.
+
+HTTP mode env vars:
+- `GRAPHFLY_EMBEDDINGS_HTTP_URL` — required; `POST` endpoint that accepts `{ input, dims: 384 }` and returns `{ embedding: number[384] }` (or `{ data: [{ embedding: ... }] }`).
+- `GRAPHFLY_EMBEDDINGS_HTTP_TOKEN` — optional bearer token.
+- `GRAPHFLY_EMBEDDINGS_HTTP_TIMEOUT_MS` (default `15000`)
+- `GRAPHFLY_EMBEDDINGS_HTTP_MAX_ATTEMPTS` (default `4`)
+- `GRAPHFLY_EMBEDDINGS_HTTP_RETRY_BASE_MS` (default `250`)
+- `GRAPHFLY_EMBEDDINGS_HTTP_RETRY_MAX_MS` (default `5000`)
+- `GRAPHFLY_EMBEDDINGS_CONCURRENCY` (default `4`) — embedding compute concurrency during NDJSON ingest.
+
+Prod enforcement (optional):
+- `GRAPHFLY_EMBEDDINGS_REQUIRED=1` — in `GRAPHFLY_MODE=prod`, prevents starting with deterministic embeddings (forces explicit configuration).
+
+Backfill control:
+- `node apps/cli/src/graphfly.js embeddings-backfill --tenant-id <uuid> --repo-id <uuid> --limit 500`
+  - Computes missing embeddings for nodes that have `embedding_text` but no valid embedding.
+  - Uses the configured embeddings provider (deterministic or HTTP).
 
 ### 2.7 Docs sync fence (recommended)
 To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:

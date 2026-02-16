@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import { cloneAtSha } from '../../../packages/git/src/clone.js';
 import { runIndexerNdjson } from '../../../packages/indexer-cli/src/indexer-cli.js';
 import { runBuiltinIndexerNdjson } from '../../../packages/indexer-engine/src/indexer.js';
+import { recomputeDependencyMismatches } from '../../../packages/stores/src/graph-store.js';
 
 export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null, realtime = null }) {
   return {
@@ -23,7 +24,7 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
 
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
-        const impact = await computeImpact({ store, tenantId, repoId, changedFiles, depth: 2 });
+        const impact = await computeImpact({ store, tenantId, repoId, changedFiles, removedFiles, depth: 2 });
         reparsedFiles = impact.reparsedFiles;
         await store.addIndexDiagnostic({
           tenantId,
@@ -146,6 +147,14 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
             // best-effort
           }
         }
+      }
+
+      // Dependency mismatches must be recomputed from the persisted declared/observed tables
+      // to remain correct under incremental indexing (manifests/code can change independently).
+      try {
+        await recomputeDependencyMismatches({ store, tenantId, repoId, sha });
+      } catch {
+        // Best-effort; mismatch computation should not fail the index job.
       }
 
       // Materialize flow graphs (entrypoints + trace subgraphs) for fast UI rendering.

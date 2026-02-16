@@ -11,9 +11,28 @@ function hasCodeFence(s) {
   return /(^|\n)\s{0,3}(```|~~~)/.test(s);
 }
 
+function looksLikeCodeBody(s) {
+  const str = String(s ?? '');
+  if (!isNonEmptyString(str)) return false;
+  if (hasCodeFence(str)) return true;
+  // Heuristic: long, code-dense single-line or multi-line payload.
+  const lines = str.split('\n');
+  const first = (lines[0] ?? '').trim();
+  if (first.length < 80) return false;
+  const braces = (first.match(/[{}]/g) ?? []).length;
+  const semis = (first.match(/;/g) ?? []).length;
+  const arrows = (first.match(/=>/g) ?? []).length;
+  const keywords = (first.match(/\b(function|class|return|import|from|def|public|private|const|let|var)\b/g) ?? []).length;
+  const operators = (first.match(/[=:+*\/<>]/g) ?? []).length;
+  if (arrows >= 1) return true;
+  if (braces >= 2 && keywords >= 1) return true;
+  if (semis >= 2) return true;
+  return keywords >= 2 && operators >= 6;
+}
+
 function sanitizeString(s, { maxLen = 2000 } = {}) {
   if (!isNonEmptyString(s)) return s;
-  if (hasCodeFence(s)) return REDACTED;
+  if (looksLikeCodeBody(s)) return REDACTED;
   // Never persist multi-line text fields; keep a compact summary only.
   const firstLine = String(s).split('\n')[0] ?? '';
   const trimmed = firstLine.trim();
@@ -77,4 +96,3 @@ export function sanitizeAnnotationForPersistence(annotation) {
 export function isRedactedCodeLike(value) {
   return value === REDACTED;
 }
-

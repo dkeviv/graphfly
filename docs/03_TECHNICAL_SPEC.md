@@ -418,7 +418,7 @@ CREATE TABLE declared_dependencies (
     manifest_id   UUID NOT NULL REFERENCES dependency_manifests(id) ON DELETE CASCADE,
     package_id    UUID NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
     scope         TEXT NOT NULL
-                  CHECK (scope IN ('prod','dev','optional','peer','build','test','unknown')),
+                  CHECK (scope IN ('prod','dev','optional','peer','build','test','lock','unknown')),
     version_range TEXT,           -- declared range (as-is from manifest)
     metadata      JSONB,          -- extras, markers, workspace flags
     UNIQUE (tenant_id, repo_id, manifest_id, package_id, scope)
@@ -606,6 +606,8 @@ Graphfly persists both:
 
 and records mismatches in `dependency_mismatches` without assuming which side is correct.
 
+**Incremental correctness note:** dependency mismatches are treated as **derived state** and are recomputed from the persisted declared/observed tables after each ingest/index run (so fixes and removals are reflected correctly under incremental indexing).
+
 For graph traversal and flow/debugging use cases, package relationships are also represented as:
 - `graph_nodes` with `node_type='Package'` (and `external_ref` for ecosystem/name/license/source)
 - `graph_edges` with `edge_type='UsesPackage'` from code symbols/modules → package nodes
@@ -618,6 +620,12 @@ Embeddings are computed from the **public contract text** (contract + constraint
 
 Vectors are stored in pgvector and indexed with **HNSW** for performance.
 
+**Embeddings provider:** ingestion and query-time semantic search support provider-backed embeddings:
+- Deterministic mode (dev/test): local deterministic embedding.
+- HTTP mode (prod): call an embeddings HTTP endpoint that returns `number[384]`.
+
+Operational controls are documented in `docs/07_ADMIN_GUIDE.md` (embedding provider env vars + backfill tooling).
+
 ### 1A.7 Incremental Correctness (Indexing Contract)
 
 Incremental indexing must be correct in the presence of:
@@ -627,6 +635,8 @@ Incremental indexing must be correct in the presence of:
 - cascading symbol-resolution impacts
 
 The indexer must compute a “re-parse scope” (changed files + impacted files) and persist diagnostics about what was re-parsed and why.
+
+**Performance guards:** the built-in indexer enforces a max file size cap (`GRAPHFLY_INDEXER_MAX_FILE_BYTES`) and emits an `index_diagnostic` when skipping outliers.
 
 ### 1A.8 Graph Versions (Future Phase)
 

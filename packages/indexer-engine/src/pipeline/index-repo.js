@@ -2,10 +2,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { walkRepoFiles } from '../repo/walk.js';
 import { parsePackageJsonManifest } from '../sources/npm/package-json.js';
+import { parsePackageLockJsonManifest } from '../sources/npm/package-lock-json.js';
+import { parseYarnLockManifest } from '../sources/npm/yarn-lock.js';
+import { parsePnpmLockManifest } from '../sources/npm/pnpm-lock.js';
 import { parseGoModManifest } from '../sources/go/go-mod.js';
+import { parseGoSumManifest } from '../sources/go/go-sum.js';
 import { parseCargoTomlManifest } from '../sources/rust/cargo-toml.js';
+import { parseCargoLockManifest } from '../sources/rust/cargo-lock.js';
 import { parseRequirementsTxtManifest } from '../sources/python/requirements-txt.js';
+import { parsePyprojectTomlManifest } from '../sources/python/pyproject-toml.js';
 import { parseComposerJsonManifest } from '../sources/php/composer-json.js';
+import { parseComposerLockManifest } from '../sources/php/composer-lock.js';
+import { parsePomXmlManifest } from '../sources/java/pom-xml.js';
+import { parseGradleBuildManifest } from '../sources/java/gradle-build.js';
+import { parseCsprojManifest } from '../sources/csharp/csproj.js';
+import { parseNuGetPackagesLockManifest } from '../sources/csharp/nuget-packages-lock.js';
 import { parseJsFile } from '../sources/js/js-parser.js';
 import { parsePythonFile } from '../sources/python/py-parser.js';
 import { parseGoFile } from '../sources/go/go-parser.js';
@@ -13,7 +24,13 @@ import { parseRustFile } from '../sources/rust/rust-parser.js';
 import { parseJavaFile } from '../sources/java/java-parser.js';
 import { parseCSharpFile } from '../sources/csharp/csharp-parser.js';
 import { parseRubyFile } from '../sources/ruby/ruby-parser.js';
+import { parseGemfileManifest } from '../sources/ruby/gemfile.js';
+import { parseGemfileLockManifest } from '../sources/ruby/gemfile-lock.js';
 import { parsePhpFile } from '../sources/php/php-parser.js';
+import { parseCFile } from '../sources/c/c-parser.js';
+import { parseCppFile } from '../sources/cpp/cpp-parser.js';
+import { parseSwiftFile } from '../sources/swift/swift-parser.js';
+import { parseKotlinFile } from '../sources/kotlin/kotlin-parser.js';
 import { computeSignatureHash, makeSymbolUid } from '../../../cig/src/identity.js';
 import { embedText384 } from '../../../cig/src/embedding.js';
 import { createTsPathResolver } from '../config/tsconfig.js';
@@ -27,10 +44,23 @@ function rel(absRoot, absPath) {
 function classify(filePath) {
   const p = String(filePath);
   if (p.endsWith('package.json')) return 'manifest:package.json';
+  if (p.endsWith('package-lock.json')) return 'manifest:package-lock.json';
+  if (p.endsWith('yarn.lock')) return 'manifest:yarn.lock';
+  if (p.endsWith('pnpm-lock.yaml')) return 'manifest:pnpm-lock.yaml';
   if (p.endsWith('go.mod')) return 'manifest:go.mod';
+  if (p.endsWith('go.sum')) return 'manifest:go.sum';
   if (p.endsWith('Cargo.toml')) return 'manifest:Cargo.toml';
+  if (p.endsWith('Cargo.lock')) return 'manifest:Cargo.lock';
   if (p.endsWith('requirements.txt')) return 'manifest:requirements.txt';
+  if (p.endsWith('pyproject.toml')) return 'manifest:pyproject.toml';
   if (p.endsWith('composer.json')) return 'manifest:composer.json';
+  if (p.endsWith('composer.lock')) return 'manifest:composer.lock';
+  if (p.endsWith('Gemfile')) return 'manifest:Gemfile';
+  if (p.endsWith('Gemfile.lock')) return 'manifest:Gemfile.lock';
+  if (p.endsWith('pom.xml')) return 'manifest:pom.xml';
+  if (p.endsWith('build.gradle') || p.endsWith('build.gradle.kts')) return 'manifest:gradle';
+  if (p.endsWith('.csproj')) return 'manifest:csproj';
+  if (p.endsWith('packages.lock.json')) return 'manifest:packages.lock.json';
   if (p.endsWith('.js') || p.endsWith('.jsx') || p.endsWith('.ts') || p.endsWith('.tsx')) return 'source:js';
   if (p.endsWith('.py')) return 'source:python';
   if (p.endsWith('.go')) return 'source:go';
@@ -39,6 +69,10 @@ function classify(filePath) {
   if (p.endsWith('.cs')) return 'source:csharp';
   if (p.endsWith('.rb')) return 'source:ruby';
   if (p.endsWith('.php')) return 'source:php';
+  if (p.endsWith('.c') || p.endsWith('.h')) return 'source:c';
+  if (p.endsWith('.cc') || p.endsWith('.cpp') || p.endsWith('.cxx') || p.endsWith('.hpp') || p.endsWith('.hh') || p.endsWith('.hxx')) return 'source:cpp';
+  if (p.endsWith('.swift')) return 'source:swift';
+  if (p.endsWith('.kt') || p.endsWith('.kts')) return 'source:kotlin';
   return null;
 }
 
@@ -143,39 +177,13 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   const fileToUid = new Map(); // file_path -> symbol_uid
   const exportedByFile = new Map(); // file_path -> Map(name -> symbol_uid)
   const packageToUid = new Map(); // package_key -> symbol_uid
-  const depDeclared = new Map(); // package_key -> { ranges: Map(version_range -> Set(file_path)), declaredIn: Set(file_path), scopes: Set(scope) }
-  const depObserved = new Map(); // package_key -> Set(file_path)
+  let goModuleName = null;
+  const fileByGoImportPath = new Map(); // import path -> representative file_path
 
   function jsLikeLanguageForFile(filePath) {
     const p = String(filePath);
     if (p.endsWith('.ts') || p.endsWith('.tsx')) return 'ts';
     return 'js';
-  }
-
-  function trackRecord(record) {
-    if (!record || typeof record !== 'object') return;
-    if (record.type === 'declared_dependency') {
-      const d = record.data ?? {};
-      const pk = String(d.package_key ?? '');
-      if (!pk) return;
-      const manifestKey = String(d.manifest_key ?? '');
-      const filePath = manifestKey.includes('::') ? manifestKey.split('::')[0] : null;
-      const versionRange = String(d.version_range ?? '*');
-      const scope = String(d.scope ?? 'prod');
-      if (!depDeclared.has(pk)) depDeclared.set(pk, { ranges: new Map(), declaredIn: new Set(), scopes: new Set() });
-      const entry = depDeclared.get(pk);
-      entry.scopes.add(scope);
-      if (filePath) entry.declaredIn.add(filePath);
-      if (!entry.ranges.has(versionRange)) entry.ranges.set(versionRange, new Set());
-      if (filePath) entry.ranges.get(versionRange).add(filePath);
-    } else if (record.type === 'observed_dependency') {
-      const o = record.data ?? {};
-      const pk = String(o.package_key ?? '');
-      const filePath = String(o.file_path ?? '');
-      if (!pk || !filePath) return;
-      if (!depObserved.has(pk)) depObserved.set(pk, new Set());
-      depObserved.get(pk).add(filePath);
-    }
   }
 
   // Emit File nodes first.
@@ -197,14 +205,20 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
                   ? 'ruby'
                   : kind === 'source:php'
                     ? 'php'
+                    : kind === 'source:c'
+                      ? 'c'
+                      : kind === 'source:cpp'
+                        ? 'cpp'
+                        : kind === 'source:swift'
+                          ? 'swift'
+                          : kind === 'source:kotlin'
+                            ? 'kotlin'
                     : kind === 'source:js'
                       ? jsLikeLanguageForFile(filePath)
                       : languageHint ?? 'js';
     const node = makeFileNode({ filePath, language: lang, sha });
     fileToUid.set(filePath, node.symbol_uid);
-    const rec = { type: 'node', data: node };
-    trackRecord(rec);
-    yield rec;
+    yield { type: 'node', data: node };
   }
 
   // Precompute exports for JS/TS files when the AST engine supports it.
@@ -244,18 +258,59 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     const records =
       kind === 'manifest:package.json'
         ? parsePackageJsonManifest(common)
+        : kind === 'manifest:package-lock.json'
+          ? parsePackageLockJsonManifest(common)
+          : kind === 'manifest:yarn.lock'
+            ? parseYarnLockManifest(common)
+            : kind === 'manifest:pnpm-lock.yaml'
+              ? parsePnpmLockManifest(common)
         : kind === 'manifest:go.mod'
           ? parseGoModManifest(common)
+          : kind === 'manifest:go.sum'
+            ? parseGoSumManifest(common)
           : kind === 'manifest:Cargo.toml'
             ? parseCargoTomlManifest(common)
-            : kind === 'manifest:requirements.txt'
-              ? parseRequirementsTxtManifest(common)
-              : kind === 'manifest:composer.json'
-                ? parseComposerJsonManifest(common)
+            : kind === 'manifest:Cargo.lock'
+              ? parseCargoLockManifest(common)
+          : kind === 'manifest:requirements.txt'
+            ? parseRequirementsTxtManifest(common)
+            : kind === 'manifest:pyproject.toml'
+              ? parsePyprojectTomlManifest(common)
+          : kind === 'manifest:composer.json'
+            ? parseComposerJsonManifest(common)
+            : kind === 'manifest:composer.lock'
+              ? parseComposerLockManifest(common)
+            : kind === 'manifest:Gemfile'
+              ? parseGemfileManifest(common)
+              : kind === 'manifest:Gemfile.lock'
+                ? parseGemfileLockManifest(common)
+                : kind === 'manifest:pom.xml'
+                  ? parsePomXmlManifest(common)
+                  : kind === 'manifest:gradle'
+                    ? parseGradleBuildManifest(common)
+                    : kind === 'manifest:csproj'
+                      ? parseCsprojManifest(common)
+                      : kind === 'manifest:packages.lock.json'
+                        ? parseNuGetPackagesLockManifest(common)
                 : [];
     for (const record of records) {
-      trackRecord(record);
+      if (!goModuleName && kind === 'manifest:go.mod' && record?.type === 'dependency_manifest') {
+        const mod = record?.data?.parsed?.moduleName ?? null;
+        if (typeof mod === 'string' && mod.length > 0) goModuleName = mod;
+      }
       yield record;
+    }
+  }
+
+  // Best-effort local Go package resolution map (import path -> representative file node).
+  if (goModuleName) {
+    for (const absFile of sourceFiles) {
+      const filePath = rel(absRoot, absFile);
+      if (!filePath.endsWith('.go')) continue;
+      const dir = path.posix.dirname(filePath);
+      const importPath = dir === '.' ? goModuleName : `${goModuleName}/${dir}`;
+      const prev = fileByGoImportPath.get(importPath) ?? null;
+      if (!prev || filePath < prev) fileByGoImportPath.set(importPath, filePath);
     }
   }
 
@@ -277,6 +332,17 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     const absFile = sourceFiles[fileIndex];
     const filePath = rel(absRoot, absFile);
     const sourceUid = fileToUid.get(filePath) ?? null;
+    const maxBytes = Number(process.env.GRAPHFLY_INDEXER_MAX_FILE_BYTES ?? 2_000_000);
+    let size = 0;
+    try {
+      size = fs.statSync(absFile).size;
+    } catch {
+      size = 0;
+    }
+    if (Number.isFinite(maxBytes) && maxBytes > 0 && size > maxBytes) {
+      yield emitParseError({ filePath, phase: 'skip_large_file', err: new Error(`file_too_large:${size}`) });
+      continue;
+    }
     const text = fs.readFileSync(absFile, 'utf8');
     const lines = text.split('\n');
 
@@ -296,37 +362,56 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     try {
       if (kind === 'source:python') {
         for (const record of parsePythonFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
-          trackRecord(record);
           yield record;
         }
       } else if (kind === 'source:go') {
-        for (const record of parseGoFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
-          trackRecord(record);
+        for (const record of parseGoFile({
+          filePath,
+          lines,
+          sha,
+          containerUid: sourceUid,
+          exportedByFile,
+          packageToUid,
+          goModuleName,
+          fileByGoImportPath,
+          sourceFileExists
+        })) {
           yield record;
         }
       } else if (kind === 'source:rust') {
-        for (const record of parseRustFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
-          trackRecord(record);
+        for (const record of parseRustFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           yield record;
         }
       } else if (kind === 'source:java') {
-        for (const record of parseJavaFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
-          trackRecord(record);
+        for (const record of parseJavaFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           yield record;
         }
       } else if (kind === 'source:csharp') {
-        for (const record of parseCSharpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
-          trackRecord(record);
+        for (const record of parseCSharpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           yield record;
         }
       } else if (kind === 'source:ruby') {
-        for (const record of parseRubyFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
-          trackRecord(record);
+        for (const record of parseRubyFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           yield record;
         }
       } else if (kind === 'source:php') {
-        for (const record of parsePhpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid })) {
-          trackRecord(record);
+        for (const record of parsePhpFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
+          yield record;
+        }
+      } else if (kind === 'source:c') {
+        for (const record of parseCFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
+          yield record;
+        }
+      } else if (kind === 'source:cpp') {
+        for (const record of parseCppFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
+          yield record;
+        }
+      } else if (kind === 'source:swift') {
+        for (const record of parseSwiftFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
+          yield record;
+        }
+      } else if (kind === 'source:kotlin') {
+        for (const record of parseKotlinFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           yield record;
         }
       } else {
@@ -349,7 +434,6 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
                 sourceFileExists,
                 resolveAliasImport: resolveTsAliasImport
               })) {
-                trackRecord(record);
                 yield record;
               }
             }
@@ -368,7 +452,6 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
             sourceFileExists,
             resolveAliasImport: resolveTsAliasImport
           })) {
-            trackRecord(record);
             yield record;
           }
         }
@@ -376,55 +459,5 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     } catch (e) {
       yield emitParseError({ filePath, phase: 'parse_source', err: e });
     }
-  }
-
-  // Dependency mismatches (declared vs observed) without assuming code or manifest is “correct”.
-  const declaredKeys = new Set(depDeclared.keys());
-  const observedKeys = new Set(depObserved.keys());
-
-  for (const pk of declaredKeys) {
-    if (observedKeys.has(pk)) continue;
-    const entry = depDeclared.get(pk);
-    yield {
-      type: 'dependency_mismatch',
-      data: {
-        mismatch_type: 'declared_but_unused',
-        package_key: pk,
-        details: {
-          declared_in_files: Array.from(entry?.declaredIn ?? []).sort(),
-          scopes: Array.from(entry?.scopes ?? []).sort(),
-          version_ranges: Array.from(entry?.ranges?.keys?.() ?? []).sort()
-        },
-        sha
-      }
-    };
-  }
-
-  for (const pk of observedKeys) {
-    if (declaredKeys.has(pk)) continue;
-    const files = Array.from(depObserved.get(pk) ?? []).sort();
-    yield {
-      type: 'dependency_mismatch',
-      data: {
-        mismatch_type: 'used_but_undeclared',
-        package_key: pk,
-        details: { observed_in_files: files },
-        sha
-      }
-    };
-  }
-
-  for (const [pk, entry] of depDeclared.entries()) {
-    const ranges = entry?.ranges;
-    if (!ranges || ranges.size <= 1) continue;
-    const details = {
-      package_key: pk,
-      version_ranges: Array.from(ranges.keys()).sort(),
-      manifests: Array.from(ranges.entries()).map(([range, files]) => ({ version_range: range, files: Array.from(files).sort() }))
-    };
-    yield {
-      type: 'dependency_mismatch',
-      data: { mismatch_type: 'version_conflict', package_key: pk, details, sha }
-    };
   }
 }

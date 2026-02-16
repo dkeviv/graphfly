@@ -1,5 +1,6 @@
 import { computeSignatureHash, makeSymbolUid } from '../../../../cig/src/identity.js';
 import { embedText384 } from '../../../../cig/src/embedding.js';
+import path from 'node:path';
 
 function ensurePackageNode({ packageKey, sha, packageToUid }) {
   if (!packageKey) return null;
@@ -38,8 +39,8 @@ function parseRubyRequires(lines) {
   const req = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    const m = line.match(/^require\s+['"]([^'"]+)['"]/);
-    if (m) req.push({ spec: m[1], line: i + 1 });
+    const m = line.match(/^(require|require_relative)\s+['"]([^'"]+)['"]/);
+    if (m) req.push({ kind: m[1], spec: m[2], line: i + 1 });
   }
   return req;
 }
@@ -89,11 +90,29 @@ function makeSymbolNode({ kind, name, filePath, line, sha, containerUid }) {
   };
 }
 
-export function* parseRubyFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid }) {
+function resolveRubyRequireToFile({ fromFilePath, req, sourceFileExists }) {
+  if (typeof sourceFileExists !== 'function') return null;
+  const spec = String(req?.spec ?? '');
+  if (!spec) return null;
+  if (req?.kind === 'require_relative') {
+    const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFilePath), spec));
+    const candidates = base.endsWith('.rb') ? [base] : [`${base}.rb`, path.posix.join(base, 'init.rb')];
+    for (const c of candidates) if (sourceFileExists(c)) return c;
+    return null;
+  }
+  // "require 'foo/bar'" can be local in mono-repo style.
+  const candidates = spec.endsWith('.rb') ? [spec] : [`${spec}.rb`];
+  for (const c of candidates) if (sourceFileExists(c)) return c;
+  return null;
+}
+
+export function* parseRubyFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const sourceUid = containerUid ?? null;
+  const localByName = new Map();
   for (const d of parseRubyDecls(lines)) {
     const node = makeSymbolNode({ kind: d.kind, name: d.name, filePath, line: d.line, sha, containerUid: sourceUid });
     yield { type: 'node', data: node };
+    localByName.set(d.name, node.symbol_uid);
     yield {
       type: 'edge',
       data: {
@@ -123,6 +142,17 @@ export function* parseRubyFile({ filePath, lines, sha, containerUid, exportedByF
   }
 
   for (const r of parseRubyRequires(lines)) {
+    const resolved = resolveRubyRequireToFile({ fromFilePath: filePath, req: r, sourceFileExists });
+    if (resolved) {
+      const targetUid = makeSymbolUid({
+        language: 'ruby',
+        qualifiedName: resolved.replaceAll('/', '.'),
+        signatureHash: computeSignatureHash({ signature: `file ${resolved}` })
+      });
+      yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', metadata: { require: r.spec }, first_seen_sha: sha, last_seen_sha: sha } };
+      yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', file_path: filePath, line_start: r.line, line_end: r.line, occurrence_kind: 'import', sha } };
+      continue;
+    }
     const name = r.spec.split('/')[0];
     const packageKey = `gem:${name}`;
     const ensured = ensurePackageNode({ packageKey, sha, packageToUid });
@@ -157,5 +187,18 @@ export function* parseRubyFile({ filePath, lines, sha, containerUid, exportedByF
         sha
       }
     };
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('def ')) continue;
+    const m = line.match(/\b([a-zA-Z_][A-Za-z0-9_!?=]*)\s*\(/);
+    if (!m) continue;
+    const name = m[1];
+    const targetUid = localByName.get(name) ?? null;
+    if (!targetUid) continue;
+    const lineNo = i + 1;
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee: name }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', file_path: filePath, line_start: lineNo, line_end: lineNo, occurrence_kind: 'call', sha } };
   }
 }

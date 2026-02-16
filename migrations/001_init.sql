@@ -427,7 +427,7 @@ CREATE TABLE IF NOT EXISTS declared_dependencies (
     manifest_id   UUID NOT NULL REFERENCES dependency_manifests(id) ON DELETE CASCADE,
     package_id    UUID NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
     scope         TEXT NOT NULL
-                  CHECK (scope IN ('prod','dev','optional','peer','build','test','unknown')),
+                  CHECK (scope IN ('prod','dev','optional','peer','build','test','lock','unknown')),
     version_range TEXT,
     metadata      JSONB,
     UNIQUE (tenant_id, repo_id, manifest_id, package_id, scope)

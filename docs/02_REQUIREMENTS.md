@@ -134,14 +134,14 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - System shall persist derived **Flow Graphs** that trace how an entrypoint propagates through the system (calls, data access, external API calls).
 
 #### FR-CIG-10: Dependency & Manifest Intelligence
-- System shall parse dependency manifests (e.g., `package.json`, `requirements.txt`, `pyproject.toml`, `Cargo.toml`, `go.mod`) and persist:
+- System shall parse dependency manifests and lockfiles (e.g., `package.json`, `package-lock.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `Gemfile`, `Gemfile.lock`, `pom.xml`, `build.gradle`, `*.csproj`, `packages.lock.json`, `composer.json`, `composer.lock`) and persist:
   - declared dependencies (name, version/range, scope)
   - license/source metadata where available
 - System shall also infer dependencies from code (imports/usages) and persist both views without assuming either is “correct”.
 - System shall represent package usage relationships in the Code Intelligence Graph (e.g., `UsesPackage` edges) to enable traversal and flow/debugging use cases.
 - System shall detect and expose mismatches:
-  - declared but unused dependencies
-  - used but undeclared dependencies
+  - `declared_not_observed` (declared but unused)
+  - `observed_not_declared` (used but undeclared)
   - version/range conflicts across manifests (monorepo)
 
 #### FR-CIG-11: No Code Exposure in UI/Support Mode

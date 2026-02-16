@@ -182,8 +182,8 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(nodes.some((n) => n.language === 'php' && n.name === 'D'));
 
       assert.ok(edges.some((e) => e.edge_type === 'UsesPackage'));
-      assert.ok(mismatches.some((m) => m.mismatch_type === 'used_but_undeclared' && m.package_key === 'npm:left-pad'));
-      assert.ok(mismatches.some((m) => m.mismatch_type === 'declared_but_unused' && m.package_key === 'npm:unusedpkg'));
+      assert.ok(mismatches.some((m) => m.mismatch_type === 'observed_not_declared' && m.package_key === 'npm:left-pad'));
+      assert.ok(mismatches.some((m) => m.mismatch_type === 'declared_not_observed' && m.package_key === 'npm:unusedpkg'));
       assert.ok(mismatches.some((m) => m.mismatch_type === 'version_conflict' && m.package_key === 'npm:lodash'));
       assert.ok(unresolved.some((u) => u.file_path === 'src/mod.ts' && String(u.spec).includes('./missing')), 'expected unresolved import for ./missing');
     } finally {

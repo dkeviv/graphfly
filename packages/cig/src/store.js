@@ -21,6 +21,16 @@ export class InMemoryGraphStore {
     this._unresolvedImportsByRepo = new Map(); // repoKey -> Map(key -> unresolved_import)
   }
 
+  replaceDependencyMismatches({ tenantId, repoId, mismatches = [] } = {}) {
+    const repoKey = key({ tenantId, repoId });
+    const next = new Map();
+    for (const mm of Array.isArray(mismatches) ? mismatches : []) {
+      const mismatchKey = `${mm.mismatch_type}::${mm.package_key ?? 'unknown'}`;
+      next.set(mismatchKey, mm);
+    }
+    this._depMismatchesByRepo.set(repoKey, next);
+  }
+
   upsertNode({ tenantId, repoId, node }) {
     assert(isPlainObject(node), 'node must be an object');
     assert(typeof node.symbol_uid === 'string' && node.symbol_uid.length > 0, 'node.symbol_uid required');
@@ -77,6 +87,67 @@ export class InMemoryGraphStore {
     if (direction === 'out') return edges.filter((e) => e.source_symbol_uid === symbolUid);
     if (direction === 'in') return edges.filter((e) => e.target_symbol_uid === symbolUid);
     return edges.filter((e) => e.source_symbol_uid === symbolUid || e.target_symbol_uid === symbolUid);
+  }
+
+  listImportersForFilePaths({ tenantId, repoId, filePaths }) {
+    const repoKey = key({ tenantId, repoId });
+    const want = new Set(Array.isArray(filePaths) ? filePaths.map((p) => String(p)) : []);
+    if (want.size === 0) return [];
+
+    const nodes = Array.from(this._nodesByRepo.get(repoKey)?.values() ?? []);
+    const uidByFile = new Map();
+    const fileByUid = new Map();
+    for (const n of nodes) {
+      const fp = n?.file_path ?? null;
+      if (typeof fp === 'string' && fp.length > 0) {
+        uidByFile.set(fp, n.symbol_uid);
+        fileByUid.set(n.symbol_uid, fp);
+      }
+    }
+
+    const targetUids = new Set();
+    for (const fp of want) {
+      const uid = uidByFile.get(fp);
+      if (uid) targetUids.add(uid);
+    }
+    if (targetUids.size === 0) return [];
+
+    const edges = Array.from(this._edgesByRepo.get(repoKey)?.values() ?? []);
+    const out = new Set();
+    for (const e of edges) {
+      if (e?.edge_type !== 'Imports') continue;
+      if (!targetUids.has(e.target_symbol_uid)) continue;
+      const srcFile = fileByUid.get(e.source_symbol_uid) ?? null;
+      if (srcFile) out.add(srcFile);
+    }
+    return Array.from(out);
+  }
+
+  listSymbolUidsForFilePaths({ tenantId, repoId, filePaths }) {
+    const repoKey = key({ tenantId, repoId });
+    const want = new Set(Array.isArray(filePaths) ? filePaths.map((p) => String(p)) : []);
+    if (want.size === 0) return [];
+    const nodes = Array.from(this._nodesByRepo.get(repoKey)?.values() ?? []);
+    const out = [];
+    for (const n of nodes) {
+      const fp = n?.file_path ?? null;
+      if (typeof fp === 'string' && want.has(fp)) out.push(n.symbol_uid);
+    }
+    return out;
+  }
+
+  listFilePathsForSymbolUids({ tenantId, repoId, symbolUids }) {
+    const repoKey = key({ tenantId, repoId });
+    const want = new Set(Array.isArray(symbolUids) ? symbolUids.map((u) => String(u)) : []);
+    if (want.size === 0) return [];
+    const nodes = Array.from(this._nodesByRepo.get(repoKey)?.values() ?? []);
+    const out = [];
+    for (const n of nodes) {
+      if (!n || typeof n.symbol_uid !== 'string') continue;
+      if (!want.has(n.symbol_uid)) continue;
+      if (typeof n.file_path === 'string' && n.file_path) out.push(n.file_path);
+    }
+    return out;
   }
 
   listEdgeOccurrences({ tenantId, repoId }) {

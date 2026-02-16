@@ -1,4 +1,5 @@
 import { embedText384 } from '../../cig/src/embedding.js';
+import { createEmbeddingProviderFromEnv } from '../../cig/src/embeddings-provider.js';
 import { sanitizeAnnotationForPersistence } from '../../cig/src/no-code.js';
 
 function isNonEmptyString(v) {
@@ -370,7 +371,14 @@ export class PgGraphStore {
     await this._ensureOrgRepo({ tenantId, repoId });
     const q = String(query ?? '').trim();
     if (!q) return [];
-    const vec = toPgVectorLiteral(embedText384(q));
+    let qVec = null;
+    try {
+      const embed = createEmbeddingProviderFromEnv({ env: process.env });
+      qVec = await embed(q);
+    } catch {
+      qVec = embedText384(q);
+    }
+    const vec = toPgVectorLiteral(qVec);
     const n = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.trunc(limit))) : 10;
     const res = await this._c.query(
       `SELECT *, (1 - (embedding <=> $3::vector)) as score
@@ -683,6 +691,23 @@ export class PgGraphStore {
     );
   }
 
+  async replaceDependencyMismatches({ tenantId, repoId, sha = 'mock', mismatches = [] } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    await this._c.query(`DELETE FROM dependency_mismatches WHERE tenant_id=$1 AND repo_id=$2`, [tenantId, repoId]);
+    for (const mm of Array.isArray(mismatches) ? mismatches : []) {
+      await this.addDependencyMismatch({
+        tenantId,
+        repoId,
+        mismatch: {
+          mismatch_type: mm.mismatch_type,
+          package_key: mm.package_key ?? null,
+          details: mm.details ?? {},
+          sha: mm.sha ?? sha
+        }
+      });
+    }
+  }
+
   async listDependencyManifests({ tenantId, repoId }) {
     await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query(
@@ -731,6 +756,7 @@ export class PgGraphStore {
          p.ecosystem,
          p.name as package_name,
          n.symbol_uid as source_symbol_uid,
+         n.file_path as file_path,
          od.evidence,
          od.first_seen_sha,
          od.last_seen_sha
@@ -745,6 +771,7 @@ export class PgGraphStore {
       ? res.rows.map((r) => ({
           package_key: `${r.ecosystem}:${r.package_name}`,
           source_symbol_uid: r.source_symbol_uid ?? null,
+          file_path: r.file_path ?? null,
           evidence: r.evidence ?? null,
           first_seen_sha: r.first_seen_sha,
           last_seen_sha: r.last_seen_sha
@@ -848,6 +875,59 @@ export class PgGraphStore {
           created_at: r.created_at
         }))
       : [];
+  }
+
+  async listImportersForFilePaths({ tenantId, repoId, filePaths }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const want = Array.isArray(filePaths) ? filePaths.map((p) => String(p)).filter(Boolean) : [];
+    if (want.length === 0) return [];
+    const res = await this._c.query(
+      `WITH target_files AS (
+         SELECT id
+         FROM graph_nodes
+         WHERE tenant_id=$1 AND repo_id=$2
+           AND node_type='File'
+           AND file_path = ANY($3::text[])
+       )
+       SELECT DISTINCT src.file_path as file_path
+       FROM graph_edges e
+       JOIN graph_nodes src ON src.id=e.source_node_id
+       WHERE e.tenant_id=$1 AND e.repo_id=$2
+         AND e.edge_type='Imports'
+         AND e.target_node_id IN (SELECT id FROM target_files)
+         AND src.file_path IS NOT NULL`,
+      [tenantId, repoId, want]
+    );
+    return Array.isArray(res.rows) ? res.rows.map((r) => r.file_path).filter(Boolean) : [];
+  }
+
+  async listSymbolUidsForFilePaths({ tenantId, repoId, filePaths }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const want = Array.isArray(filePaths) ? filePaths.map((p) => String(p)).filter(Boolean) : [];
+    if (want.length === 0) return [];
+    const res = await this._c.query(
+      `SELECT symbol_uid
+       FROM graph_nodes
+       WHERE tenant_id=$1 AND repo_id=$2
+         AND file_path = ANY($3::text[])`,
+      [tenantId, repoId, want]
+    );
+    return Array.isArray(res.rows) ? res.rows.map((r) => r.symbol_uid).filter(Boolean) : [];
+  }
+
+  async listFilePathsForSymbolUids({ tenantId, repoId, symbolUids }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const want = Array.isArray(symbolUids) ? symbolUids.map((u) => String(u)).filter(Boolean) : [];
+    if (want.length === 0) return [];
+    const capped = want.slice(0, 20_000);
+    const res = await this._c.query(
+      `SELECT file_path
+       FROM graph_nodes
+       WHERE tenant_id=$1 AND repo_id=$2 AND symbol_uid = ANY($3::text[])
+         AND file_path IS NOT NULL AND file_path <> ''`,
+      [tenantId, repoId, capped]
+    );
+    return Array.isArray(res.rows) ? res.rows.map((r) => r.file_path).filter(Boolean) : [];
   }
 
   async upsertFlowGraph({ tenantId, repoId, flowGraph }) {

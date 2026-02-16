@@ -498,6 +498,86 @@ function makeApiEndpointNode({ method, routePath, filePath, line, sha, container
   };
 }
 
+function parseCronEntrypoints(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] ?? '');
+    const m = line.match(/\bcron\.schedule\(\s*['"]([^'"]+)['"]/);
+    if (m) out.push({ expr: m[1], line: i + 1 });
+    const jm = line.match(/\bnew\s+CronJob\(\s*['"]([^'"]+)['"]/);
+    if (jm) out.push({ expr: jm[1], line: i + 1 });
+  }
+  return out;
+}
+
+function parseQueueConsumers(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] ?? '');
+    const m = line.match(/\.process\(\s*(?:['"]([^'"]+)['"]\s*,)?/);
+    if (m) out.push({ name: m[1] ?? 'default', line: i + 1 });
+  }
+  return out;
+}
+
+function makeCronJobNode({ expr, filePath, line, sha, containerUid = null }) {
+  const qualifiedName = `cron.${expr}`;
+  const signature = `cron ${expr}`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language: 'cron', qualifiedName, signatureHash });
+  return {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name: signature,
+    node_type: 'CronJob',
+    symbol_kind: 'cron_job',
+    container_uid: containerUid,
+    file_path: filePath,
+    line_start: line,
+    line_end: line,
+    language: 'cron',
+    visibility: 'internal',
+    signature,
+    signature_hash: signatureHash,
+    contract: { kind: 'cron', expression: expr },
+    constraints: null,
+    allowable_values: null,
+    embedding_text: `${signature} cron job`,
+    embedding: embedText384(`${signature} cron job`),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
+}
+
+function makeQueueJobNode({ name, filePath, line, sha, containerUid = null }) {
+  const qualifiedName = `queue.${name}`;
+  const signature = `queue ${name}`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language: 'queue', qualifiedName, signatureHash });
+  return {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name: signature,
+    node_type: 'QueueJob',
+    symbol_kind: 'queue_job',
+    container_uid: containerUid,
+    file_path: filePath,
+    line_start: line,
+    line_end: line,
+    language: 'queue',
+    visibility: 'internal',
+    signature,
+    signature_hash: signatureHash,
+    contract: { kind: 'queue_consumer', name },
+    constraints: null,
+    allowable_values: null,
+    embedding_text: `${signature} queue consumer`,
+    embedding: embedText384(`${signature} queue consumer`),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
+}
+
 export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
   const ts = loadVendoredTypeScript();
 
@@ -663,6 +743,24 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
             sha
           }
         };
+      }
+
+      for (const c of parseCronEntrypoints(lines ?? [])) {
+        const cronNode = makeCronJobNode({ expr: c.expr, filePath, line: c.line, sha, containerUid: sourceUid });
+        yield { type: 'node', data: cronNode };
+        yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: cronNode.symbol_uid, edge_type: 'Defines', metadata: { kind: 'cron_job' }, first_seen_sha: sha, last_seen_sha: sha } };
+        yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: cronNode.symbol_uid, edge_type: 'Defines', file_path: filePath, line_start: c.line, line_end: c.line, occurrence_kind: 'other', sha } };
+        yield { type: 'edge', data: { source_symbol_uid: cronNode.symbol_uid, target_symbol_uid: sourceUid, edge_type: 'ControlFlow', metadata: { kind: 'cron_handler_file' }, first_seen_sha: sha, last_seen_sha: sha } };
+        yield { type: 'flow_entrypoint', data: { entrypoint_key: `cron:${c.expr}`, entrypoint_type: 'cron_job', method: null, path: null, symbol_uid: cronNode.symbol_uid, entrypoint_symbol_uid: cronNode.symbol_uid, file_path: filePath, line_start: c.line, line_end: c.line, sha } };
+      }
+
+      for (const q of parseQueueConsumers(lines ?? [])) {
+        const qNode = makeQueueJobNode({ name: q.name, filePath, line: q.line, sha, containerUid: sourceUid });
+        yield { type: 'node', data: qNode };
+        yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: qNode.symbol_uid, edge_type: 'Defines', metadata: { kind: 'queue_job' }, first_seen_sha: sha, last_seen_sha: sha } };
+        yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: qNode.symbol_uid, edge_type: 'Defines', file_path: filePath, line_start: q.line, line_end: q.line, occurrence_kind: 'other', sha } };
+        yield { type: 'edge', data: { source_symbol_uid: qNode.symbol_uid, target_symbol_uid: sourceUid, edge_type: 'ControlFlow', metadata: { kind: 'queue_handler_file' }, first_seen_sha: sha, last_seen_sha: sha } };
+        yield { type: 'flow_entrypoint', data: { entrypoint_key: `queue:${q.name}`, entrypoint_type: 'queue_job', method: null, path: null, symbol_uid: qNode.symbol_uid, entrypoint_symbol_uid: qNode.symbol_uid, file_path: filePath, line_start: q.line, line_end: q.line, sha } };
       }
 
 	      const imports = extractImportsFromAst(ts, sf);

@@ -87,12 +87,69 @@ function makeSymbolNode({ kind, name, filePath, line, sha, containerUid }) {
   };
 }
 
-export function* parseCSharpFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid }) {
+function parseAspNetRoutes(lines) {
+  const routes = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] ?? '').trim();
+    const mm = line.match(/\bMap(Get|Post|Put|Delete|Patch)\(\s*\"([^\"]+)\"/);
+    if (mm) {
+      routes.push({ method: mm[1].toUpperCase(), path: mm[2], line: i + 1 });
+      continue;
+    }
+    const am = line.match(/^\[(HttpGet|HttpPost|HttpPut|HttpDelete|HttpPatch)\(\s*\"([^\"]+)\"/);
+    if (am) {
+      routes.push({ method: am[1].replace('Http', '').toUpperCase(), path: am[2], line: i + 1 });
+    }
+  }
+  return routes;
+}
+
+function makeApiEndpointNode({ method, routePath, filePath, line, sha, containerUid = null }) {
+  const qualifiedName = `http.${method}.${routePath}`;
+  const signature = `${method} ${routePath}`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language: 'http', qualifiedName, signatureHash });
+  return {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name: signature,
+    node_type: 'ApiEndpoint',
+    symbol_kind: 'api_endpoint',
+    container_uid: containerUid,
+    file_path: filePath,
+    line_start: line,
+    line_end: line,
+    language: 'http',
+    visibility: 'public',
+    signature,
+    signature_hash: signatureHash,
+    contract: { kind: 'http_route', method, path: routePath },
+    constraints: null,
+    allowable_values: null,
+    embedding_text: `${signature} endpoint`,
+    embedding: embedText384(`${signature} endpoint`),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
+}
+
+export function* parseCSharpFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const sourceUid = containerUid ?? null;
+  const localByName = new Map();
+
+  for (const r of parseAspNetRoutes(lines)) {
+    const ep = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha, containerUid: sourceUid });
+    yield { type: 'node', data: ep };
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: ep.symbol_uid, edge_type: 'Defines', metadata: { kind: 'api_endpoint' }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: ep.symbol_uid, edge_type: 'Defines', file_path: filePath, line_start: r.line, line_end: r.line, occurrence_kind: 'route_map', sha } };
+    yield { type: 'edge', data: { source_symbol_uid: ep.symbol_uid, target_symbol_uid: sourceUid, edge_type: 'ControlFlow', metadata: { kind: 'route_handler_file' }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'flow_entrypoint', data: { entrypoint_key: `http:${r.method}:${r.path}`, entrypoint_type: 'http_route', method: r.method, path: r.path, symbol_uid: ep.symbol_uid, entrypoint_symbol_uid: ep.symbol_uid, file_path: filePath, line_start: r.line, line_end: r.line, sha } };
+  }
 
   for (const d of parseCSharpPublicDecls(lines)) {
     const node = makeSymbolNode({ kind: d.kind, name: d.name, filePath, line: d.line, sha, containerUid: sourceUid });
     yield { type: 'node', data: node };
+    localByName.set(d.name, node.symbol_uid);
     yield {
       type: 'edge',
       data: {
@@ -124,6 +181,17 @@ export function* parseCSharpFile({ filePath, lines, sha, containerUid, exportedB
   for (const u of parseCSharpUsings(lines)) {
     const root = u.ns.split('.')[0];
     if (!root) continue;
+    const asPath = u.ns.replaceAll('.', '/') + '.cs';
+    if (typeof sourceFileExists === 'function' && sourceFileExists(asPath)) {
+      const targetUid = makeSymbolUid({
+        language: 'csharp',
+        qualifiedName: asPath.replaceAll('/', '.'),
+        signatureHash: computeSignatureHash({ signature: `file ${asPath}` })
+      });
+      yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', metadata: { using_ns: u.ns }, first_seen_sha: sha, last_seen_sha: sha } };
+      yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Imports', file_path: filePath, line_start: u.line, line_end: u.line, occurrence_kind: 'import', sha } };
+      continue;
+    }
     const packageKey = `nuget:${root}`;
     const ensured = ensurePackageNode({ packageKey, sha, packageToUid });
     if (ensured?.node) yield { type: 'node', data: ensured.node };
@@ -157,5 +225,17 @@ export function* parseCSharpFile({ filePath, lines, sha, containerUid, exportedB
         sha
       }
     };
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+    if (!m) continue;
+    const name = m[1];
+    const targetUid = localByName.get(name) ?? null;
+    if (!targetUid) continue;
+    const lineNo = i + 1;
+    yield { type: 'edge', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee: name }, first_seen_sha: sha, last_seen_sha: sha } };
+    yield { type: 'edge_occurrence', data: { source_symbol_uid: sourceUid, target_symbol_uid: targetUid, edge_type: 'Calls', file_path: filePath, line_start: lineNo, line_end: lineNo, occurrence_kind: 'call', sha } };
   }
 }
