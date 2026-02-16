@@ -17,6 +17,7 @@ import { parsePhpFile } from '../sources/php/php-parser.js';
 import { computeSignatureHash, makeSymbolUid } from '../../../cig/src/identity.js';
 import { embedText384 } from '../../../cig/src/embedding.js';
 import { createTsPathResolver } from '../config/tsconfig.js';
+import { createAstEngineFromEnv } from '../ast/engine.js';
 
 function rel(absRoot, absPath) {
   const r = path.relative(absRoot, absPath);
@@ -91,6 +92,24 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     return sourceFileRelSet.has(String(relPath ?? ''));
   }
   const resolveTsAliasImport = createTsPathResolver({ repoRoot: absRoot, sourceFileExists });
+  let astEngine = null;
+  try {
+    astEngine = createAstEngineFromEnv({ repoRoot: absRoot, sourceFileExists });
+  } catch (e) {
+    // If an AST engine was explicitly requested but is unavailable, record diagnostics and continue with deterministic adapters.
+    yield {
+      type: 'index_diagnostic',
+      data: {
+        sha,
+        mode: filter ? 'incremental' : 'full',
+        phase: 'ast_engine',
+        error: String(e?.message ?? e),
+        engine: String(e?.engine ?? ''),
+        note: 'falling back to built-in deterministic adapters'
+      }
+    };
+    astEngine = null;
+  }
 
   // Index diagnostics (always emitted; useful for incremental correctness visibility).
   yield {
