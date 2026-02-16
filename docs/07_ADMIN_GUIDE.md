@@ -105,6 +105,14 @@ The indexer process must emit **NDJSON records** to stdout and will receive cont
 
 If not configured, Graphfly falls back to the mock indexer (dev only). In `GRAPHFLY_MODE=prod`, the indexer must be configured.
 
+### 2.7 Docs sync fence (recommended)
+To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:
+- `GRAPHFLY_CLOUD_SYNC_REQUIRED=1`
+
+Behavior:
+- If the docs writer runs in stub mode (missing Docs App install/token), the doc job **fails fast** with `docs_cloud_sync_disabled`.
+- In dev mode (without the flag), Graphfly logs a loud warning when a PR is stubbed.
+
 ---
 
 ## 3) Database Migrations

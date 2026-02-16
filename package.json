@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --test",
     "check:spec": "node scripts/spec-guardrails.js",
+    "spec:map": "node scripts/spec-map-generate.js",
     "dev:api": "node apps/api/src/server.js",
     "dev:web": "node apps/web/dev-server.js",
     "worker:indexer": "node workers/indexer/src/queue-runner.js",

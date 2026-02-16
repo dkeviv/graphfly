@@ -27,6 +27,7 @@
 | Stripe billing + webhook processor | `docs/02_REQUIREMENTS.md` | FR-BL-* | DONE | `npm test` (webhook verify+dedupe; pg-backed stripe_events/org_billing when `DATABASE_URL` set; billing summary reads org_billing; checkout/portal support org stripe customer id + env price ids) |
 | Frontend onboarding + graph explorer UX | `docs/04_UX_SPEC.md` | UF-* + FR-GX-* | DONE | `npm test` (focus mode + lazy neighborhood fetch + onboarding config UI) |
 | Operations (SLOs/monitoring/runbooks) | `docs/06_OPERATIONS.md` | NFR-* | DONE | `npm test` |
+| Spec drift guardrails (spec-map + checklist + runtime fences) | `agents.md` + `PR_CHECKLIST.md` | N/A | DONE | `npm run check:spec` |
 
 ## Production Readiness Checklist (Enterprise)
 

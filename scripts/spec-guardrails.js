@@ -55,7 +55,8 @@ const SPEC_DOCS = [
   'docs/05_SECURITY.md',
   'docs/06_OPERATIONS.md',
   'docs/07_ADMIN_GUIDE.md',
-  'project_plan.md'
+  'project_plan.md',
+  'spec-map.md'
 ];
 
 const CODE_PREFIXES = ['apps/', 'packages/', 'workers/', 'migrations/'];
@@ -69,6 +70,23 @@ if (anyMatch(changed, CODE_PREFIXES) && !mustInclude(changed, SPEC_DOCS)) {
     `Changed: ${changed.slice(0, 15).join(', ')}${changed.length > 15 ? '…' : ''}`,
     `Update at least one of: ${SPEC_DOCS.join(', ')}`
   ]);
+}
+
+// Rule 1B: if code changes, project tracking must be updated (auto-maintained plan).
+if (anyMatch(changed, CODE_PREFIXES) && !changed.includes('project_plan.md')) {
+  fail('spec-guardrails: code changed but project_plan.md was not updated', [
+    'Graphfly requires keeping project_plan.md current after each feature implementation + test gate.',
+    'Update the row(s) corresponding to the feature you changed.'
+  ]);
+}
+
+// Rule 1C: if requirements or plan changed, spec-map must be up-to-date (generator output matches file).
+if (changed.includes('docs/02_REQUIREMENTS.md') || changed.includes('project_plan.md')) {
+  try {
+    sh('node scripts/spec-map-generate.js --check');
+  } catch {
+    fail('spec-guardrails: spec-map.md is out of date', ['Run: npm run spec:map']);
+  }
 }
 
 // Rule 2: admin-impact changes require admin guide update.
@@ -103,4 +121,3 @@ if (/openclaw/i.test(tech)) {
 
 // eslint-disable-next-line no-console
 console.log('spec-guardrails: OK');
-

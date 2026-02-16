@@ -87,6 +87,17 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
           symbolUids
         });
 
+        // Drift/ops fence: if the docs writer is running in stub mode, we did not actually sync docs to GitHub.
+        // In production we want this to be fail-fast; in dev we warn loudly.
+        const requireCloudSync = process.env.GRAPHFLY_CLOUD_SYNC_REQUIRED === '1' || process.env.GRAPHFLY_MODE === 'prod';
+        if (pr?.stub) {
+          const msg =
+            'docs_cloud_sync_disabled: docs PR was stubbed (no docs write credentials). Configure the Docs App installation/token or run in local mode intentionally.';
+          if (requireCloudSync) throw new Error(msg);
+          // eslint-disable-next-line no-console
+          console.warn(`WARN: ${msg}`);
+        }
+
         if (prRun && docStore?.updatePrRun) {
           await docStore.updatePrRun({
             tenantId,

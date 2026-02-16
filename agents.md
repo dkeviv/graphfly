@@ -13,6 +13,8 @@ Implementation must follow these documents to avoid drift:
 
 **Drift prevention rule:** every feature PR must include (1) a “Spec anchor” link to the relevant sections above, (2) an acceptance checklist mapped to FR-* IDs, and (3) test evidence (unit/integration/e2e) proving the behavior matches the spec.
 
+**Spec drift escalation rule (required):** changes that diverge from the PRD/Requirements or Technical Spec must be explicitly called out in the PR body and tracked in `spec-map.md`.
+
 ## Code Hygiene Standards (Non-Negotiable)
 
 To keep Graphfly enterprise-grade and maintainable as it scales:
@@ -30,6 +32,7 @@ Graphfly must maintain a single canonical tracking table in `project_plan.md`.
 - Update `project_plan.md` row(s) for that feature.
 - Mark `Status=DONE` only when the feature is implemented end-to-end **and** the listed test gate(s) pass.
 - Keep rows aligned to spec anchors + FR-* requirement IDs (no “extra” scope without a spec update).
+- Keep `spec-map.md` in sync by regenerating it: `npm run spec:map`.
 
 ## Admin Guide Maintenance (Required)
 
@@ -51,6 +54,7 @@ After each spec-anchored feature slice is implemented and the test gate passes:
 
 **Spec guardrail (required):**
 - Run `npm run check:spec` before pushing. It enforces “code changes must update specs/admin guide/UX spec” to prevent drift.
+- Use `PR_CHECKLIST.md` for pre-merge checks (includes “Spec alignment check completed”).
 
 ---
 
