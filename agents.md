@@ -49,6 +49,9 @@ After each spec-anchored feature slice is implemented and the test gate passes:
   - acceptance checklist mapped to FR-* IDs
   - test evidence (commands + results)
 
+**Spec guardrail (required):**
+- Run `npm run check:spec` before pushing. It enforces “code changes must update specs/admin guide/UX spec” to prevent drift.
+
 ---
 
 ## 1. API Gateway (Node.js)
