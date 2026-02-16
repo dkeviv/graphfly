@@ -1070,6 +1070,7 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 - Manifests (initial adapters): `package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `composer.json`.
 - Coverage expands via modular adapters without changing the NDJSON ingestion contract.
 - Cross-file import edges must resolve to **real files** when possible (e.g., TS import `./x` resolves to `./x.ts` / `./x.tsx` / `./x/index.ts` etc) to keep impacted-node and traversal correctness.
+- Cross-file import edges must also respect **tsconfig/jsconfig** `baseUrl` + `paths` mappings where present (for monorepo aliases like `@/*`).
 
 **Run structure**
 1. Resolve `(tenant_id, repo_id, sha, branch)` and clone a read-only checkout (ephemeral).

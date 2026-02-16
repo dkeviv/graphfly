@@ -17,6 +17,10 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'graphfly-indexer-builtin-test-'));
   try {
     write(
+      path.join(tmp, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["src/*"] } } }, null, 2)
+    );
+    write(
       path.join(tmp, 'package.json'),
       JSON.stringify({ name: 'x', version: '1.0.0', dependencies: { lodash: '^4.17.0', unusedpkg: '^1.0.0' } }, null, 2)
     );
@@ -32,6 +36,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         "import _ from 'lodash';",
         "import leftPad from 'left-pad';",
         "import { b } from './b';",
+        "import { util } from '@/util';",
         '',
         '/**',
         " * Says hello.",
@@ -43,6 +48,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       ].join('\n')
     );
     write(path.join(tmp, 'src', 'b.ts'), ['export function b() { return 1; }'].join('\n'));
+    write(path.join(tmp, 'src', 'util.ts'), ['export function util() { return 2; }'].join('\n'));
     write(
       path.join(tmp, 'src', 'app.py'),
       [
@@ -89,6 +95,9 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       const fileB = nodes.find((n) => n.node_type === 'File' && n.file_path === 'src/b.ts');
       assert.ok(fileB, 'expected File node for src/b.ts');
       assert.ok(edges.some((e) => e.edge_type === 'Imports' && e.target_symbol_uid === fileB.symbol_uid), 'expected Imports edge to src/b.ts');
+      const fileUtil = nodes.find((n) => n.node_type === 'File' && n.file_path === 'src/util.ts');
+      assert.ok(fileUtil, 'expected File node for src/util.ts');
+      assert.ok(edges.some((e) => e.edge_type === 'Imports' && e.target_symbol_uid === fileUtil.symbol_uid), 'expected Imports edge to src/util.ts via tsconfig paths');
 
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'package.json'));
       assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'npm:lodash'));

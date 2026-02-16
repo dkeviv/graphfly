@@ -295,7 +295,7 @@ function makeExportedSymbolNode({ kind, name, params, jsdoc, filePath, line, sha
   };
 }
 
-export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
+export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null, resolveAliasImport = null }) {
   const language = filePath.endsWith('.ts') || filePath.endsWith('.tsx') ? 'ts' : 'js';
   const sourceUid = containerUid ?? null;
 
@@ -393,7 +393,8 @@ export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFil
   }
 
   for (const imp of parseImports(lines)) {
-    const resolved = resolveImport(filePath, imp.spec, sourceFileExists);
+    const aliasResolved = typeof resolveAliasImport === 'function' ? resolveAliasImport(imp.spec) : null;
+    const resolved = aliasResolved || resolveImport(filePath, imp.spec, sourceFileExists);
     if (resolved) {
       const targetUid = makeSymbolUid({
         language,

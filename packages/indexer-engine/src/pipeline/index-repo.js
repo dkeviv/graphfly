@@ -16,6 +16,7 @@ import { parseRubyFile } from '../sources/ruby/ruby-parser.js';
 import { parsePhpFile } from '../sources/php/php-parser.js';
 import { computeSignatureHash, makeSymbolUid } from '../../../cig/src/identity.js';
 import { embedText384 } from '../../../cig/src/embedding.js';
+import { createTsPathResolver } from '../config/tsconfig.js';
 
 function rel(absRoot, absPath) {
   const r = path.relative(absRoot, absPath);
@@ -89,6 +90,7 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   function sourceFileExists(relPath) {
     return sourceFileRelSet.has(String(relPath ?? ''));
   }
+  const resolveTsAliasImport = createTsPathResolver({ repoRoot: absRoot, sourceFileExists });
 
   // Index diagnostics (always emitted; useful for incremental correctness visibility).
   yield {
@@ -252,7 +254,16 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
           yield record;
         }
       } else {
-        for (const record of parseJsFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
+        for (const record of parseJsFile({
+          filePath,
+          lines,
+          sha,
+          containerUid: sourceUid,
+          exportedByFile,
+          packageToUid,
+          sourceFileExists,
+          resolveAliasImport: resolveTsAliasImport
+        })) {
           trackRecord(record);
           yield record;
         }
