@@ -92,9 +92,10 @@ Recommended explicit store modes:
 - `DOCS_REPO_PATH` (local mode only; dev/test)
 
 ### 2.6 Indexer (production)
-Graphfly’s indexer worker supports a production indexer as an external CLI.
-Configure one of:
-- `GRAPHFLY_INDEXER_CMD` — command to run (e.g., `yantra-indexer`)
+Graphfly ships with a built‑in indexer (`packages/indexer-engine/`) that emits NDJSON and ingests it into PostgreSQL.
+
+Optional (advanced): configure an external indexer process (e.g., a faster native implementation) by setting:
+- `GRAPHFLY_INDEXER_CMD` — command to run
 - `GRAPHFLY_INDEXER_ARGS_JSON` — JSON array of extra args (optional)
 
 The indexer process must emit **NDJSON records** to stdout and will receive context via env vars:
@@ -103,7 +104,11 @@ The indexer process must emit **NDJSON records** to stdout and will receive cont
 - `GRAPHFLY_CHANGED_FILES_JSON`
 - `GRAPHFLY_REMOVED_FILES_JSON`
 
-If not configured, Graphfly falls back to the mock indexer (dev only). In `GRAPHFLY_MODE=prod`, the indexer must be configured.
+`GRAPHFLY_INDEXER_MODE` controls selection:
+- `auto` (default): prefer external CLI when configured, else use built‑in
+- `builtin`: force built‑in
+- `cli`: force external (fails if not configured)
+- `mock`: dev-only legacy parser (not recommended)
 
 ### 2.7 Docs sync fence (recommended)
 To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:

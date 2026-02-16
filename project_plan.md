@@ -36,7 +36,7 @@
 | Auth | Multi-user auth + org roles | API supports JWT sessions; `org_members` roles enforced; membership management endpoints; admin actions audited to `audit_log` | DONE | `npm test` + integration |
 | GitHub | Prefer GitHub App installs (Reader + Docs) | Installation callbacks persist IDs; clones + PRs use installation tokens (no PATs) | DONE | `npm test` |
 | GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically (by `github_repo_id`); durable delivery dedupe via `webhook_deliveries` | DONE | `npm test` + integration |
-| Indexing | Production indexer (no mock) | Indexer worker runs a configured external NDJSON indexer (`GRAPHFLY_INDEXER_CMD`) and streams ingestion; mock indexer remains dev-only fallback | DONE | `npm test` + integration |
+| Indexing | Production indexer (no mock) | Built-in indexer-engine emits NDJSON (streamed) and ingests it; optional external NDJSON indexer supported via `GRAPHFLY_INDEXER_CMD`; mock remains dev-only | DONE | `npm test` + integration |
 | Jobs | Durable queues + workers | Postgres-backed durable jobs; retries/backoff; worker runners; job status endpoints | DONE | `npm test` + integration |
 | Storage | Required Postgres in prod | `GRAPHFLY_MODE=prod` enforces Postgres + pg queue + jwt auth + secret key | DONE | `npm test` |
 | Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify via server call using docs auth | DONE | `npm test` + integration |

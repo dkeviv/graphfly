@@ -7,6 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { cloneAtSha } from '../../../packages/git/src/clone.js';
 import { runIndexerNdjson } from '../../../packages/indexer-cli/src/indexer-cli.js';
+import { runBuiltinIndexerNdjson } from '../../../packages/indexer-engine/src/indexer.js';
 
 export function createIndexerWorker({ store, docQueue, docStore }) {
   return {
@@ -15,10 +16,12 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
       const cloneSource = job.payload?.cloneSource ?? null;
       const cloneAuth = job.payload?.cloneAuth ?? null;
       const removedFiles = job.payload?.removedFiles ?? [];
+      let reparsedFiles = Array.isArray(changedFiles) ? changedFiles : [];
 
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
         const impact = await computeImpact({ store, tenantId, repoId, changedFiles, depth: 2 });
+        reparsedFiles = impact.reparsedFiles;
         await store.addIndexDiagnostic({
           tenantId,
           repoId,
@@ -52,26 +55,54 @@ export function createIndexerWorker({ store, docQueue, docStore }) {
       try {
         const mode = String(process.env.GRAPHFLY_INDEXER_MODE ?? 'auto').toLowerCase();
         const mustUseCli = mode === 'cli';
+        const mustUseBuiltin = mode === 'builtin';
         const mustUseMock = mode === 'mock';
         const prod = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod';
 
         if (mustUseMock) {
           const ndjsonText = mockIndexRepoToNdjson({ repoRoot: effectiveRepoRoot, language: 'js' });
           await ingestNdjson({ tenantId, repoId, ndjsonText, store });
+        } else if (mustUseBuiltin) {
+          const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({
+            repoRoot: effectiveRepoRoot,
+            sha,
+            changedFiles: reparsedFiles,
+            removedFiles
+          });
+          await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+          await waitForExitOk();
         } else {
           try {
             const { stdout, waitForExitOk } = runIndexerNdjson({
               repoRoot: effectiveRepoRoot,
               sha,
-              changedFiles,
+              changedFiles: reparsedFiles,
               removedFiles
             });
             await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
             await waitForExitOk();
           } catch (e) {
-            if (mustUseCli || prod) throw e;
-            const ndjsonText = mockIndexRepoToNdjson({ repoRoot: effectiveRepoRoot, language: 'js' });
-            await ingestNdjson({ tenantId, repoId, ndjsonText, store });
+            if (mustUseCli) throw e;
+            // In prod, fall back to builtin rather than a mock parser.
+            if (prod) {
+              const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({
+                repoRoot: effectiveRepoRoot,
+                sha,
+                changedFiles: reparsedFiles,
+                removedFiles
+              });
+              await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+              await waitForExitOk();
+            } else {
+              const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({
+                repoRoot: effectiveRepoRoot,
+                sha,
+                changedFiles: reparsedFiles,
+                removedFiles
+              });
+              await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+              await waitForExitOk();
+            }
           }
         }
       } finally {

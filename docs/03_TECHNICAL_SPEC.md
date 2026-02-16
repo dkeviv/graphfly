@@ -1521,12 +1521,12 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 1. Database: PostgreSQL + pgvector schema (all tables above), db-migrate
 2. Redis + BullMQ setup with `index.jobs` queue
 3. API skeleton: Express + Clerk JWT middleware + RLS tenant injection
-4. **Extract `yantra-indexer` Rust CLI** from Yantra:
-   - Source: `/Users/vivekdurairaj/Projects/yantra/src-tauri/src/gnn/`
-   - Keep: `mod.rs`, all 12 parsers, `symbol_resolver.rs`, `incremental.rs`, `embeddings.rs`
-   - Remove: `persistence.rs`, `hnsw_index.rs`, `graph.rs`, all `tauri::*`
-   - Add: `packages/indexer/src/main.rs` (CLI args + NDJSON stdout)
-5. `IndexerWorker`: BullMQ consumer → spawn Rust CLI → stream NDJSON → batch upsert PostgreSQL
+4. **Implement the built‑in Code Intelligence Graph builder** (`packages/indexer-engine/`):
+   - Modular parsing pipeline with language/manifest adapters (no monolith)
+   - Emits NDJSON records (nodes/edges/edge_occurrence/flow_entrypoint/manifests/deps/mismatches/diagnostics)
+   - File‑level fault isolation (single file parse failure must not fail the whole job; emit diagnostics instead)
+   - Incremental mode accepts a re-parse scope list (changed + impacted) and emits `index_diagnostic`
+5. `IndexerWorker`: job consumer → run built‑in indexer (default) OR configured external indexer → stream NDJSON → batch upsert PostgreSQL
 6. Socket.IO `index:progress` / `index:complete` events
 7. Basic graph query endpoints: `/graph/nodes`, `/graph/edges`
 
