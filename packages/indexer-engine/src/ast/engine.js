@@ -1,5 +1,7 @@
+import { createTypeScriptAstEngine } from './typescript/typescript-engine.js';
+
 export function createAstEngineFromEnv({ env = process.env, repoRoot, sourceFileExists }) {
-  const mode = String(env.GRAPHFLY_AST_ENGINE ?? 'none').toLowerCase();
+  const mode = String(env.GRAPHFLY_AST_ENGINE ?? 'typescript').toLowerCase();
   if (mode === 'none' || mode === 'off' || mode === '') return null;
 
   if (mode === 'tree-sitter' || mode === 'treesitter') {
@@ -12,10 +14,9 @@ export function createAstEngineFromEnv({ env = process.env, repoRoot, sourceFile
   }
 
   if (mode === 'typescript') {
-    const err = new Error('ast_engine_unavailable: typescript dependency not installed');
-    err.code = 'ast_engine_unavailable';
-    err.engine = 'typescript';
-    throw err;
+    const engine = createTypeScriptAstEngine({ repoRoot, sourceFileExists });
+    assertAstEngineShape(engine);
+    return engine;
   }
 
   const err = new Error(`ast_engine_unknown: ${mode}`);
@@ -31,4 +32,3 @@ export function assertAstEngineShape(engine) {
   if (typeof engine.parse !== 'function') throw new Error('invalid_ast_engine: missing parse()');
   if (typeof engine.extractRecords !== 'function') throw new Error('invalid_ast_engine: missing extractRecords()');
 }
-

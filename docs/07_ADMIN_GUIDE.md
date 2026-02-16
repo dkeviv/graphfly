@@ -110,6 +110,16 @@ The indexer process must emit **NDJSON records** to stdout and will receive cont
 - `cli`: force external (fails if not configured)
 - `mock`: dev-only legacy parser (not recommended)
 
+### 2.6B AST engine (recommended)
+Graphfly supports a pluggable AST engine for AST‑grade extraction. Configure:
+- `GRAPHFLY_AST_ENGINE=typescript` (default; **vendored in-repo** so it is always available)
+- `GRAPHFLY_AST_ENGINE=none` (explicit opt-out; reduces fidelity)
+- `GRAPHFLY_AST_ENGINE=tree-sitter` (future)
+
+Operational constraint:
+- In `GRAPHFLY_MODE=prod`, if an AST engine is requested but unavailable, the index job **fails fast** (prevents silently indexing at lower fidelity).
+- In dev, Graphfly records an `index_diagnostic` and falls back to deterministic adapters.
+
 ### 2.7 Docs sync fence (recommended)
 To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:
 - `GRAPHFLY_CLOUD_SYNC_REQUIRED=1`

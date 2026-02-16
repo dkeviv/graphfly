@@ -396,8 +396,9 @@ export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFil
     const aliasResolved = typeof resolveAliasImport === 'function' ? resolveAliasImport(imp.spec) : null;
     const resolved = aliasResolved || resolveImport(filePath, imp.spec, sourceFileExists);
     if (resolved) {
+      const targetLanguage = resolved.endsWith('.ts') || resolved.endsWith('.tsx') ? 'ts' : 'js';
       const targetUid = makeSymbolUid({
-        language,
+        language: targetLanguage,
         qualifiedName: resolved.replaceAll('/', '.'),
         signatureHash: computeSignatureHash({ signature: `file ${resolved}` })
       });

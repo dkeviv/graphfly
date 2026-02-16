@@ -96,7 +96,12 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   try {
     astEngine = createAstEngineFromEnv({ repoRoot: absRoot, sourceFileExists });
   } catch (e) {
-    // If an AST engine was explicitly requested but is unavailable, record diagnostics and continue with deterministic adapters.
+    const prod = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod';
+    const astRequired = String(process.env.GRAPHFLY_AST_REQUIRED ?? '').trim() === '1';
+    // If an AST engine was explicitly requested but is unavailable:
+    // - in prod (or when required), fail fast (avoid silently indexing with lower fidelity than expected).
+    // - in dev, record diagnostics and continue with deterministic adapters.
+    if (prod || astRequired) throw e;
     yield {
       type: 'index_diagnostic',
       data: {
@@ -273,18 +278,47 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
           yield record;
         }
       } else {
-        for (const record of parseJsFile({
-          filePath,
-          lines,
-          sha,
-          containerUid: sourceUid,
-          exportedByFile,
-          packageToUid,
-          sourceFileExists,
-          resolveAliasImport: resolveTsAliasImport
-        })) {
-          trackRecord(record);
-          yield record;
+        let usedAst = false;
+        if (astEngine) {
+          try {
+            const res = astEngine.parse({ filePath, language: jsLikeLanguageForFile(filePath), text });
+            if (res?.ok) {
+              usedAst = true;
+              for (const record of astEngine.extractRecords({
+                filePath,
+                language: jsLikeLanguageForFile(filePath),
+                ast: res.ast,
+                text,
+                lines,
+                sha,
+                containerUid: sourceUid,
+                exportedByFile,
+                packageToUid,
+                sourceFileExists,
+                resolveAliasImport: resolveTsAliasImport
+              })) {
+                trackRecord(record);
+                yield record;
+              }
+            }
+          } catch (e) {
+            yield emitParseError({ filePath, phase: 'parse_ast', err: e });
+          }
+        }
+        if (!usedAst) {
+          for (const record of parseJsFile({
+            filePath,
+            lines,
+            sha,
+            containerUid: sourceUid,
+            exportedByFile,
+            packageToUid,
+            sourceFileExists,
+            resolveAliasImport: resolveTsAliasImport
+          })) {
+            trackRecord(record);
+            yield record;
+          }
         }
       }
     } catch (e) {

@@ -14,8 +14,10 @@ test('builtin indexer emits diagnostic and falls back when AST engine requested 
     fs.writeFileSync(path.join(tmp, 'src', 'a.ts'), "export function a() { return 1 }", 'utf8');
 
     const prev = process.env.GRAPHFLY_AST_ENGINE;
+    const prevMode = process.env.GRAPHFLY_MODE;
     try {
       process.env.GRAPHFLY_AST_ENGINE = 'tree-sitter';
+      process.env.GRAPHFLY_MODE = 'dev';
       const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({ repoRoot: tmp, sha: 's1' });
       const store = new InMemoryGraphStore();
       await ingestNdjsonReadable({ tenantId: 't-1', repoId: 'r-1', readable: stdout, store });
@@ -25,9 +27,41 @@ test('builtin indexer emits diagnostic and falls back when AST engine requested 
     } finally {
       if (prev === undefined) delete process.env.GRAPHFLY_AST_ENGINE;
       else process.env.GRAPHFLY_AST_ENGINE = prev;
+      if (prevMode === undefined) delete process.env.GRAPHFLY_MODE;
+      else process.env.GRAPHFLY_MODE = prevMode;
     }
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   }
 });
 
+test('builtin indexer fails fast in prod when AST engine requested but unavailable', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'graphfly-ast-unavailable-prod-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'src', 'a.ts'), "export function a() { return 1 }", 'utf8');
+
+    const prev = process.env.GRAPHFLY_AST_ENGINE;
+    const prevMode = process.env.GRAPHFLY_MODE;
+    try {
+      process.env.GRAPHFLY_AST_ENGINE = 'tree-sitter';
+      process.env.GRAPHFLY_MODE = 'prod';
+      const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({ repoRoot: tmp, sha: 's1' });
+      const store = new InMemoryGraphStore();
+      await assert.rejects(
+        async () => {
+          await ingestNdjsonReadable({ tenantId: 't-1', repoId: 'r-1', readable: stdout, store });
+          await waitForExitOk();
+        },
+        /ast_engine_unavailable/
+      );
+    } finally {
+      if (prev === undefined) delete process.env.GRAPHFLY_AST_ENGINE;
+      else process.env.GRAPHFLY_AST_ENGINE = prev;
+      if (prevMode === undefined) delete process.env.GRAPHFLY_MODE;
+      else process.env.GRAPHFLY_MODE = prevMode;
+    }
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
+});

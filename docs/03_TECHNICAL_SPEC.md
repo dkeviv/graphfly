@@ -1064,7 +1064,8 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 - The graph builder uses **deterministic parsing** to extract syntactic truth: symbols, imports, declarations, and reference sites (edge occurrences).
 - LLM/agent logic is **not** trusted for syntactic extraction because it is probabilistic and can hallucinate or miss edge cases.
 - LLM/agent logic is used later for **semantic enrichment** and doc generation, and must be grounded in evidence (graph node + file path + line ranges + SHA).
-- Graphfly supports a pluggable **AST engine** (e.g., Tree-sitter / TypeScript compiler API) to upgrade from heuristic adapters to AST-grade extraction without changing the NDJSON ingest contract.
+- Graphfly supports a pluggable **AST engine** to upgrade from heuristic adapters to AST‑grade extraction without changing the NDJSON ingest contract.
+- V1 ships with a **vendored TypeScript compiler AST engine** (default) for JS/TS so production deployments do not depend on network installs at runtime; Tree‑sitter is a future engine for broader multi‑language AST coverage.
 
 **Language & manifest coverage (V1 built-in analyzer)**
 - Languages (initial adapters): JavaScript/TypeScript, Python, Go, Rust, Java, C# (plus basic Ruby/PHP heuristics).

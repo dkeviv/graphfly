@@ -6,7 +6,7 @@
 | Encrypted secrets store (org-scoped) | `docs/05_SECURITY.md` | NFR-SEC-* | DONE | `npm test` |
 | GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | DONE | `npm test` (OAuth endpoints + dev token connect; repo list + project creation triggers index) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` (imports resolve to real files + tsconfig paths/baseUrl) |
-| AST engine (pluggable; future tree-sitter) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | PARTIAL | `npm test` (interface + diagnostics; AST implementation pending dependency) |
+| AST engine (TypeScript AST; tree-sitter later) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | DONE | `npm test` (vendored TypeScript AST engine; JS/TS parsing uses AST by default; prod fail-fast if an unavailable AST engine is requested) |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | DONE | `npm test` |
 | Dev harness: mock indexer PCG enrichment (functions/classes + allowables/constraints) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` |
@@ -38,6 +38,7 @@
 | GitHub | Prefer GitHub App installs (Reader + Docs) | Installation callbacks persist IDs; clones + PRs use installation tokens (no PATs) | DONE | `npm test` |
 | GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically (by `github_repo_id`); durable delivery dedupe via `webhook_deliveries` | DONE | `npm test` + integration |
 | Indexing | Production indexer (no mock) | Built-in indexer-engine emits NDJSON (streamed) and ingests it; optional external NDJSON indexer supported via `GRAPHFLY_INDEXER_CMD`; mock remains dev-only | DONE | `npm test` + integration |
+| Indexing | AST engine always available | Default `GRAPHFLY_AST_ENGINE=typescript` is present in-repo; disabling requires explicit opt-out; requesting missing engines fails fast in prod | DONE | `npm test` |
 | Jobs | Durable queues + workers | Postgres-backed durable jobs; retries/backoff; worker runners; job status endpoints | DONE | `npm test` + integration |
 | Storage | Required Postgres in prod | `GRAPHFLY_MODE=prod` enforces Postgres + pg queue + jwt auth + secret key | DONE | `npm test` |
 | Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify via server call using docs auth | DONE | `npm test` + integration |
