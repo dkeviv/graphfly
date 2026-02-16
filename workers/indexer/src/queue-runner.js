@@ -2,6 +2,7 @@ import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-stor
 import { createDocStoreFromEnv } from '../../../packages/stores/src/doc-store.js';
 import { createQueueFromEnv } from '../../../packages/stores/src/queue.js';
 import { createIndexerWorker } from './indexer-worker.js';
+import { createRealtimePublisherFromEnv } from '../../../packages/realtime/src/publisher.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -16,12 +17,13 @@ async function main() {
   const indexQueue = await createQueueFromEnv({ queueName: 'index' });
   const docQueue = await createQueueFromEnv({ queueName: 'doc' });
   const graphQueue = await createQueueFromEnv({ queueName: 'graph' });
+  const realtime = createRealtimePublisherFromEnv() ?? null;
 
   if (typeof indexQueue.lease !== 'function') {
     throw new Error('queue_mode_not_supported: set GRAPHFLY_QUEUE_MODE=pg and DATABASE_URL to enable durable workers');
   }
 
-  const worker = createIndexerWorker({ store, docQueue, docStore, graphQueue });
+  const worker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
 
   // Phase-1: single-tenant worker loop (RLS enforced via app.tenant_id).
   // Run one job at a time; retries handled by queue.fail().

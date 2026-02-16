@@ -74,7 +74,10 @@ export async function runOpenClawToolLoop({
   user,
   tools,
   maxTurns = 20,
-  requestJson = httpRequestJson
+  requestJson = httpRequestJson,
+  onTurn = null,
+  onToolCall = null,
+  onToolResult = null
 }) {
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
   const toolsPayload = toToolDefs(tools);
@@ -82,6 +85,13 @@ export async function runOpenClawToolLoop({
   let currentInput = input;
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    if (typeof onTurn === 'function') {
+      try {
+        onTurn({ turn, maxTurns });
+      } catch {
+        // ignore
+      }
+    }
     const { status, json, text } = await requestJson({
       url: new URL('/v1/responses', gatewayUrl).toString(),
       method: 'POST',
@@ -125,7 +135,21 @@ export async function runOpenClawToolLoop({
       } catch {
         throw new Error(`Invalid tool arguments for ${name}: ${String(rawArgs).slice(0, 200)}`);
       }
+      if (typeof onToolCall === 'function') {
+        try {
+          onToolCall({ name, callId, args });
+        } catch {
+          // ignore
+        }
+      }
       const toolResult = await tool.handler(args);
+      if (typeof onToolResult === 'function') {
+        try {
+          onToolResult({ name, callId, result: toolResult });
+        } catch {
+          // ignore
+        }
+      }
       outputs.push({
         type: 'function_call_output',
         call_id: callId,

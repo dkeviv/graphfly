@@ -6,11 +6,11 @@
 | Encrypted secrets store (org-scoped) | `docs/05_SECURITY.md` | NFR-SEC-* | DONE | `npm test` |
 | Orgs + members + RBAC (JWT mode) | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md` | FR-TM-01, FR-TM-02 | DONE | `npm test` |
 | GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-GH-02 | DONE | `npm test` (OAuth endpoints + token storage; onboarding repo list + project creation triggers index) |
-| GitHub Reader App install + webhook indexing | `docs/02_REQUIREMENTS.md` | FR-GH-01, FR-GH-04, FR-CIG-02 | PARTIAL | `npm test` (install URL + callback store install id; webhook verify+dedupe; indexing uses App token when configured) |
+| GitHub Reader App install + webhook indexing | `docs/02_REQUIREMENTS.md` | FR-GH-01, FR-GH-02, FR-GH-04, FR-CIG-02 | DONE | `npm test` (install URL + callback stores install id; repo listing prefers installation token; webhook verify+dedupe; indexing uses App token when configured) |
 | GitHub Docs App install + docs-repo-only writes | `docs/02_REQUIREMENTS.md` | FR-GH-01B, FR-GH-03, FR-GH-05, FR-DOC-06 | DONE | `npm test` (docs repo verification + docs writer guard + PR creation stubbed when creds missing) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` (imports resolve to real files + tsconfig paths/baseUrl) |
 | AST engine (TypeScript AST; tree-sitter later) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | DONE | `npm test` (vendored TypeScript AST engine; JS/TS parsing uses AST by default; prod fail-fast if an unavailable AST engine is requested) |
-| Call graph (JS/TS) + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | PARTIAL | `npm test` (Calls edges + callsite occurrences for identifier calls + namespace import member calls; dynamic/member-object calls pending) |
+| Call graph (JS/TS) + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-03, FR-CIG-04 | DONE | `npm test` (Calls edges + callsite occurrences for identifier calls, namespace import member calls, `this.method()`, and `ClassName.method()`; dynamic/member-object calls remain conservative by design) |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-* | DONE | `npm test` |
 | Dev harness: mock indexer PCG enrichment (functions/classes + allowables/constraints) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-* | DONE | `npm test` |
@@ -57,6 +57,6 @@
 
 | Area | Spec Anchor | Requirement IDs | Status | Test Gate |
 |---|---|---|---|---|
-| Coverage dashboard (CIG completeness) | `docs/02_REQUIREMENTS.md` | FR-CV-01, FR-CV-02, FR-CV-03 | PENDING | `npm test` + integration |
-| Team management (member invites) | `docs/02_REQUIREMENTS.md` | FR-TM-03 | PENDING | `npm test` + integration |
-| Real-time progress streaming | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md` | FR-RT-01, FR-RT-02 | PENDING | `npm test` + integration |
+| Coverage dashboard (CIG completeness) | `docs/02_REQUIREMENTS.md` | FR-CV-01, FR-CV-02, FR-CV-03 | DONE | `npm test` |
+| Team management (member invites) | `docs/02_REQUIREMENTS.md` | FR-TM-03 | DONE | `npm test` |
+| Real-time progress streaming | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md` | FR-RT-01, FR-RT-02 | DONE | `npm test` |

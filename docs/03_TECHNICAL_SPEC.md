@@ -122,6 +122,25 @@ CREATE TABLE org_members (
 );
 CREATE INDEX idx_org_members_user ON org_members(user_id);
 
+-- Member invitations (Phase-1). Invitation token is stored as a hash; email delivery is external.
+CREATE TABLE org_invites (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id             UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    email                 TEXT NOT NULL,
+    role                  TEXT NOT NULL DEFAULT 'viewer'
+                           CHECK (role IN ('viewer','member','admin','owner')),
+    status                TEXT NOT NULL DEFAULT 'pending'
+                           CHECK (status IN ('pending','accepted','revoked','expired')),
+    token_hash            TEXT NOT NULL,
+    expires_at            TIMESTAMPTZ NOT NULL,
+    accepted_at           TIMESTAMPTZ,
+    accepted_by_user_id   TEXT,
+    revoked_at            TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, token_hash)
+);
+CREATE INDEX idx_org_invites_status ON org_invites(tenant_id, status, expires_at);
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- REPOS
 -- ═══════════════════════════════════════════════════════════════════════
@@ -1160,13 +1179,13 @@ Graphfly includes an **agentic enrichment loop** that iteratively explores the a
 
 All endpoints (except `/webhooks/github`) require:
 ```
-Authorization: Bearer <clerk_jwt>
+Authorization: Bearer <jwt>
 ```
 
-The JWT contains org_id in claims. Middleware:
-1. Validates JWT signature against Clerk public key
-2. Extracts `org_id` from claims
-3. Sets `req.tenantId = org_id`
+The JWT contains `tenantId` in claims (HS256 in Phase-1). Middleware:
+1. Validates JWT signature (when `GRAPHFLY_AUTH_MODE=jwt`)
+2. Extracts `tenantId` from claims
+3. Sets `req.tenantId = tenantId`
 4. Borrows a DB connection, sets `SET app.tenant_id = $1`, and guarantees `RESET app.tenant_id` before release
 
 ### 3.2 Endpoints
@@ -1188,14 +1207,24 @@ PUT /api/v1/orgs/current
   Body: { docs_repo_full_name?: string, display_name?: string }
   Permission: admin+
 
-GET /api/v1/orgs/current/members
-  Response: [{ user_id, email, display_name, role, accepted_at }]
-
-POST /api/v1/orgs/current/members/invite
-  Body: { email: string, role: org_role }
+GET /api/v1/orgs/members
+  Response: { members: [{ userId, role }] }
   Permission: admin+
 
-DELETE /api/v1/orgs/current/members/:userId
+POST /api/v1/orgs/invites
+  Body: { email: string, role: 'viewer'|'member'|'admin', ttlDays?: number }
+  Response: { invite, acceptUrl }
+  Permission: admin+
+
+GET /api/v1/orgs/invites
+  Response: { invites: [...] }
+  Permission: admin+
+
+POST /api/v1/orgs/invites/accept
+  Body: { token: string }
+  Permission: authenticated user
+
+DELETE /api/v1/orgs/members/:userId
   Permission: admin+
 
 ─── BILLING (Stripe) ───────────────────────────────────────────────────
@@ -1341,15 +1370,18 @@ GET /api/v1/repos/:repoId/pr-runs/:runId/blocks
   Response: { updated: [DocBlock], created: [DocBlock] }
 
 ─── COVERAGE ──────────────────────────────────────────────────────────
-GET /api/v1/repos/:repoId/coverage
-  Response: {
-    overall_pct: number,
-    by_type: { Function: number, Class: number, Module: number },
-    total_nodes: number,
-    documented_nodes: number,
-    undocumented_entry_points: [{ node: GraphNode, caller_count: number }],
-    unresolved_imports: [{ module: string, count: number, category: string }]
-  }
+GET /coverage/summary
+  Query: ?tenantId=<uuid>&repoId=<uuid>
+
+GET /coverage/undocumented-entrypoints
+  Query: ?tenantId=<uuid>&repoId=<uuid>&limit=50
+
+GET /coverage/unresolved-imports
+  Query: ?tenantId=<uuid>&repoId=<uuid>
+
+POST /coverage/document
+  Body: { tenantId, repoId, symbolUids: string[] }
+  Action: Enqueue single-node doc generation for coverage remediation
 
 ─── WEBHOOKS (no JWT — HMAC only) ─────────────────────────────────────
 POST /webhooks/github
@@ -1387,58 +1419,23 @@ async function handleStripeWebhook(rawBody: Buffer, signature: string | undefine
 }
 ```
 
-### 3.3 WebSocket Events (Socket.IO)
+### 3.3 WebSocket Events (Plain WebSocket)
 
-Client connects:
-```javascript
-const socket = io(GRAPHFLY_WS_URL, { auth: { token: clerkJwt } });
-socket.emit('subscribe', { repoId: 'uuid...' });
+Client connects to `GET /ws` with query parameters:
+- `tenantId`
+- `repoId`
+- `token` (required when `GRAPHFLY_AUTH_MODE=jwt`)
+
+Server sends newline-free JSON frames of the shape:
+```json
+{ "tenantId": "uuid", "repoId": "uuid", "type": "index:progress", "payload": { "pct": 10, "filePath": "src/a.ts" } }
 ```
 
-Server events:
-```typescript
-// Indexing
-socket.emit('index:progress', {
-  repoId: string,
-  pct: number,      // 0-100
-  file: string,     // current file being parsed
-  nodesProcessed: number,
-  edgesProcessed: number,
-});
-socket.emit('index:complete', {
-  repoId: string,
-  sha: string,
-  stats: { files_processed, nodes_emitted, edges_emitted, duration_ms }
-});
-socket.emit('index:error', { repoId: string, error: string });
+Event types:
+- Indexing: `index:start`, `index:progress`, `index:complete`, `index:error`
+- Doc agent: `agent:start`, `agent:turn`, `agent:tool_call`, `agent:tool_result`, `agent:complete`, `agent:error`
 
-// Doc Agent
-socket.emit('agent:start', {
-  repoId: string,
-  prRunId: string,
-  triggerSha: string,
-});
-socket.emit('agent:tool_call', {
-  prRunId: string,
-  tool: string,
-  args: Record<string, unknown>,
-});
-socket.emit('agent:tool_result', {
-  prRunId: string,
-  tool: string,
-  result_summary: string,  // Short human-readable summary
-});
-socket.emit('agent:complete', {
-  prRunId: string,
-  docs_pr_url: string,
-  blocks_updated: number,
-  blocks_created: number,
-});
-socket.emit('agent:error', {
-  prRunId: string,
-  error: string,
-});
-```
+Workers can publish into the hub via `POST /internal/rt` (Bearer token `GRAPHFLY_RT_TOKEN`) for multi-process deployments.
 
 ---
 

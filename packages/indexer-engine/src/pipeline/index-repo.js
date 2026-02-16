@@ -87,6 +87,16 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     else if (kind && kind.startsWith('source:')) sourceFiles.push(abs);
   }
 
+  yield {
+    type: 'index_progress',
+    data: {
+      sha,
+      mode: filter ? 'incremental' : 'full',
+      phase: 'start',
+      file_total: sourceFiles.length
+    }
+  };
+
   const sourceFileRelSet = new Set(sourceFiles.map((p) => rel(absRoot, p)));
   function sourceFileExists(relPath) {
     return sourceFileRelSet.has(String(relPath ?? ''));
@@ -263,11 +273,24 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   }
 
   // Source parsing.
-  for (const absFile of sourceFiles) {
+  for (let fileIndex = 0; fileIndex < sourceFiles.length; fileIndex++) {
+    const absFile = sourceFiles[fileIndex];
     const filePath = rel(absRoot, absFile);
     const sourceUid = fileToUid.get(filePath) ?? null;
     const text = fs.readFileSync(absFile, 'utf8');
     const lines = text.split('\n');
+
+    yield {
+      type: 'index_progress',
+      data: {
+        sha,
+        mode: filter ? 'incremental' : 'full',
+        phase: 'file',
+        file_path: filePath,
+        file_index: fileIndex + 1,
+        file_total: sourceFiles.length
+      }
+    };
 
     const kind = classify(filePath);
     try {

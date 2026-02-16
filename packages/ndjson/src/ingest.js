@@ -9,11 +9,12 @@ function assertRecordShape(record) {
   if (!('data' in record)) throw new Error('ndjson record missing data');
 }
 
-export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
+export async function ingestNdjson({ tenantId, repoId, ndjsonText, store, onRecord = null } = {}) {
   if (typeof store?.ingestRecords === 'function') {
     const records = [];
     for (const record of parseNdjsonText(ndjsonText)) {
       assertRecordShape(record);
+      if (typeof onRecord === 'function') onRecord(record);
       if (record.type === 'node') {
         record.data = sanitizeNodeForPersistence(record.data);
         const v = validateNodeRecord(record.data);
@@ -42,7 +43,8 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
         record.type === 'declared_dependency' ||
         record.type === 'observed_dependency' ||
         record.type === 'dependency_mismatch' ||
-        record.type === 'index_diagnostic'
+        record.type === 'index_diagnostic' ||
+        record.type === 'unresolved_import'
       ) {
         records.push(record);
         continue;
@@ -55,6 +57,7 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
 
   for (const record of parseNdjsonText(ndjsonText)) {
     assertRecordShape(record);
+    if (typeof onRecord === 'function') onRecord(record);
     if (record.type === 'node') {
       record.data = sanitizeNodeForPersistence(record.data);
       const v = validateNodeRecord(record.data);
@@ -100,6 +103,10 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
       await store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
       continue;
     }
+    if (record.type === 'unresolved_import') {
+      await store.addUnresolvedImport?.({ tenantId, repoId, unresolvedImport: record.data });
+      continue;
+    }
     if (record.type === 'flow_graph') {
       await store.upsertFlowGraph({ tenantId, repoId, flowGraph: record.data });
       continue;
@@ -108,7 +115,7 @@ export async function ingestNdjson({ tenantId, repoId, ndjsonText, store }) {
   }
 }
 
-export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }) {
+export async function ingestNdjsonReadable({ tenantId, repoId, readable, store, onRecord = null } = {}) {
   if (typeof store?.ingestRecords === 'function') {
     const batchSize = 500;
     const batch = [];
@@ -121,6 +128,7 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
 
     for await (const record of parseNdjsonStream(readable)) {
       assertRecordShape(record);
+      if (typeof onRecord === 'function') onRecord(record);
       if (record.type === 'node') {
         record.data = sanitizeNodeForPersistence(record.data);
         const v = validateNodeRecord(record.data);
@@ -143,7 +151,8 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
         record.type === 'declared_dependency' ||
         record.type === 'observed_dependency' ||
         record.type === 'dependency_mismatch' ||
-        record.type === 'index_diagnostic'
+        record.type === 'index_diagnostic' ||
+        record.type === 'unresolved_import'
       ) {
         batch.push(record);
       }
@@ -157,6 +166,7 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
 
   for await (const record of parseNdjsonStream(readable)) {
     assertRecordShape(record);
+    if (typeof onRecord === 'function') onRecord(record);
     if (record.type === 'node') {
       const v = validateNodeRecord(record.data);
       if (!v.ok) throw new Error(`invalid_node:${v.reason}`);
@@ -197,6 +207,10 @@ export async function ingestNdjsonReadable({ tenantId, repoId, readable, store }
     }
     if (record.type === 'index_diagnostic') {
       await store.addIndexDiagnostic({ tenantId, repoId, diagnostic: record.data });
+      continue;
+    }
+    if (record.type === 'unresolved_import') {
+      await store.addUnresolvedImport?.({ tenantId, repoId, unresolvedImport: record.data });
       continue;
     }
     if (record.type === 'flow_graph') {

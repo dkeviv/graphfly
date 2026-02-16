@@ -234,7 +234,8 @@ export async function runDocPrWithOpenClaw({
   prRunId = null,
   entrypointKeys = null,
   symbolUids = null,
-  openclaw = null
+  openclaw = null,
+  onEvent = null
 }) {
   if (!docStore) throw new Error('docStore is required');
   if (!docsWriter) throw new Error('docsWriter is required');
@@ -453,6 +454,27 @@ export async function runDocPrWithOpenClaw({
     'Finally, open a PR in the docs repo with the generated files.'
   ].join('\n');
 
+  function emit(type, payload) {
+    if (typeof onEvent !== 'function') return;
+    try {
+      onEvent(type, payload ?? null);
+    } catch {
+      // ignore
+    }
+  }
+
+  function summarizeArgs(args) {
+    if (!args || typeof args !== 'object') return null;
+    const out = {};
+    for (const [k, v] of Object.entries(args)) {
+      if (typeof v === 'string') out[k] = v.length > 200 ? `${v.slice(0, 200)}…` : v;
+      else if (typeof v === 'number' || typeof v === 'boolean' || v == null) out[k] = v;
+      else if (Array.isArray(v)) out[k] = `[${v.length}]`;
+      else out[k] = '{…}';
+    }
+    return out;
+  }
+
   await runOpenClawToolLoop({
     gatewayUrl,
     token,
@@ -463,7 +485,11 @@ export async function runDocPrWithOpenClaw({
     user: `graphfly:${tenantId}:${repoId}`,
     tools,
     maxTurns: 20,
-    requestJson
+    requestJson,
+    onTurn: ({ turn, maxTurns }) => emit('agent:turn', { agent: 'doc', turn, maxTurns }),
+    onToolCall: ({ name, callId, args }) => emit('agent:tool_call', { agent: 'doc', name, callId, args: summarizeArgs(args) }),
+    onToolResult: ({ name, callId, result }) =>
+      emit('agent:tool_result', { agent: 'doc', name, callId, ok: true, resultShape: result && typeof result === 'object' ? Object.keys(result).slice(0, 12) : null })
   });
 
   if (!prResult) throw new Error('doc_agent_missing_pr_result');

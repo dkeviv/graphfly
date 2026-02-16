@@ -7,9 +7,9 @@ export function renderOnboardingPage({ state, pageEl }) {
   const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
   const steps = [
-    { k: '1', h: 'Connect GitHub', s: 'OAuth (dev: paste token) to list repos read-only.', ok: false },
+    { k: '1', h: 'Sign in to GitHub', s: 'OAuth sign-in (required). Reader App is used for repo discovery in prod.', ok: false },
     { k: '2', h: 'Docs Repo', s: 'Separate repo (write-only). Docs PRs go here.', ok: false },
-    { k: '3', h: 'Create Project', s: 'Select a source repo; indexing + docs run automatically.', ok: false }
+    { k: '3', h: 'Create Project', s: 'Pick a source repo; indexing + docs run automatically.', ok: false }
   ];
 
   const statusEl = el('div', { class: 'small' }, ['Loading onboarding status…']);
@@ -107,6 +107,7 @@ export function renderOnboardingPage({ state, pageEl }) {
               const v = document.getElementById('apiUrlInput').value;
               localStorage.setItem('graphfly_api_url', v);
               state.apiUrl = v;
+              state.realtime?.update?.({ nextApiUrl: v });
             }
           }, ['Save'])
         ]),
@@ -185,11 +186,13 @@ export function renderOnboardingPage({ state, pageEl }) {
             state.authToken = out.authToken;
             localStorage.setItem('graphfly_auth_token', out.authToken);
             api.authToken = out.authToken;
+            state.realtime?.update?.({ nextAuthToken: out.authToken });
           }
           if (out?.tenantId) {
             state.tenantId = out.tenantId;
             localStorage.setItem('graphfly_tenant_id', out.tenantId);
             api.tenantId = out.tenantId;
+            state.realtime?.update?.({ nextTenantId: out.tenantId });
           }
           stripQueryFromUrl();
         } catch (e) {
@@ -215,6 +218,7 @@ export function renderOnboardingPage({ state, pageEl }) {
                 onclick: () => {
                   state.repoId = r.id;
                   localStorage.setItem('graphfly_repo_id', r.id);
+                  state.realtime?.update?.({ nextRepoId: r.id });
                   window.location.hash = 'graph';
                 }
               }, ['Open']),
@@ -286,6 +290,7 @@ export function renderOnboardingPage({ state, pageEl }) {
                       if (repo?.id) {
                         state.repoId = repo.id;
                         localStorage.setItem('graphfly_repo_id', repo.id);
+                        state.realtime?.update?.({ nextRepoId: repo.id });
                         window.location.hash = 'graph';
                         return;
                       }
@@ -301,11 +306,11 @@ export function renderOnboardingPage({ state, pageEl }) {
         }
       } catch {
         githubConnected = false;
-        githubReposEl.appendChild(el('li', { class: 'list__item' }, ['Not connected yet.']));
+        githubReposEl.appendChild(el('li', { class: 'list__item' }, ['Connect GitHub and/or install the Reader App to see source repos.']));
         docsCandidatesEl.appendChild(el('li', { class: 'list__item' }, ['Connect GitHub first to see repo options.']));
       }
 
-      steps[0].ok = githubConnected;
+      steps[0].ok = Boolean(state.authToken) || githubConnected;
       steps[1].ok = hasDocsRepo;
       steps[2].ok = hasRepo;
 

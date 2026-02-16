@@ -38,6 +38,26 @@ CREATE TABLE IF NOT EXISTS org_members (
 );
 CREATE INDEX IF NOT EXISTS idx_org_members_role ON org_members(tenant_id, role);
 
+-- Member invitations (Phase-1 team onboarding). Email delivery is external; token is one-time and stored as a hash.
+CREATE TABLE IF NOT EXISTS org_invites (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id             UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    email                 TEXT NOT NULL,
+    role                  TEXT NOT NULL DEFAULT 'viewer'
+                           CHECK (role IN ('viewer','member','admin','owner')),
+    status                TEXT NOT NULL DEFAULT 'pending'
+                           CHECK (status IN ('pending','accepted','revoked','expired')),
+    token_hash            TEXT NOT NULL,
+    expires_at            TIMESTAMPTZ NOT NULL,
+    accepted_at           TIMESTAMPTZ,
+    accepted_by_user_id   TEXT,
+    revoked_at            TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, token_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_org_invites_status ON org_invites(tenant_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_org_invites_email ON org_invites(tenant_id, email);
+
 CREATE TABLE IF NOT EXISTS repos (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id         UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -454,6 +474,26 @@ CREATE TABLE IF NOT EXISTS index_diagnostics (
 CREATE INDEX IF NOT EXISTS idx_idxdiag_repo ON index_diagnostics(tenant_id, repo_id, created_at DESC);
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- UNRESOLVED IMPORTS (Coverage dashboard transparency)
+-- Stores internal/alias import statements that could not be resolved to a known file.
+-- External package imports are represented via Packages + dependency tables.
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS unresolved_imports (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id   UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id     UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    file_path   TEXT NOT NULL,
+    line        INTEGER NOT NULL,
+    spec        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'internal_unresolved',
+    sha         TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, repo_id, file_path, line, spec, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_ui_repo ON unresolved_imports(tenant_id, repo_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ui_file ON unresolved_imports(tenant_id, repo_id, file_path);
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- DOC BLOCKS + EVIDENCE + PR RUNS (docs repo output)
 -- ═══════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS doc_blocks (
@@ -535,6 +575,7 @@ ALTER TABLE doc_blocks
 -- ═══════════════════════════════════════════════════════════════════════
 ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE repos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_billing ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stripe_events ENABLE ROW LEVEL SECURITY;
@@ -553,6 +594,7 @@ ALTER TABLE declared_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE observed_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dependency_mismatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE index_diagnostics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE unresolved_imports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
@@ -563,6 +605,7 @@ ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 -- Hardening: ensure RLS applies even for table owners.
 ALTER TABLE orgs FORCE ROW LEVEL SECURITY;
 ALTER TABLE org_members FORCE ROW LEVEL SECURITY;
+ALTER TABLE org_invites FORCE ROW LEVEL SECURITY;
 ALTER TABLE repos FORCE ROW LEVEL SECURITY;
 ALTER TABLE org_billing FORCE ROW LEVEL SECURITY;
 ALTER TABLE stripe_events FORCE ROW LEVEL SECURITY;
@@ -581,6 +624,7 @@ ALTER TABLE declared_dependencies FORCE ROW LEVEL SECURITY;
 ALTER TABLE observed_dependencies FORCE ROW LEVEL SECURITY;
 ALTER TABLE dependency_mismatches FORCE ROW LEVEL SECURITY;
 ALTER TABLE index_diagnostics FORCE ROW LEVEL SECURITY;
+ALTER TABLE unresolved_imports FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence FORCE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs FORCE ROW LEVEL SECURITY;
@@ -594,6 +638,10 @@ CREATE POLICY tenant_self_orgs ON orgs
 
 DROP POLICY IF EXISTS tenant_isolation_org_members ON org_members;
 CREATE POLICY tenant_isolation_org_members ON org_members
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_org_invites ON org_invites;
+CREATE POLICY tenant_isolation_org_invites ON org_invites
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_repos ON repos;
@@ -682,6 +730,10 @@ CREATE POLICY tenant_isolation_dependency_mismatches ON dependency_mismatches
 
 DROP POLICY IF EXISTS tenant_isolation_index_diagnostics ON index_diagnostics;
 CREATE POLICY tenant_isolation_index_diagnostics ON index_diagnostics
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_unresolved_imports ON unresolved_imports;
+CREATE POLICY tenant_isolation_unresolved_imports ON unresolved_imports
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
 DROP POLICY IF EXISTS tenant_isolation_doc_blocks ON doc_blocks;

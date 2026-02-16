@@ -37,11 +37,15 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         "import leftPad from 'left-pad';",
         "import { b } from './b';",
         "import * as bmod from './b';",
+        "import { missing } from './missing';",
         "import { util } from '@/util';",
         '',
         'export function callB() { return b(); }',
         'export function callB2() { return bmod.b(); }',
         'export function callUtil() { return util(); }',
+        '',
+        'export class X { static hi() { return 1; } }',
+        'export function callStatic() { return X.hi(); }',
         '',
         '/**',
         " * Says hello.",
@@ -97,6 +101,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       const edges = await store.listEdges({ tenantId: 't-1', repoId: 'r-1' });
       const occs = await store.listEdgeOccurrences({ tenantId: 't-1', repoId: 'r-1' });
       const mismatches = await store.listDependencyMismatches({ tenantId: 't-1', repoId: 'r-1' });
+      const unresolved = await store.listUnresolvedImports({ tenantId: 't-1', repoId: 'r-1' });
 
       const fileB = nodes.find((n) => n.node_type === 'File' && n.file_path === 'src/b.ts');
       assert.ok(fileB, 'expected File node for src/b.ts');
@@ -122,8 +127,10 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(nodes.some((n) => n.node_type === 'Function' && n.name === 'hello' && n.file_path === 'src/mod.ts'));
       const callB = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB' && n.file_path === 'src/mod.ts');
       const callB2 = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB2' && n.file_path === 'src/mod.ts');
+      const callStatic = nodes.find((n) => n.node_type === 'Function' && n.name === 'callStatic' && n.file_path === 'src/mod.ts');
       const fnB = nodes.find((n) => n.node_type === 'Function' && n.name === 'b' && n.file_path === 'src/b.ts');
-      assert.ok(callB && callB2 && fnB, 'expected Function nodes callB, callB2 and b');
+      const methodHi = nodes.find((n) => n.node_type === 'Function' && n.name === 'hi' && n.file_path === 'src/mod.ts');
+      assert.ok(callB && callB2 && callStatic && fnB && methodHi, 'expected Function nodes callB, callB2, callStatic, b and hi');
       assert.ok(
         edges.some((e) => e.edge_type === 'Calls' && e.source_symbol_uid === callB.symbol_uid && e.target_symbol_uid === fnB.symbol_uid),
         'expected Calls edge callB -> b'
@@ -131,6 +138,10 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(
         edges.some((e) => e.edge_type === 'Calls' && e.source_symbol_uid === callB2.symbol_uid && e.target_symbol_uid === fnB.symbol_uid),
         'expected Calls edge callB2 -> b (namespace import member call)'
+      );
+      assert.ok(
+        edges.some((e) => e.edge_type === 'Calls' && e.source_symbol_uid === callStatic.symbol_uid && e.target_symbol_uid === methodHi.symbol_uid),
+        'expected Calls edge callStatic -> X.hi'
       );
       assert.ok(
         occs.some(
@@ -152,6 +163,16 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         ),
         'expected Calls edge_occurrence for callB2 in src/mod.ts'
       );
+      assert.ok(
+        occs.some(
+          (o) =>
+            o.edge_type === 'Calls' &&
+            o.source_symbol_uid === callStatic.symbol_uid &&
+            o.target_symbol_uid === methodHi.symbol_uid &&
+            o.file_path === 'src/mod.ts'
+        ),
+        'expected Calls edge_occurrence for callStatic in src/mod.ts'
+      );
       assert.ok(nodes.some((n) => n.node_type === 'Class' && n.name === 'Greeter' && n.file_path === 'src/app.py'));
       assert.ok(nodes.some((n) => n.language === 'go' && n.name === 'Hello'));
       assert.ok(nodes.some((n) => n.language === 'rust' && n.name === 'hi'));
@@ -164,6 +185,7 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(mismatches.some((m) => m.mismatch_type === 'used_but_undeclared' && m.package_key === 'npm:left-pad'));
       assert.ok(mismatches.some((m) => m.mismatch_type === 'declared_but_unused' && m.package_key === 'npm:unusedpkg'));
       assert.ok(mismatches.some((m) => m.mismatch_type === 'version_conflict' && m.package_key === 'npm:lodash'));
+      assert.ok(unresolved.some((u) => u.file_path === 'src/mod.ts' && String(u.spec).includes('./missing')), 'expected unresolved import for ./missing');
     } finally {
       if (prevCmd === undefined) delete process.env.GRAPHFLY_INDEXER_CMD;
       else process.env.GRAPHFLY_INDEXER_CMD = prevCmd;

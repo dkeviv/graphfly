@@ -12,7 +12,7 @@ import { publicNode, publicEdge } from './public-shapes.js';
 import { createEntitlementsStoreFromEnv } from '../../../packages/stores/src/entitlements-store.js';
 import { makeRateLimitMiddleware } from './middleware/rate-limit.js';
 import { makeAuthMiddleware, requireRole, tenantIdFromCtx } from './middleware/auth.js';
-import { createJwtHs256 } from '../../../packages/auth/src/jwt.js';
+import { createJwtHs256, verifyJwtHs256 } from '../../../packages/auth/src/jwt.js';
 import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { StripeEventDedupe } from '../../../packages/stripe-webhooks/src/dedupe.js';
 import { makeStripeWebhookHandler } from './stripe-webhook.js';
@@ -22,6 +22,7 @@ import { neighborhood } from '../../../packages/cig/src/neighborhood.js';
 import { createQueueFromEnv } from '../../../packages/stores/src/queue.js';
 import { createIndexerWorker } from '../../../workers/indexer/src/indexer-worker.js';
 import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
+import { OrgRoles } from '../../../packages/org-members/src/store.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 import { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer } from '../../../packages/stripe-service/src/stripe.js';
@@ -40,9 +41,12 @@ import { GitHubClient } from '../../../packages/github-client/src/client.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
+import { createOrgInviteStoreFromEnv } from '../../../packages/stores/src/org-invite-store.js';
 import { createLogger, createMetrics } from '../../../packages/observability/src/index.js';
 import { encryptString, decryptString, getSecretKeyringInfo } from '../../../packages/secrets/src/crypto.js';
 import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
+import { InMemoryRealtimeHub } from '../../../packages/realtime/src/hub.js';
+import { acceptWebSocketUpgrade, createWsConnection } from './ws.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -91,9 +95,12 @@ const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 const billingPool = await getPgPoolFromEnv({ connectionString: process.env.DATABASE_URL ?? '', max: Number(process.env.PG_POOL_MAX ?? 10) });
 const orgs = await createOrgStoreFromEnv();
 const orgMembers = await createOrgMemberStoreFromEnv();
+const orgInvites = await createOrgInviteStoreFromEnv();
 const repos = await createRepoStoreFromEnv();
 const secrets = await createSecretsStoreFromEnv();
 const oauthStates = new InMemoryOAuthStateStore();
+const realtimeHub = new InMemoryRealtimeHub();
+const realtime = { publish: (evt) => realtimeHub.publish(evt) };
 const webhookDedupe = await createWebhookDeliveryDedupeFromEnv();
 
 function tenantIdFromStripeEvent(event) {
@@ -184,8 +191,8 @@ const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
         installationId: docsInstallId
       });
 };
-const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue });
-const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage });
+const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
+const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage, realtime });
 
 async function maybeDrainOnce() {
   if (typeof indexQueue?.drain !== 'function' || typeof docQueue?.drain !== 'function' || typeof graphQueue?.drain !== 'function') return;
@@ -304,6 +311,23 @@ router.post('/webhooks/stripe', async ({ headers, rawBody }) => {
   return handleStripeWebhook({ headers, rawBody });
 });
 
+router.post('/internal/rt', async (req) => {
+  const shared = String(process.env.GRAPHFLY_RT_TOKEN ?? '');
+  if (!shared) return { status: 501, body: { error: 'realtime_not_configured' } };
+  const auth = String(req.headers?.authorization ?? '');
+  if (!auth.toLowerCase().startsWith('bearer ') || auth.slice('bearer '.length).trim() !== shared) {
+    return { status: 401, body: { error: 'unauthorized' } };
+  }
+  const tenantId = req.body?.tenantId ?? null;
+  const repoId = req.body?.repoId ?? null;
+  const type = req.body?.type ?? null;
+  if (typeof tenantId !== 'string' || typeof repoId !== 'string' || typeof type !== 'string') {
+    return { status: 400, body: { error: 'bad_request' } };
+  }
+  realtimeHub.publish({ tenantId, repoId, type, payload: req.body?.payload ?? null });
+  return { status: 200, body: { ok: true } };
+});
+
 router.post('/api/v1/integrations/github/connect', async (req) => {
   const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const forbid = requireRole(req, 'admin');
@@ -418,11 +442,26 @@ router.post('/api/v1/integrations/github/oauth/callback', async (req) => {
 
 router.get('/api/v1/integrations/github/repos', async (req) => {
   const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
-  const token = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
-  if (!token) return { status: 401, body: { error: 'github_not_connected' } };
-  const gh = new GitHubClient({ token });
+  const org = (await orgs.getOrg?.({ tenantId })) ?? null;
+
+  // Prefer GitHub Reader App installation token for production-safe repo discovery.
+  // Fallback to a stored user token for dev workflows only.
+  try {
+    const token = await resolveGitHubReaderToken({ tenantId, org });
+    if (token && org?.githubReaderInstallId) {
+      const gh = new GitHubClient({ token });
+      const list = await gh.listInstallationRepos();
+      return { status: 200, body: { repos: list, source: 'reader_app' } };
+    }
+  } catch {
+    // fall through to user-token listing
+  }
+
+  const userToken = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
+  if (!userToken) return { status: 401, body: { error: 'github_not_connected' } };
+  const gh = new GitHubClient({ token: userToken });
   const list = await gh.listUserRepos();
-  return { status: 200, body: { repos: list } };
+  return { status: 200, body: { repos: list, source: 'user_token' } };
 });
 
 router.get('/api/v1/orgs/current', async (req) => {
@@ -473,6 +512,70 @@ router.delete('/api/v1/orgs/members/:userId', async (req) => {
     await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'org.member_remove', targetType: 'member', targetId: userId });
   }
   return { status: 200, body: out };
+});
+
+router.get('/api/v1/orgs/invites', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const status = req.query.status ?? null;
+  const limit = req.query.limit ? Number(req.query.limit) : 200;
+  const invites = await orgInvites.listInvites({ tenantId, status, limit });
+  return { status: 200, body: { invites } };
+});
+
+router.post('/api/v1/orgs/invites', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const email = req.body?.email ?? null;
+  const role = req.body?.role ?? 'viewer';
+  const ttlDays = req.body?.ttlDays ?? 7;
+  const out = await orgInvites.createInvite({ tenantId, email, role, ttlDays });
+  const base = String(process.env.GRAPHFLY_WEB_URL ?? '').trim();
+  const acceptPath = `/#/accept?tenantId=${encodeURIComponent(tenantId)}&token=${encodeURIComponent(out.token)}`;
+  const acceptUrl = base ? `${base.replace(/\\/$/, '')}${acceptPath}` : acceptPath;
+  await auditEvent({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'org.invite_create',
+    targetType: 'invite',
+    targetId: out.invite?.id ?? null,
+    metadata: { email: out.invite?.email ?? null, role: out.invite?.role ?? null }
+  });
+  return { status: 200, body: { invite: out.invite, acceptUrl } };
+});
+
+router.delete('/api/v1/orgs/invites/:inviteId', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const inviteId = req.params.inviteId;
+  const out = await orgInvites.revokeInvite({ tenantId, inviteId });
+  if (out?.revoked) {
+    await auditEvent({ tenantId, actorUserId: req.auth?.userId ?? null, action: 'org.invite_revoke', targetType: 'invite', targetId: inviteId });
+  }
+  return { status: 200, body: out };
+});
+
+router.post('/api/v1/orgs/invites/accept', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const userId = req.auth?.userId ?? null;
+  if (!userId) return { status: 401, body: { error: 'unauthorized' } };
+  const token = req.body?.token ?? null;
+  const accepted = await orgInvites.acceptInvite({ tenantId, token, userId });
+  if (!accepted.ok) return { status: 400, body: accepted };
+  const role = accepted.invite?.role ?? 'viewer';
+  const member = await orgMembers.upsertMember({ tenantId, userId, role });
+  await auditEvent({
+    tenantId,
+    actorUserId: userId,
+    action: 'org.invite_accept',
+    targetType: 'invite',
+    targetId: accepted.invite?.id ?? null,
+    metadata: { role: member?.role ?? role }
+  });
+  return { status: 200, body: { ok: true, invite: accepted.invite, member } };
 });
 
 router.put('/api/v1/orgs/current', async (req) => {
@@ -983,6 +1086,168 @@ router.get('/flows/trace', async (req) => {
   };
 });
 
+router.get('/coverage/summary', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+
+  const nodes = await store.listNodes({ tenantId, repoId });
+  const blocks = docStore?.listBlocks ? await docStore.listBlocks({ tenantId, repoId }) : [];
+
+  const documented = new Set();
+  if (docStore?.getEvidence) {
+    for (const b of blocks) {
+      const ev = await docStore.getEvidence({ tenantId, repoId, blockId: b.id ?? b.blockId ?? b.block_id });
+      for (const e of ev ?? []) {
+        const uid = e?.symbol_uid ?? e?.symbolUid ?? null;
+        if (typeof uid === 'string' && uid.length > 0) documented.add(uid);
+      }
+    }
+  }
+
+  const typeBuckets = {
+    Function: { total: 0, documented: 0 },
+    Class: { total: 0, documented: 0 },
+    Module: { total: 0, documented: 0 },
+    Package: { total: 0, documented: 0 }
+  };
+
+  for (const n of nodes) {
+    const t = String(n?.node_type ?? '');
+    if (t === 'Function') typeBuckets.Function.total++;
+    if (t === 'Class') typeBuckets.Class.total++;
+    if (t === 'Package') typeBuckets.Package.total++;
+    if (t === 'File' || t === 'Module') typeBuckets.Module.total++;
+    if (documented.has(n.symbol_uid)) {
+      if (t === 'Function') typeBuckets.Function.documented++;
+      if (t === 'Class') typeBuckets.Class.documented++;
+      if (t === 'Package') typeBuckets.Package.documented++;
+      if (t === 'File' || t === 'Module') typeBuckets.Module.documented++;
+    }
+  }
+
+  const overallTotal = Object.values(typeBuckets).reduce((acc, x) => acc + x.total, 0);
+  const overallDocumented = Object.values(typeBuckets).reduce((acc, x) => acc + x.documented, 0);
+  const pct = (d, t) => (t > 0 ? Math.round((d / t) * 1000) / 10 : 0);
+
+  const unresolved = store.listUnresolvedImports ? await store.listUnresolvedImports({ tenantId, repoId, limit: 2000 }) : [];
+
+  return {
+    status: 200,
+    body: {
+      overall: { documented: overallDocumented, total: overallTotal, pct: pct(overallDocumented, overallTotal) },
+      byType: Object.fromEntries(
+        Object.entries(typeBuckets).map(([k, v]) => [k, { ...v, pct: pct(v.documented, v.total) }])
+      ),
+      unresolvedImports: { total: Array.isArray(unresolved) ? unresolved.length : 0 }
+    }
+  };
+});
+
+router.get('/coverage/unresolved-imports', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const internal = store.listUnresolvedImports ? await store.listUnresolvedImports({ tenantId, repoId, limit: 2000 }) : [];
+  const observed = store.listObservedDependencies ? await store.listObservedDependencies({ tenantId, repoId }) : [];
+
+  const bySpec = new Map();
+  for (const u of internal ?? []) {
+    const spec = String(u?.spec ?? '');
+    if (!spec) continue;
+    const prev =
+      bySpec.get(spec) ?? { spec, count: 0, category: 'not_found', kind: u?.kind ?? 'internal_unresolved', examples: [] };
+    prev.count++;
+    if (prev.examples.length < 5) prev.examples.push({ file_path: u.file_path ?? null, line: u.line ?? null, sha: u.sha ?? null });
+    bySpec.set(spec, prev);
+  }
+
+  // External imports (expected): represented via observed dependencies.
+  for (const o of observed ?? []) {
+    const k = String(o?.package_key ?? '');
+    if (!k) continue;
+    const spec = k.includes(':') ? k.split(':', 2)[1] : k;
+    const prev = bySpec.get(spec) ?? { spec, count: 0, category: 'external_expected', kind: 'external', examples: [] };
+    prev.count++;
+    bySpec.set(spec, prev);
+  }
+
+  const out = Array.from(bySpec.values()).sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
+  return { status: 200, body: { imports: out } };
+});
+
+router.get('/coverage/undocumented-entrypoints', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const limit = Number(req.query.limit ?? 50);
+  const n = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 50;
+
+  const nodes = await store.listNodes({ tenantId, repoId });
+  const edges = await store.listEdges({ tenantId, repoId });
+  const blocks = docStore?.listBlocks ? await docStore.listBlocks({ tenantId, repoId }) : [];
+
+  const documented = new Set();
+  if (docStore?.getEvidence) {
+    for (const b of blocks) {
+      const ev = await docStore.getEvidence({ tenantId, repoId, blockId: b.id ?? b.blockId ?? b.block_id });
+      for (const e of ev ?? []) {
+        const uid = e?.symbol_uid ?? e?.symbolUid ?? null;
+        if (typeof uid === 'string' && uid.length > 0) documented.add(uid);
+      }
+    }
+  }
+
+  const inboundCalls = new Map();
+  for (const e of edges) {
+    if (String(e?.edge_type ?? '') !== 'Calls') continue;
+    const t = e?.target_symbol_uid ?? null;
+    if (!t) continue;
+    inboundCalls.set(t, (inboundCalls.get(t) ?? 0) + 1);
+  }
+
+  const candidates = nodes
+    .filter((x) => x?.visibility === 'public' && !documented.has(x.symbol_uid))
+    .filter((x) => ['Function', 'Class', 'ApiEndpoint'].includes(String(x?.node_type ?? '')))
+    .map((x) => ({
+      symbol_uid: x.symbol_uid,
+      qualified_name: x.qualified_name ?? null,
+      node_type: x.node_type ?? null,
+      file_path: x.file_path ?? null,
+      line_start: x.line_start ?? null,
+      callers: inboundCalls.get(x.symbol_uid) ?? 0
+    }));
+
+  // Entry points: either high fan-in or zero callers (potential public API).
+  const entrypoints = candidates.filter((c) => c.callers >= 2 || c.callers === 0);
+
+  // Approximate blast radius using a bounded graph traversal (depth=2).
+  const withScores = [];
+  for (const c of entrypoints.slice(0, 200)) {
+    try {
+      const br = await blastRadius({ store, tenantId, repoId, symbolUid: c.symbol_uid, depth: 2, direction: 'both' });
+      withScores.push({ ...c, blast_radius: (br?.nodes ?? []).length });
+    } catch {
+      withScores.push({ ...c, blast_radius: 0 });
+    }
+  }
+
+  withScores.sort((a, b) => (b.blast_radius ?? 0) - (a.blast_radius ?? 0));
+  return { status: 200, body: { entrypoints: withScores.slice(0, n) } };
+});
+
+router.post('/coverage/document', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, OrgRoles.MEMBER);
+  if (forbid) return forbid;
+  const repoId = req.body?.repoId ?? DEFAULT_REPO_ID;
+  const symbolUids = Array.isArray(req.body?.symbolUids) ? req.body.symbolUids.filter((s) => typeof s === 'string' && s.length > 0) : [];
+  if (symbolUids.length === 0) return { status: 400, body: { error: 'symbolUids is required' } };
+  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+  const effectiveDocsRepoFullName = org?.docsRepoFullName ?? docsRepoFullName;
+  if (!effectiveDocsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+  docQueue.add('doc.generate', { tenantId, repoId, sha: 'manual', changedFiles: [], docsRepoFullName: effectiveDocsRepoFullName, symbolUids });
+  await maybeDrainOnce();
+  return { status: 200, body: { ok: true, enqueued: symbolUids.length } };
+});
+
 router.get('/docs/blocks', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
@@ -1087,6 +1352,57 @@ const server = http.createServer(async (req, res) => {
     const dur = Date.now() - start;
     metrics.recordHttp({ method: req.method, path: pathname, status: 500, durationMs: dur });
     log.error('http_error', { requestId, method: req.method, path: pathname, status: 500, durationMs: dur, error: String(error?.message ?? error) });
+  }
+});
+
+server.on('upgrade', (req, socket, head) => {
+  try {
+    const u = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    if (u.pathname !== '/ws') {
+      socket.destroy();
+      return;
+    }
+
+    const tenantId = u.searchParams.get('tenantId') ?? DEFAULT_TENANT_ID;
+    const repoId = u.searchParams.get('repoId') ?? DEFAULT_REPO_ID;
+
+    const authMode = String(process.env.GRAPHFLY_AUTH_MODE ?? 'none');
+    if (authMode === 'jwt') {
+      const jwtSecret = process.env.GRAPHFLY_JWT_SECRET ?? '';
+      const token = u.searchParams.get('token') ?? '';
+      const out = verifyJwtHs256({ secret: jwtSecret, token });
+      if (!out.ok) {
+        socket.destroy();
+        return;
+      }
+      const claimTenant = out.claims?.tenantId ?? out.claims?.tenant_id ?? null;
+      if (claimTenant && String(claimTenant) !== String(tenantId)) {
+        socket.destroy();
+        return;
+      }
+    }
+
+    const ok = acceptWebSocketUpgrade({ req, socket, head });
+    if (!ok) {
+      socket.destroy();
+      return;
+    }
+
+    let unsub = null;
+    const conn = createWsConnection({
+      socket,
+      onClose: () => {
+        try {
+          unsub?.();
+        } catch {}
+      }
+    });
+    unsub = realtimeHub.subscribe({ tenantId, repoId, onEvent: (evt) => conn.sendJson(evt) });
+    conn.sendJson({ type: 'ws:ready', payload: { tenantId, repoId } });
+  } catch {
+    try {
+      socket.destroy();
+    } catch {}
   }
 });
 

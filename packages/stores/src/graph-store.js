@@ -79,10 +79,24 @@ export class PgGraphStorePool {
     });
   }
 
+  async addUnresolvedImport({ tenantId, repoId, unresolvedImport }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.addUnresolvedImport({ tenantId, repoId, unresolvedImport });
+    });
+  }
+
   async listIndexDiagnostics({ tenantId, repoId, limit = 50 } = {}) {
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
       const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
       return store.listIndexDiagnostics({ tenantId, repoId, limit });
+    });
+  }
+
+  async listUnresolvedImports({ tenantId, repoId, limit = 500 } = {}) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.listUnresolvedImports({ tenantId, repoId, limit });
     });
   }
 

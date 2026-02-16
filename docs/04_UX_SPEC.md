@@ -86,6 +86,14 @@ Build custom for:
 
 ### 2.1 Navigation
 
+**Phase-1 implementation note (this repo):** the current UI is a lightweight single-page app using hash routes:
+- `#/onboarding` — GitHub connect, docs repo selection, project creation (auto index + docs)
+- `#/graph` — search + focus mode explorer, with live indexing banner
+- `#/docs` — doc blocks list + evidence detail, with live agent activity feed
+- `#/coverage` — coverage KPIs + undocumented entry points + unresolved imports; “Document Selected”
+- `#/admin` — admin overview, jobs/audit, team invites, secrets rotation, metrics preview
+- `#/accept?...` — accept an invitation link (OAuth sign-in if needed)
+
 ```
 Left Sidebar (240px fixed, collapsible on mobile):
 

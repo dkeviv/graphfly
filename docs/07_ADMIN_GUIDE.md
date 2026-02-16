@@ -91,6 +91,9 @@ Recommended explicit store modes:
 - `DOCS_REPO_FULL_NAME` (fallback when org has not set `docsRepoFullName`)
 - `DOCS_REPO_PATH` (local mode only; dev/test)
 
+Invitation links (team onboarding) use:
+- `GRAPHFLY_WEB_URL` (optional) — absolute web origin used to build invite accept URLs (e.g. `https://app.graphfly.example`)
+
 ### 2.6 Indexer (production)
 Graphfly ships with a built‑in indexer (`packages/indexer-engine/`) that emits NDJSON and ingests it into PostgreSQL.
 
@@ -193,6 +196,19 @@ For a new org:
 
 ---
 
+## 5B) Team Invitations (FR-TM-03)
+
+Graphfly supports inviting new members by email address:
+- Admin creates invite in `#/admin` (Team card).
+- System returns an **accept URL** (copy/paste into email).
+- Invite expires after 7 days.
+
+Operational note:
+- Email sending is intentionally **out-of-band** in Phase‑1. Enterprises should integrate a mailer (SES/Sendgrid/etc.) that delivers the accept URL to the invitee.
+- Invitation tokens are one-time secrets; Graphfly stores only a SHA-256 hash.
+
+---
+
 ## 6) Operational Maintenance
 
 ### 6.1 Secrets management & rotation
@@ -217,7 +233,18 @@ Minimum:
 ### 6.3 Webhook health
 Monitor:
 - webhook verification failures
-- delivery dedupe hit rate
+  - delivery dedupe hit rate
+
+### 6.4 Realtime progress streaming
+
+Graphfly uses a plain WebSocket endpoint on the API:
+- `GET /ws?tenantId=<uuid>&repoId=<uuid>&token=<jwt>`
+
+For multi-process deployments (separate worker processes), configure workers to publish events into the API hub:
+- `GRAPHFLY_RT_ENDPOINT` — API base URL (e.g. `http://127.0.0.1:8787`)
+- `GRAPHFLY_RT_TOKEN` — shared secret used as `Authorization: Bearer <token>` for `POST /internal/rt`
+
+If not configured, realtime still works in single-process mode (API publishes in-process events).
 - job enqueue rate vs worker throughput
 
 ### 6.4 Indexing health

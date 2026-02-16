@@ -14,6 +14,15 @@ export function renderAdminPage({ state, pageEl }) {
   const overviewEl = el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Overview']), statusEl]);
   const jobsEl = el('ul', { class: 'list' });
   const auditEl = el('ul', { class: 'list' });
+  const membersEl = el('ul', { class: 'list' });
+  const invitesEl = el('ul', { class: 'list' });
+  const inviteEmailInput = el('input', { class: 'input', placeholder: 'Invite email', type: 'email' });
+  const inviteRoleSelect = el(
+    'select',
+    { class: 'input' },
+    ['viewer', 'member', 'admin'].map((r) => el('option', { value: r }, [r]))
+  );
+  const inviteOutEl = el('div', { class: 'small k' }, ['']);
   const secretsEl = el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Secrets Rotation'])]);
   const metricsOutEl = el('pre', { class: 'card pre' }, ['']);
   const metricsTokenInput = el('input', { class: 'input', id: 'metricsToken', placeholder: 'Metrics token (optional)', type: 'password' });
@@ -96,6 +105,56 @@ export function renderAdminPage({ state, pageEl }) {
       auditEl.appendChild(el('li', { class: 'list__item' }, [`Audit unavailable: ${String(e?.message ?? e)}`]));
     }
 
+    // Team (members + invites)
+    membersEl.innerHTML = '';
+    invitesEl.innerHTML = '';
+    inviteOutEl.textContent = '';
+    try {
+      const m = await api.orgListMembers();
+      for (const mem of m.members ?? []) {
+        membersEl.appendChild(
+          el('li', { class: 'list__item' }, [el('div', { class: 'h' }, [fmt(mem.userId)]), el('div', { class: 'small k' }, [fmt(mem.role)])])
+        );
+      }
+    } catch (e) {
+      membersEl.appendChild(el('li', { class: 'list__item' }, [`Members unavailable: ${String(e?.message ?? e)}`]));
+    }
+    try {
+      const inv = await api.orgListInvites({ limit: 50 });
+      const list = inv.invites ?? [];
+      if (list.length === 0) {
+        invitesEl.appendChild(el('li', { class: 'list__item' }, ['No pending invites.']));
+      } else {
+        for (const it of list) {
+          invitesEl.appendChild(
+            el('li', { class: 'list__item' }, [
+              el('div', { class: 'row' }, [
+                el('div', {}, [
+                  el('div', { class: 'h' }, [fmt(it.email)]),
+                  el('div', { class: 'small k' }, [`${fmt(it.role)} • ${fmt(it.status)} • expires ${fmt(it.expiresAt)}`])
+                ]),
+                it.status === 'pending'
+                  ? el('button', {
+                      class: 'button button--danger',
+                      onclick: async () => {
+                        try {
+                          await api.orgRevokeInvite({ inviteId: it.id });
+                          await refresh();
+                        } catch (e) {
+                          statusEl.textContent = `Revoke failed: ${String(e?.message ?? e)}`;
+                        }
+                      }
+                    }, ['Revoke'])
+                  : null
+              ])
+            ])
+          );
+        }
+      }
+    } catch (e) {
+      invitesEl.appendChild(el('li', { class: 'list__item' }, [`Invites unavailable: ${String(e?.message ?? e)}`]));
+    }
+
     // Secrets
     secretsEl.replaceWith(
       el('div', { class: 'card' }, [
@@ -137,6 +196,35 @@ export function renderAdminPage({ state, pageEl }) {
         el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Audit']), auditEl])
       ]),
       el('div', { class: 'stack' }, [
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card__title' }, ['Team']),
+          el('div', { class: 'small' }, ['Invite by email. Delivery is out-of-band; copy the accept URL below.']),
+          el('div', { class: 'row' }, [
+            inviteEmailInput,
+            inviteRoleSelect,
+            el('button', {
+              class: 'button',
+              onclick: async () => {
+                const email = inviteEmailInput.value.trim();
+                const role = inviteRoleSelect.value;
+                if (!email) return;
+                try {
+                  const out = await api.orgCreateInvite({ email, role });
+                  inviteEmailInput.value = '';
+                  inviteOutEl.textContent = `Accept URL: ${fmt(out.acceptUrl)}`;
+                  await refresh();
+                } catch (e) {
+                  inviteOutEl.textContent = `Invite failed: ${String(e?.message ?? e)}`;
+                }
+              }
+            }, ['Create Invite'])
+          ]),
+          inviteOutEl,
+          el('div', { class: 'card__title' }, ['Members']),
+          membersEl,
+          el('div', { class: 'card__title' }, ['Invites']),
+          invitesEl
+        ]),
         secretsEl,
         el('div', { class: 'card' }, [
           el('div', { class: 'card__title' }, ['Metrics Preview']),

@@ -2,7 +2,10 @@ import { createRouter } from './router.js';
 import { renderOnboardingPage } from './pages/onboarding.js';
 import { renderGraphPage } from './pages/graph.js';
 import { renderDocsPage } from './pages/docs.js';
+import { renderCoveragePage } from './pages/coverage.js';
 import { renderAdminPage } from './pages/admin.js';
+import { renderAcceptInvitePage } from './pages/accept.js';
+import { createRealtimeClient } from './realtime.js';
 
 const pageEl = document.getElementById('page');
 const titleEl = document.getElementById('pageTitle');
@@ -15,6 +18,9 @@ const state = {
   repoId: localStorage.getItem('graphfly_repo_id') ?? '00000000-0000-0000-0000-000000000002',
   authToken: localStorage.getItem('graphfly_auth_token') ?? null
 };
+
+state.realtime = createRealtimeClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, authToken: state.authToken });
+state.realtime.connect();
 
 modeSelect.addEventListener('change', () => {
   state.mode = modeSelect.value;
@@ -34,9 +40,19 @@ const router = createRouter({
       renderDocsPage(ctx);
       return;
     }
+    if (route === 'coverage') {
+      titleEl.textContent = 'Coverage';
+      renderCoveragePage(ctx);
+      return;
+    }
     if (route === 'admin') {
       titleEl.textContent = 'Admin';
       renderAdminPage(ctx);
+      return;
+    }
+    if (route === 'accept') {
+      titleEl.textContent = 'Accept Invite';
+      renderAcceptInvitePage(ctx);
       return;
     }
     titleEl.textContent = 'Onboarding';

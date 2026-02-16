@@ -18,6 +18,7 @@ export class InMemoryGraphStore {
     this._indexDiagnosticsByRepo = new Map(); // repoKey -> Array(diagnostic)
     this._flowGraphsByRepo = new Map(); // repoKey -> Map(flow_graph_key -> flow graph)
     this._annotationsByRepo = new Map(); // repoKey -> Map(annotationKey -> annotation)
+    this._unresolvedImportsByRepo = new Map(); // repoKey -> Map(key -> unresolved_import)
   }
 
   upsertNode({ tenantId, repoId, node }) {
@@ -172,6 +173,23 @@ export class InMemoryGraphStore {
   listIndexDiagnostics({ tenantId, repoId }) {
     const repoKey = key({ tenantId, repoId });
     return Array.from(this._indexDiagnosticsByRepo.get(repoKey) ?? []);
+  }
+
+  addUnresolvedImport({ tenantId, repoId, unresolvedImport }) {
+    assert(isPlainObject(unresolvedImport), 'unresolvedImport must be an object');
+    assert(typeof unresolvedImport.file_path === 'string' && unresolvedImport.file_path.length > 0, 'unresolvedImport.file_path required');
+    assert(typeof unresolvedImport.spec === 'string' && unresolvedImport.spec.length > 0, 'unresolvedImport.spec required');
+    const repoKey = key({ tenantId, repoId });
+    if (!this._unresolvedImportsByRepo.has(repoKey)) this._unresolvedImportsByRepo.set(repoKey, new Map());
+    const sha = String(unresolvedImport.sha ?? 'unknown');
+    const line = Number(unresolvedImport.line ?? 0);
+    const k = `${unresolvedImport.file_path}::${line}::${unresolvedImport.spec}::${sha}`;
+    this._unresolvedImportsByRepo.get(repoKey).set(k, unresolvedImport);
+  }
+
+  listUnresolvedImports({ tenantId, repoId }) {
+    const repoKey = key({ tenantId, repoId });
+    return Array.from(this._unresolvedImportsByRepo.get(repoKey)?.values() ?? []);
   }
 
   upsertFlowGraph({ tenantId, repoId, flowGraph }) {

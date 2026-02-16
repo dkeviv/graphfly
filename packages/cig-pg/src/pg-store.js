@@ -808,6 +808,48 @@ export class PgGraphStore {
     return Array.isArray(res.rows) ? res.rows.map((r) => r.diagnostic).filter(Boolean) : [];
   }
 
+  async addUnresolvedImport({ tenantId, repoId, unresolvedImport }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const u = unresolvedImport ?? {};
+    const filePath = String(u.file_path ?? '');
+    const spec = String(u.spec ?? '');
+    if (!filePath || !spec) return;
+    const line = Number(u.line ?? 0);
+    const kind = String(u.kind ?? 'internal_unresolved');
+    const sha = String(u.sha ?? 'mock');
+    await this._c.query(
+      `INSERT INTO unresolved_imports (tenant_id, repo_id, file_path, line, spec, kind, sha)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (tenant_id, repo_id, file_path, line, spec, sha) DO UPDATE SET
+         kind=EXCLUDED.kind,
+         created_at=now()`,
+      [tenantId, repoId, filePath, Number.isFinite(line) ? Math.trunc(line) : 0, spec, kind, sha]
+    );
+  }
+
+  async listUnresolvedImports({ tenantId, repoId, limit = 500 } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(2000, Math.trunc(limit))) : 500;
+    const res = await this._c.query(
+      `SELECT file_path, line, spec, kind, sha, created_at
+       FROM unresolved_imports
+       WHERE tenant_id=$1 AND repo_id=$2
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [tenantId, repoId, n]
+    );
+    return Array.isArray(res.rows)
+      ? res.rows.map((r) => ({
+          file_path: r.file_path,
+          line: r.line,
+          spec: r.spec,
+          kind: r.kind,
+          sha: r.sha,
+          created_at: r.created_at
+        }))
+      : [];
+  }
+
   async upsertFlowGraph({ tenantId, repoId, flowGraph }) {
     await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(flowGraph?.entrypoint_key)) throw new Error('flowGraph.entrypoint_key required');
@@ -890,6 +932,7 @@ export class PgGraphStore {
     const declared = [];
     const observed = [];
     const mismatches = [];
+    const unresolvedImports = [];
 
     for (const r of records) {
       const t = r?.type;
@@ -921,6 +964,7 @@ export class PgGraphStore {
       else if (t === 'observed_dependency') observed.push(r.data);
       else if (t === 'dependency_mismatch') mismatches.push(r.data);
       else if (t === 'index_diagnostic') this.addIndexDiagnostic({ tenantId, repoId, diagnostic: r.data });
+      else if (t === 'unresolved_import') unresolvedImports.push(r.data);
     }
 
     const nodes = Array.from(nodesByUid.values());
@@ -939,6 +983,7 @@ export class PgGraphStore {
       for (const d of declared) await this.addDeclaredDependency({ tenantId, repoId, declared: d });
       for (const o of observed) await this.addObservedDependency({ tenantId, repoId, observed: o });
       for (const mm of mismatches) await this.addDependencyMismatch({ tenantId, repoId, mismatch: mm });
+      for (const u of unresolvedImports) await this.addUnresolvedImport({ tenantId, repoId, unresolvedImport: u });
       await this._c.query('COMMIT');
     } catch (err) {
       await this._c.query('ROLLBACK');

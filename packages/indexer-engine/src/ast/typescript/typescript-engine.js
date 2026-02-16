@@ -37,30 +37,36 @@ function posToLine(sf, pos) {
   return (lc?.line ?? 0) + 1;
 }
 
-function packageNameFromImport(spec) {
-  if (!spec || spec.startsWith('.') || spec.startsWith('/')) return null;
-  if (spec.startsWith('@')) {
-    const parts = spec.split('/');
-    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : spec;
-  }
-  return spec.split('/')[0];
-}
+	function packageNameFromImport(spec) {
+	  if (!spec || spec.startsWith('.') || spec.startsWith('/')) return null;
+	  if (spec.startsWith('@')) {
+	    const parts = spec.split('/');
+	    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : spec;
+	  }
+	  return spec.split('/')[0];
+	}
 
-function resolveImport(fromFileRel, spec, sourceFileExists = null) {
-  if (!spec.startsWith('.')) return null;
-  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFileRel), spec));
-  if (base.endsWith('.ts') || base.endsWith('.tsx') || base.endsWith('.js') || base.endsWith('.jsx')) return base;
-  const exts = ['.ts', '.tsx', '.js', '.jsx'];
-  const candidates = [];
-  for (const ext of exts) candidates.push(`${base}${ext}`);
-  for (const ext of exts) candidates.push(`${base}/index${ext}`);
-  if (typeof sourceFileExists === 'function') {
-    for (const c of candidates) {
-      if (sourceFileExists(c)) return c;
-    }
-  }
-  return candidates[0] ?? null;
-}
+	function isLikelyInternalAliasImport(spec) {
+	  const s = String(spec ?? '');
+	  // Common alias patterns in modern JS/TS repos.
+	  return s.startsWith('~/') || s.startsWith('@/') || s.startsWith('#') || s.startsWith('$');
+	}
+
+	function resolveImport(fromFileRel, spec, sourceFileExists = null) {
+	  if (!spec.startsWith('.')) return null;
+	  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFileRel), spec));
+	  if (base.endsWith('.ts') || base.endsWith('.tsx') || base.endsWith('.js') || base.endsWith('.jsx')) return base;
+	  const exts = ['.ts', '.tsx', '.js', '.jsx'];
+	  const candidates = [];
+	  for (const ext of exts) candidates.push(`${base}${ext}`);
+	  for (const ext of exts) candidates.push(`${base}/index${ext}`);
+	  if (typeof sourceFileExists === 'function') {
+	    for (const c of candidates) {
+	      if (sourceFileExists(c)) return c;
+	    }
+	  }
+	  return null;
+	}
 
 function ensurePackageNode({ packageKey, sha, packageToUid }) {
   if (!packageKey) return null;
@@ -659,12 +665,12 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
         };
       }
 
-      const imports = extractImportsFromAst(ts, sf);
-      const localToImport = new Map(); // local -> { resolvedFile, importedName }
-      for (const imp of imports) {
-        const aliasResolved = typeof resolveAliasImport === 'function' ? resolveAliasImport(imp.spec) : null;
-        const resolved = aliasResolved || resolveImport(filePath, imp.spec, fileExists ?? sourceFileExists);
-        if (resolved) {
+	      const imports = extractImportsFromAst(ts, sf);
+	      const localToImport = new Map(); // local -> { resolvedFile, importedName }
+	      for (const imp of imports) {
+	        const aliasResolved = typeof resolveAliasImport === 'function' ? resolveAliasImport(imp.spec) : null;
+	        const resolved = aliasResolved || resolveImport(filePath, imp.spec, fileExists ?? sourceFileExists);
+	        if (resolved) {
           const targetLang = languageForFilePath(resolved);
           const targetUid = makeSymbolUid({
             language: targetLang,
@@ -696,14 +702,29 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
             }
           };
 
-          for (const b of imp.bindings ?? []) {
-            if (!b?.local || !b?.imported) continue;
-            localToImport.set(b.local, { resolvedFile: resolved, importedName: b.imported });
-          }
-        }
+	          for (const b of imp.bindings ?? []) {
+	            if (!b?.local || !b?.imported) continue;
+	            localToImport.set(b.local, { resolvedFile: resolved, importedName: b.imported });
+	          }
+	        } else {
+	          // Track unresolved relative/alias imports transparently. External package imports are handled as dependencies.
+	          const spec = String(imp.spec ?? '');
+	          if (spec.startsWith('.') || isLikelyInternalAliasImport(spec)) {
+	            yield {
+	              type: 'unresolved_import',
+	              data: {
+	                file_path: filePath,
+	                line: imp.line,
+	                spec,
+	                kind: 'internal_unresolved',
+	                sha
+	              }
+	            };
+	          }
+	        }
 
-        const pkgName = packageNameFromImport(imp.spec);
-        if (pkgName) {
+	        const pkgName = packageNameFromImport(imp.spec);
+	        if (pkgName) {
           const packageKey = `npm:${pkgName}`;
           const ensured = ensurePackageNode({ packageKey, sha, packageToUid });
           if (ensured?.node) yield { type: 'node', data: ensured.node };
@@ -818,29 +839,36 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
 	        if (ts.isCallExpression(node)) {
 	          if (ts.isIdentifier(node.expression)) {
 	            recordCall({ containerUid, callee: node.expression.text, node });
-	          } else if (ts.isPropertyAccessExpression(node.expression) || ts.isPropertyAccessChain?.(node.expression)) {
-	            const expr = node.expression;
-	            const base = expr.expression;
-	            const member = expr.name?.text ?? null;
+		          } else if (ts.isPropertyAccessExpression(node.expression) || ts.isPropertyAccessChain?.(node.expression)) {
+		            const expr = node.expression;
+		            const base = expr.expression;
+		            const member = expr.name?.text ?? null;
 
-	            // namespace import call: ns.fn()
-	            if (member && base && ts.isIdentifier(base)) {
-	              const imp = localToImport.get(base.text);
-	              if (imp?.importedName === '*') {
-	                const targets = exportedByFile?.get?.(imp.resolvedFile) ?? null;
-	                const targetUid = targets?.get?.(member) ?? null;
-	                if (targetUid) recordResolvedCall({ containerUid, targetUid, callee: member, node });
-	              }
-	            }
+		            // namespace import call: ns.fn()
+		            if (member && base && ts.isIdentifier(base)) {
+		              const imp = localToImport.get(base.text);
+		              if (imp?.importedName === '*') {
+		                const targets = exportedByFile?.get?.(imp.resolvedFile) ?? null;
+		                const targetUid = targets?.get?.(member) ?? null;
+		                if (targetUid) recordResolvedCall({ containerUid, targetUid, callee: member, node });
+		              }
+		            }
 
-	            // this.method() within class method: resolve to sibling method nodes.
-	            if (member && base && base.kind === ts.SyntaxKind.ThisKeyword) {
-	              const classUid = methodOwnerByUid.get(containerUid) ?? null;
-	              const sibling = classUid ? methodByClassAndName.get(`${classUid}::${member}`) ?? null : null;
-	              if (sibling) recordResolvedCall({ containerUid, targetUid: sibling, callee: member, node });
-	            }
-	          }
-	        }
+		            // static-like class call: ClassName.method()
+		            if (member && base && ts.isIdentifier(base)) {
+		              const baseUid = localDecls.get(base.text) ?? localExports.get(base.text) ?? null;
+		              const targetUid = baseUid ? methodByClassAndName.get(`${baseUid}::${member}`) ?? null : null;
+		              if (targetUid) recordResolvedCall({ containerUid, targetUid, callee: member, node });
+		            }
+
+		            // this.method() within class method: resolve to sibling method nodes.
+		            if (member && base && base.kind === ts.SyntaxKind.ThisKeyword) {
+		              const classUid = methodOwnerByUid.get(containerUid) ?? null;
+		              const sibling = classUid ? methodByClassAndName.get(`${classUid}::${member}`) ?? null : null;
+		              if (sibling) recordResolvedCall({ containerUid, targetUid: sibling, callee: member, node });
+		            }
+		          }
+		        }
 
 	        // Track containers for attribution when we can identify them.
 	        if (ts.isClassDeclaration(node) && node.name?.text) {

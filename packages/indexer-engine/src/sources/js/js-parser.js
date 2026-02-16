@@ -49,7 +49,7 @@ function resolveImport(fromFileRel, spec, sourceFileExists = null) {
       if (sourceFileExists(c)) return c;
     }
   }
-  return candidates[0] ?? null;
+  return null;
 }
 
 function packageNameFromImport(spec) {
@@ -59,6 +59,11 @@ function packageNameFromImport(spec) {
     return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : spec;
   }
   return spec.split('/')[0];
+}
+
+function isLikelyInternalAliasImport(spec) {
+  const s = String(spec ?? '');
+  return s.startsWith('~/') || s.startsWith('@/') || s.startsWith('#') || s.startsWith('$');
 }
 
 function ensurePackageNode({ packageKey, sha, packageToUid }) {
@@ -426,6 +431,21 @@ export function* parseJsFile({ filePath, lines, sha, containerUid, exportedByFil
           sha
         }
       };
+    }
+    if (!resolved) {
+      const spec = String(imp.spec ?? '');
+      if (spec.startsWith('.') || isLikelyInternalAliasImport(spec)) {
+        yield {
+          type: 'unresolved_import',
+          data: {
+            file_path: filePath,
+            line: imp.line,
+            spec,
+            kind: 'internal_unresolved',
+            sha
+          }
+        };
+      }
     }
 
     const pkgName = packageNameFromImport(imp.spec);

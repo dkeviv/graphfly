@@ -1,8 +1,9 @@
 export function createRouter({ onRoute }) {
-  const routes = new Set(['onboarding', 'graph', 'docs', 'admin']);
+  const routes = new Set(['onboarding', 'graph', 'docs', 'coverage', 'admin', 'accept']);
   function current() {
     const hash = window.location.hash.replace('#', '');
-    return routes.has(hash) ? hash : 'onboarding';
+    const route = hash.split('?', 1)[0];
+    return routes.has(route) ? route : 'onboarding';
   }
   function go(route) {
     window.location.hash = route;

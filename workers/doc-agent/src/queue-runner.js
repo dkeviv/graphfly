@@ -7,6 +7,7 @@ import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-c
 import { createDocWorker } from './doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
+import { createRealtimePublisherFromEnv } from '../../../packages/realtime/src/publisher.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -32,6 +33,7 @@ async function main() {
   const orgs = await createOrgStoreFromEnv();
   const entitlements = await createEntitlementsStoreFromEnv();
   const usageCounters = await createUsageCountersFromEnv();
+  const realtime = createRealtimePublisherFromEnv() ?? null;
 
   const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
   const appId = process.env.GITHUB_APP_ID ?? '';
@@ -50,7 +52,7 @@ async function main() {
         });
   };
 
-  const worker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters });
+  const worker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters, realtime });
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -80,4 +82,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-

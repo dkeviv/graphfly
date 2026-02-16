@@ -9,11 +9,11 @@ Regenerate: `npm run spec:map`
 
 | Requirement | Spec Anchor | Status | Blocker | Implemented By |
 |---|---:|---:|:---:|---|
-| `FR-GH-01` — GitHub Reader App Installation (Source Repos) | `docs/02_REQUIREMENTS.md:42` | ⚠️ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
+| `FR-GH-01` — GitHub Reader App Installation (Source Repos) | `docs/02_REQUIREMENTS.md:42` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-01B` — GitHub Docs App Installation (Docs Repo Only) | `docs/02_REQUIREMENTS.md:48` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-02` — Repository Connection | `docs/02_REQUIREMENTS.md:54` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-03` — Docs Repository Configuration | `docs/02_REQUIREMENTS.md:60` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
-| `FR-GH-04` — Webhook Processing | `docs/02_REQUIREMENTS.md:66` | ⚠️ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
+| `FR-GH-04` — Webhook Processing | `docs/02_REQUIREMENTS.md:66` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-05` — Enforced No-Write To Source Code Repos | `docs/02_REQUIREMENTS.md:72` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-CIG-01` — Full Index on Connection | `docs/02_REQUIREMENTS.md:82` | ✅ | BLOCKER | `docs/03_TECHNICAL_SPEC.md`, `docs/01_ARCHITECTURE.md`, workers/indexer/, packages/cig/, packages/ndjson/, packages/cig-pg/, migrations/001_init.sql |
 | `FR-CIG-02` — Incremental Index on Push | `docs/02_REQUIREMENTS.md:87` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, `docs/03_TECHNICAL_SPEC.md`, `docs/01_ARCHITECTURE.md`, workers/indexer/, packages/cig/, packages/ndjson/, packages/cig-pg/, migrations/001_init.sql |
@@ -39,14 +39,14 @@ Regenerate: `npm run spec:map`
 | `FR-GX-03` — Blast Radius Visualization | `docs/02_REQUIREMENTS.md:223` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, `docs/04_UX_SPEC.md`, apps/web/, apps/api/src/server.js, packages/cig/src/search.js |
 | `FR-GX-04` — Search | `docs/02_REQUIREMENTS.md:229` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, `docs/04_UX_SPEC.md`, apps/web/, apps/api/src/server.js, packages/cig/src/search.js |
 | `FR-GX-05` — Flow Tracing | `docs/02_REQUIREMENTS.md:235` | ✅ | BLOCKER | `docs/04_UX_SPEC.md`, apps/web/, apps/api/src/server.js, packages/cig/src/search.js |
-| `FR-CV-01` — Coverage Dashboard | `docs/02_REQUIREMENTS.md:244` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
-| `FR-CV-02` — Undocumented Entry Points | `docs/02_REQUIREMENTS.md:249` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
-| `FR-CV-03` — Unresolved Imports | `docs/02_REQUIREMENTS.md:254` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-CV-01` — Coverage Dashboard | `docs/02_REQUIREMENTS.md:244` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-CV-02` — Undocumented Entry Points | `docs/02_REQUIREMENTS.md:249` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-CV-03` — Unresolved Imports | `docs/02_REQUIREMENTS.md:254` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
 | `FR-TM-01` — Multi-User Organizations | `docs/02_REQUIREMENTS.md:263` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
 | `FR-TM-02` — Role-Based Access Control | `docs/02_REQUIREMENTS.md:268` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
-| `FR-TM-03` — Member Invitations | `docs/02_REQUIREMENTS.md:275` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
-| `FR-RT-01` — Indexing Progress | `docs/02_REQUIREMENTS.md:284` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
-| `FR-RT-02` — Agent Activity Streaming | `docs/02_REQUIREMENTS.md:289` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-TM-03` — Member Invitations | `docs/02_REQUIREMENTS.md:275` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-RT-01` — Indexing Progress | `docs/02_REQUIREMENTS.md:284` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-RT-02` — Agent Activity Streaming | `docs/02_REQUIREMENTS.md:289` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/04_UX_SPEC.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
 | `FR-BL-01` — Plan Purchase via Stripe Checkout | `docs/02_REQUIREMENTS.md:298` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, packages/billing*/, packages/stripe-*/, migrations/001_init.sql |
 | `FR-BL-02` — Billing Portal (Self-Serve) | `docs/02_REQUIREMENTS.md:303` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, packages/billing*/, packages/stripe-*/, migrations/001_init.sql |
 | `FR-BL-03` — Stripe Webhook Processing | `docs/02_REQUIREMENTS.md:310` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md`, `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, packages/billing*/, packages/stripe-*/, migrations/001_init.sql |

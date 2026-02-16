@@ -9,7 +9,7 @@ import { cloneAtSha } from '../../../packages/git/src/clone.js';
 import { runIndexerNdjson } from '../../../packages/indexer-cli/src/indexer-cli.js';
 import { runBuiltinIndexerNdjson } from '../../../packages/indexer-engine/src/indexer.js';
 
-export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null }) {
+export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null, realtime = null }) {
   return {
     async handle(job) {
       const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [], docsRepoFullName = null } = job.payload ?? {};
@@ -17,6 +17,9 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
       const cloneAuth = job.payload?.cloneAuth ?? null;
       const removedFiles = job.payload?.removedFiles ?? [];
       let reparsedFiles = Array.isArray(changedFiles) ? changedFiles : [];
+      const modeLabel = Array.isArray(changedFiles) && changedFiles.length > 0 ? 'incremental' : 'full';
+
+      realtime?.publish?.({ tenantId, repoId, type: 'index:start', payload: { sha, mode: modeLabel } });
 
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
@@ -59,9 +62,39 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
         const mustUseMock = mode === 'mock';
         const prod = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod';
 
+        let nodesCount = 0;
+        let edgesCount = 0;
+        let occCount = 0;
+        let lastEmit = 0;
+        let currentFile = null;
+        let fileIndex = null;
+        let fileTotal = null;
+
+        const onRecord = (record) => {
+          const t = record?.type;
+          if (t === 'node') nodesCount++;
+          if (t === 'edge') edgesCount++;
+          if (t === 'edge_occurrence') occCount++;
+          if (t === 'index_progress') {
+            currentFile = record?.data?.file_path ?? currentFile;
+            fileIndex = record?.data?.file_index ?? fileIndex;
+            fileTotal = record?.data?.file_total ?? fileTotal;
+          }
+          const now = Date.now();
+          if (now - lastEmit < 120) return;
+          lastEmit = now;
+          const pct = fileTotal && fileIndex ? Math.round((Number(fileIndex) / Number(fileTotal)) * 100) : null;
+          realtime?.publish?.({
+            tenantId,
+            repoId,
+            type: 'index:progress',
+            payload: { sha, mode: modeLabel, pct, filePath: currentFile, fileIndex, fileTotal, nodes: nodesCount, edges: edgesCount, occurrences: occCount }
+          });
+        };
+
         if (mustUseMock) {
           const ndjsonText = mockIndexRepoToNdjson({ repoRoot: effectiveRepoRoot, language: 'js' });
-          await ingestNdjson({ tenantId, repoId, ndjsonText, store });
+          await ingestNdjson({ tenantId, repoId, ndjsonText, store, onRecord });
         } else if (mustUseBuiltin) {
           const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({
             repoRoot: effectiveRepoRoot,
@@ -69,7 +102,7 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
             changedFiles: reparsedFiles,
             removedFiles
           });
-          await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+          await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store, onRecord });
           await waitForExitOk();
         } else {
           try {
@@ -79,7 +112,7 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
               changedFiles: reparsedFiles,
               removedFiles
             });
-            await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+            await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store, onRecord });
             await waitForExitOk();
           } catch (e) {
             if (mustUseCli) throw e;
@@ -91,7 +124,7 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
                 changedFiles: reparsedFiles,
                 removedFiles
               });
-              await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+              await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store, onRecord });
               await waitForExitOk();
             } else {
               const { stdout, waitForExitOk } = runBuiltinIndexerNdjson({
@@ -100,7 +133,7 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
                 changedFiles: reparsedFiles,
                 removedFiles
               });
-              await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store });
+              await ingestNdjsonReadable({ tenantId, repoId, readable: stdout, store, onRecord });
               await waitForExitOk();
             }
           }
@@ -125,6 +158,13 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
         graphQueue.add('graph.enrich', { tenantId, repoId, sha, changedFiles });
       }
       docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName });
+      try {
+        const nodes = await store.listNodes({ tenantId, repoId });
+        const edges = await store.listEdges({ tenantId, repoId });
+        realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel, nodes: nodes.length, edges: edges.length } });
+      } catch {
+        realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel } });
+      }
       return { ok: true };
     }
   };

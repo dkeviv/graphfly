@@ -3,7 +3,7 @@ import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
 import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
 
-export function createDocWorker({ store, docsWriter, docStore, entitlementsStore = null, usageCounters = null }) {
+export function createDocWorker({ store, docsWriter, docStore, entitlementsStore = null, usageCounters = null, realtime = null }) {
   const entitlements = entitlementsStore ?? new InMemoryEntitlementsStore();
   const usage = usageCounters ?? new InMemoryUsageCounters();
 
@@ -12,6 +12,8 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
       const { tenantId, repoId } = job.payload ?? {};
       const docsRepoFullName = job.payload?.docsRepoFullName;
       const triggerSha = job.payload?.sha ?? 'mock';
+      const requestedEntrypointKeys = Array.isArray(job.payload?.entrypointKeys) ? job.payload.entrypointKeys : null;
+      const requestedSymbolUids = Array.isArray(job.payload?.symbolUids) ? job.payload.symbolUids : null;
       if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
         throw new Error('docsRepoFullName is required');
       }
@@ -24,6 +26,54 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
       const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha, status: 'running' }) ?? null;
 
       try {
+        realtime?.publish?.({ tenantId, repoId, type: 'agent:start', payload: { agent: 'doc', sha: triggerSha, prRunId: prRun?.id ?? null } });
+        // Explicit request (coverage dashboard / single-target regeneration): honor requested targets.
+        if ((requestedEntrypointKeys && requestedEntrypointKeys.length > 0) || (requestedSymbolUids && requestedSymbolUids.length > 0)) {
+          const { pr } = await runDocPrWithOpenClaw({
+            store,
+            docStore,
+            docsWriter: writer,
+            tenantId,
+            repoId,
+            docsRepoFullName,
+            triggerSha,
+            prRunId: prRun?.id ?? null,
+            entrypointKeys: requestedEntrypointKeys,
+            symbolUids: requestedSymbolUids,
+            onEvent: (type, payload) => realtime?.publish?.({ tenantId, repoId, type, payload })
+          });
+
+          const requireCloudSync = process.env.GRAPHFLY_CLOUD_SYNC_REQUIRED === '1' || process.env.GRAPHFLY_MODE === 'prod';
+          if (pr?.stub) {
+            const msg =
+              'docs_cloud_sync_disabled: docs PR was stubbed (no docs write credentials). Configure the Docs App installation/token or run in local mode intentionally.';
+            if (requireCloudSync) throw new Error(msg);
+            // eslint-disable-next-line no-console
+            console.warn(`WARN: ${msg}`);
+          }
+
+          if (prRun && docStore?.updatePrRun) {
+            const processedCount = (requestedEntrypointKeys?.length ?? 0) + (requestedSymbolUids?.length ?? 0);
+            await docStore.updatePrRun({
+              tenantId,
+              repoId,
+              prRunId: prRun.id,
+              patch: {
+                status: pr?.empty ? 'skipped' : 'success',
+                docsBranch: pr.branchName ?? null,
+                docsPrNumber: pr.prNumber ?? null,
+                docsPrUrl: pr.prUrl ?? null,
+                blocksUpdated: processedCount,
+                blocksCreated: processedCount,
+                blocksUnchanged: 0,
+                completedAt: new Date().toISOString()
+              }
+            });
+          }
+
+          return { ok: true, pr };
+        }
+
         // Surgical regeneration: if there are stale blocks, only regenerate those.
         let entrypointKeys = null; // null => all; [] => none
         let symbolUids = null; // null => all; [] => none
@@ -84,7 +134,8 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
           triggerSha,
           prRunId: prRun?.id ?? null,
           entrypointKeys,
-          symbolUids
+          symbolUids,
+          onEvent: (type, payload) => realtime?.publish?.({ tenantId, repoId, type, payload })
         });
 
         // Drift/ops fence: if the docs writer is running in stub mode, we did not actually sync docs to GitHub.
@@ -113,6 +164,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
             }
           });
         }
+        realtime?.publish?.({ tenantId, repoId, type: 'agent:complete', payload: { agent: 'doc', sha: triggerSha, pr } });
         return { ok: true, pr };
       } catch (err) {
         if (prRun && docStore?.updatePrRun) {
@@ -127,6 +179,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
             }
           });
         }
+        realtime?.publish?.({ tenantId, repoId, type: 'agent:error', payload: { agent: 'doc', sha: triggerSha, error: String(err?.message ?? err) } });
         throw err;
       }
     }

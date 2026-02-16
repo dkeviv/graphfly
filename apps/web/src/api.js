@@ -126,6 +126,27 @@ export class ApiClient {
     return this.getJson(`/api/v1/github/docs/callback?tenantId=${encodeURIComponent(this.tenantId)}&installation_id=${encodeURIComponent(String(installationId ?? ''))}`);
   }
 
+  orgListMembers() {
+    return this.getJson(`/api/v1/orgs/members?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  orgListInvites({ status = null, limit = 200 } = {}) {
+    const s = status ? `&status=${encodeURIComponent(status)}` : '';
+    return this.getJson(`/api/v1/orgs/invites?tenantId=${encodeURIComponent(this.tenantId)}&limit=${encodeURIComponent(String(limit))}${s}`);
+  }
+
+  orgCreateInvite({ email, role = 'viewer' }) {
+    return this.sendJson('POST', '/api/v1/orgs/invites', { tenantId: this.tenantId, email, role });
+  }
+
+  orgRevokeInvite({ inviteId }) {
+    return this.sendJson('DELETE', `/api/v1/orgs/invites/${encodeURIComponent(inviteId)}?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  orgAcceptInvite({ token }) {
+    return this.sendJson('POST', '/api/v1/orgs/invites/accept', { tenantId: this.tenantId, token });
+  }
+
   adminOverview() {
     return this.getJson(`/api/v1/admin/overview?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
@@ -137,6 +158,24 @@ export class ApiClient {
 
   listAudit({ limit = 50 } = {}) {
     return this.getJson(`/api/v1/audit?tenantId=${encodeURIComponent(this.tenantId)}&limit=${encodeURIComponent(String(limit))}`);
+  }
+
+  coverageSummary() {
+    return this.getJson(`/coverage/summary?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}`);
+  }
+
+  coverageUnresolvedImports() {
+    return this.getJson(`/coverage/unresolved-imports?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}`);
+  }
+
+  coverageUndocumentedEntrypoints({ limit = 50 } = {}) {
+    return this.getJson(
+      `/coverage/undocumented-entrypoints?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&limit=${encodeURIComponent(String(limit))}`
+    );
+  }
+
+  coverageDocument({ symbolUids }) {
+    return this.sendJson('POST', '/coverage/document', { tenantId: this.tenantId, repoId: this.repoId, symbolUids });
   }
 
   secretsRewrap() {

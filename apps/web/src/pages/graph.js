@@ -6,6 +6,8 @@ export function renderGraphPage({ state, pageEl }) {
   clear(pageEl);
   const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
+  const bannerEl = el('div', { class: 'banner banner--hidden' }, ['']);
+
   const resultsEl = el('ul', { class: 'list' });
   const evidenceEl = el('div', { class: 'card', 'data-testid': 'evidence-panel' }, [
     el('div', { class: 'card__title' }, ['Evidence (contract + location)']),
@@ -66,6 +68,37 @@ export function renderGraphPage({ state, pageEl }) {
     }
   }
 
+  // Live indexing banner (best-effort): subscribes to realtime events for this repo.
+  try {
+    state.realtime?.subscribe?.((evt) => {
+      if (!evt || evt.repoId !== state.repoId) return;
+      if (!pageEl.contains(bannerEl)) return;
+      if (evt.type === 'index:start') {
+        bannerEl.className = 'banner';
+        bannerEl.textContent = `Indexing… (${evt.payload?.mode ?? ''} ${String(evt.payload?.sha ?? '').slice(0, 8)})`;
+      }
+      if (evt.type === 'index:progress') {
+        const p = evt.payload ?? {};
+        const pct = p.pct != null ? `${p.pct}%` : '';
+        const file = p.filePath ? ` • ${p.filePath}` : '';
+        const counts = ` • ${p.nodes ?? 0} nodes • ${p.edges ?? 0} edges`;
+        bannerEl.className = 'banner';
+        bannerEl.textContent = `Indexing ${pct}${file}${counts}`;
+      }
+      if (evt.type === 'index:complete') {
+        const p = evt.payload ?? {};
+        bannerEl.className = 'banner banner--ok';
+        bannerEl.textContent = `Graph ready • ${p.nodes ?? '?'} nodes • ${p.edges ?? '?'} edges`;
+        setTimeout(() => {
+          if (!pageEl.contains(bannerEl)) return;
+          bannerEl.className = 'banner banner--hidden';
+        }, 2500);
+      }
+    });
+  } catch {
+    // ignore
+  }
+
   pageEl.appendChild(
     el('div', { class: 'grid2' }, [
       el('div', { class: 'card' }, [
@@ -84,4 +117,6 @@ export function renderGraphPage({ state, pageEl }) {
       el('div', { class: 'stack' }, [evidenceEl, focusEl])
     ])
   );
+
+  pageEl.prepend(bannerEl);
 }

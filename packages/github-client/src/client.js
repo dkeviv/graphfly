@@ -74,6 +74,26 @@ export class GitHubClient {
     }));
   }
 
+  async listInstallationRepos({ perPage = 100 } = {}) {
+    const n = Number.isFinite(perPage) ? Math.max(1, Math.min(100, Math.trunc(perPage))) : 100;
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'GET',
+      path: `/installation/repositories?per_page=${encodeURIComponent(String(n))}`,
+      ok: [200]
+    });
+    const arr = Array.isArray(data?.repositories) ? data.repositories : [];
+    return arr.map((r) => ({
+      id: r.id ?? null,
+      fullName: r.full_name ?? null,
+      defaultBranch: r.default_branch ?? 'main',
+      cloneUrl: r.clone_url ?? null,
+      private: Boolean(r.private)
+    }));
+  }
+
   async getRepo({ fullName }) {
     if (!fullName) throw new Error('fullName is required');
     const [owner, repo] = String(fullName).split('/', 2);
