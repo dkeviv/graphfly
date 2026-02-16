@@ -151,6 +151,24 @@ Optional (LLM-backed) mode:
 - If not configured, Graphfly uses a deterministic local policy so enrichment remains reproducible and testable.
 - In dev, Graphfly records an `index_diagnostic` and falls back to deterministic adapters.
 
+### 2.6C Tree-sitter AST (multi-language, enterprise fidelity)
+
+Graphfly supports a Tree-sitter AST engine for **consistent multi-language symbol extraction** (defs/imports/calls) and richer cross-file resolution.
+
+Enable:
+- `GRAPHFLY_AST_ENGINE=treesitter`
+
+Recommended enforcement (prod):
+- `GRAPHFLY_AST_REQUIRED=1` (fails fast if Tree-sitter is unavailable)
+
+Operational verification:
+- `node apps/cli/src/graphfly.js treesitter-check`
+  - Prints which languages are available in the current install.
+
+Notes:
+- Tree-sitter requires native Node modules (`tree-sitter` plus language packages). Install dependencies in your deployment image so the engine is available.
+- If Tree-sitter is unavailable and `GRAPHFLY_AST_REQUIRED` is not set, Graphfly falls back to deterministic parsers and emits an `index_diagnostic`.
+
 ### 2.6D Embeddings (semantic search)
 
 Graphfly stores 384‑dim embeddings on `graph_nodes.embedding` and uses `pgvector` + HNSW for fast semantic search.

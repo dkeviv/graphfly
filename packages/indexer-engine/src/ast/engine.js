@@ -1,16 +1,14 @@
 import { createTypeScriptAstEngine } from './typescript/typescript-engine.js';
+import { createTreeSitterAstEngine } from './treesitter/treesitter-engine.js';
 
 export function createAstEngineFromEnv({ env = process.env, repoRoot, sourceFileExists }) {
   const mode = String(env.GRAPHFLY_AST_ENGINE ?? 'typescript').toLowerCase();
   if (mode === 'none' || mode === 'off' || mode === '') return null;
 
   if (mode === 'tree-sitter' || mode === 'treesitter') {
-    // This is intentionally a hard error until the dependency is installed/vendored.
-    // We keep the interface stable so adding Tree-sitter later does not require a pipeline rewrite.
-    const err = new Error('ast_engine_unavailable: tree-sitter dependency not installed');
-    err.code = 'ast_engine_unavailable';
-    err.engine = 'tree-sitter';
-    throw err;
+    const engine = createTreeSitterAstEngine({ repoRoot, sourceFileExists });
+    assertAstEngineShape(engine);
+    return engine;
   }
 
   if (mode === 'typescript') {

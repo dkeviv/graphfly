@@ -221,17 +221,40 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     yield { type: 'node', data: node };
   }
 
-  // Precompute exports for JS/TS files when the AST engine supports it.
-  // This enables stable import/call resolution independent of file traversal order.
+  // Precompute exports when the AST engine supports it. This enables stable import/call resolution
+  // independent of file traversal order.
   if (astEngine && typeof astEngine.precomputeExports === 'function') {
     for (const absFile of sourceFiles) {
       const filePath = rel(absRoot, absFile);
       const kind = classify(filePath);
-      if (kind !== 'source:js') continue;
+      const language =
+        kind === 'source:python'
+          ? 'python'
+          : kind === 'source:go'
+            ? 'go'
+            : kind === 'source:rust'
+              ? 'rust'
+              : kind === 'source:java'
+                ? 'java'
+                : kind === 'source:csharp'
+                  ? 'csharp'
+                  : kind === 'source:ruby'
+                    ? 'ruby'
+                    : kind === 'source:php'
+                      ? 'php'
+                      : kind === 'source:c'
+                        ? 'c'
+                        : kind === 'source:cpp'
+                          ? 'cpp'
+                          : kind === 'source:js'
+                            ? jsLikeLanguageForFile(filePath)
+                            : null;
+      if (!language) continue;
+      if (typeof astEngine.supportsLanguage === 'function' && !astEngine.supportsLanguage(language)) continue;
+      if (typeof astEngine.supportsLanguage !== 'function' && kind !== 'source:js') continue;
       try {
         const text = fs.readFileSync(absFile, 'utf8');
         const lines = text.split('\n');
-        const language = jsLikeLanguageForFile(filePath);
         const res = astEngine.parse({ filePath, language, text });
         if (!res?.ok) continue;
         const byName = astEngine.precomputeExports({
@@ -360,6 +383,68 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
 
     const kind = classify(filePath);
     try {
+      const fileLang =
+        kind === 'source:python'
+          ? 'python'
+          : kind === 'source:go'
+            ? 'go'
+            : kind === 'source:rust'
+              ? 'rust'
+              : kind === 'source:java'
+                ? 'java'
+                : kind === 'source:csharp'
+                  ? 'csharp'
+                  : kind === 'source:ruby'
+                    ? 'ruby'
+                    : kind === 'source:php'
+                      ? 'php'
+                      : kind === 'source:c'
+                        ? 'c'
+                        : kind === 'source:cpp'
+                          ? 'cpp'
+                          : kind === 'source:js'
+                            ? jsLikeLanguageForFile(filePath)
+                            : null;
+
+      let usedAst = false;
+      if (astEngine && fileLang) {
+        const okToTry =
+          typeof astEngine.supportsLanguage === 'function'
+            ? astEngine.supportsLanguage(fileLang)
+            : kind === 'source:js';
+        if (okToTry) {
+          try {
+            const res = astEngine.parse({ filePath, language: fileLang, text });
+            if (res?.ok) {
+              usedAst = true;
+              for (const record of astEngine.extractRecords({
+                filePath,
+                language: fileLang,
+                ast: res.ast,
+                text,
+                lines,
+                sha,
+                containerUid: sourceUid,
+                fileToUid,
+                exportedByFile,
+                packageToUid,
+                sourceFileExists,
+                resolveAliasImport: resolveTsAliasImport,
+                goModuleName,
+                fileByGoImportPath
+              })) {
+                yield record;
+              }
+            }
+          } catch (e) {
+            yield emitParseError({ filePath, phase: 'parse_ast', err: e });
+            usedAst = false;
+          }
+        }
+      }
+
+      if (usedAst) continue;
+
       if (kind === 'source:python') {
         for (const record of parsePythonFile({ filePath, lines, sha, containerUid: sourceUid, exportedByFile, packageToUid, sourceFileExists })) {
           yield record;
@@ -415,45 +500,17 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
           yield record;
         }
       } else {
-        let usedAst = false;
-        if (astEngine) {
-          try {
-            const res = astEngine.parse({ filePath, language: jsLikeLanguageForFile(filePath), text });
-            if (res?.ok) {
-              usedAst = true;
-              for (const record of astEngine.extractRecords({
-                filePath,
-                language: jsLikeLanguageForFile(filePath),
-                ast: res.ast,
-                text,
-                lines,
-                sha,
-                containerUid: sourceUid,
-                exportedByFile,
-                packageToUid,
-                sourceFileExists,
-                resolveAliasImport: resolveTsAliasImport
-              })) {
-                yield record;
-              }
-            }
-          } catch (e) {
-            yield emitParseError({ filePath, phase: 'parse_ast', err: e });
-          }
-        }
-        if (!usedAst) {
-          for (const record of parseJsFile({
-            filePath,
-            lines,
-            sha,
-            containerUid: sourceUid,
-            exportedByFile,
-            packageToUid,
-            sourceFileExists,
-            resolveAliasImport: resolveTsAliasImport
-          })) {
-            yield record;
-          }
+        for (const record of parseJsFile({
+          filePath,
+          lines,
+          sha,
+          containerUid: sourceUid,
+          exportedByFile,
+          packageToUid,
+          sourceFileExists,
+          resolveAliasImport: resolveTsAliasImport
+        })) {
+          yield record;
         }
       }
     } catch (e) {

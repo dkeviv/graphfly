@@ -21,6 +21,7 @@ function usage() {
     'graphfly local-run --docs-repo-path <path> [options]',
     'graphfly pg-migrate --database-url <postgres-url> [options]',
     'graphfly embeddings-backfill --tenant-id <uuid> --repo-id <uuid> [options]',
+    'graphfly treesitter-check',
     '',
     'Options:',
     '  --docs-repo-path <path>        Required. Local docs git repo path.',
@@ -36,7 +37,8 @@ function usage() {
     'Example:',
     '  node apps/cli/src/graphfly.js local-run --docs-repo-path ../my-docs-repo',
     '  node apps/cli/src/graphfly.js pg-migrate --database-url postgres://...',
-    '  node apps/cli/src/graphfly.js embeddings-backfill --tenant-id ... --repo-id ... --limit 1000'
+    '  node apps/cli/src/graphfly.js embeddings-backfill --tenant-id ... --repo-id ... --limit 1000',
+    '  node apps/cli/src/graphfly.js treesitter-check'
   ].join('\n');
 }
 
@@ -145,6 +147,39 @@ async function embeddingsBackfill(args) {
   console.log(JSON.stringify({ ok: true, tenantId, repoId, scanned: nodes.length, missing: missing.length, updated }, null, 2));
 }
 
+async function treesitterCheck() {
+  const results = [];
+  try {
+    const { createAstEngineFromEnv } = await import('../../../packages/indexer-engine/src/ast/engine.js');
+    const env = { ...process.env, GRAPHFLY_AST_ENGINE: 'treesitter' };
+    const engine = createAstEngineFromEnv({ env, repoRoot: process.cwd(), sourceFileExists: () => false });
+    const samples = [
+      { filePath: 'x.ts', language: 'ts', text: 'export function f(a:number){return a+1}' },
+      { filePath: 'x.py', language: 'python', text: 'def f(x):\n  return x+1\n' },
+      { filePath: 'x.go', language: 'go', text: 'package main\nfunc f(){}\n' },
+      { filePath: 'x.java', language: 'java', text: 'class A { void f(){} }\n' },
+      { filePath: 'x.cs', language: 'csharp', text: 'public class A { public void F(){} }\n' },
+      { filePath: 'x.rs', language: 'rust', text: 'fn f() {}\n' },
+      { filePath: 'x.rb', language: 'ruby', text: 'def f; end\n' },
+      { filePath: 'x.php', language: 'php', text: '<?php function f(){}' },
+      { filePath: 'x.c', language: 'c', text: 'int f(){return 1;}\n' },
+      { filePath: 'x.cpp', language: 'cpp', text: 'int f(){return 1;}\n' }
+    ];
+    for (const s of samples) {
+      try {
+        const res = engine.parse({ filePath: s.filePath, language: s.language, text: s.text });
+        results.push({ language: s.language, ok: Boolean(res?.ok) });
+      } catch (e) {
+        results.push({ language: s.language, ok: false, error: String(e?.message ?? e) });
+      }
+    }
+  } catch (e) {
+    results.push({ language: 'treesitter', ok: false, error: String(e?.message ?? e) });
+  }
+  // eslint-disable-next-line no-console
+  console.log(JSON.stringify({ ok: results.every((r) => r.ok), results }, null, 2));
+}
+
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
@@ -174,6 +209,10 @@ async function main() {
       }
       // eslint-disable-next-line no-console
       console.log(JSON.stringify({ ok: true, applied: migrationFile }, null, 2));
+      return;
+    }
+    if (cmd === 'treesitter-check') {
+      await treesitterCheck();
       return;
     }
     throw new Error(`unknown_command:${cmd}`);
