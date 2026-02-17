@@ -39,6 +39,7 @@ import { createInstallationToken } from '../../../packages/github-app-auth/src/a
 import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-store.js';
 import { GitHubClient } from '../../../packages/github-client/src/client.js';
 import { enqueueInitialFullIndexOnRepoCreate } from './lib/initial-index.js';
+import { enqueueLocalFullIndexOnRepoCreate } from './lib/local-index.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
@@ -61,6 +62,14 @@ function assertProdConfig(env = process.env) {
   if (!env.GRAPHFLY_JWT_SECRET) missing.push('GRAPHFLY_JWT_SECRET');
   if (String(env.GRAPHFLY_AUTH_MODE ?? '') !== 'jwt') missing.push('GRAPHFLY_AUTH_MODE=jwt');
   if (String(env.GRAPHFLY_QUEUE_MODE ?? '') !== 'pg') missing.push('GRAPHFLY_QUEUE_MODE=pg');
+  if (!env.GITHUB_APP_ID) missing.push('GITHUB_APP_ID');
+  if (!env.GITHUB_APP_PRIVATE_KEY) missing.push('GITHUB_APP_PRIVATE_KEY');
+  if (!env.GITHUB_WEBHOOK_SECRET) missing.push('GITHUB_WEBHOOK_SECRET');
+  const indexerMode = String(env.GRAPHFLY_INDEXER_MODE ?? 'auto').toLowerCase();
+  if (indexerMode === 'mock') missing.push('GRAPHFLY_INDEXER_MODE!=mock');
+  const astEngine = String(env.GRAPHFLY_AST_ENGINE ?? '').toLowerCase();
+  if (astEngine === 'none' || astEngine === 'off') missing.push('GRAPHFLY_AST_ENGINE!=off');
+  if (String(env.GRAPHFLY_ALLOW_LOCAL_REPO_ROOT ?? '').trim() === '1') missing.push('GRAPHFLY_ALLOW_LOCAL_REPO_ROOT must not be enabled in prod');
   const forcedPgStores = [
     'GRAPHFLY_GRAPH_STORE',
     'GRAPHFLY_DOC_STORE',
@@ -655,7 +664,16 @@ router.post('/api/v1/repos', async (req) => {
   const fullName = req.body?.fullName ?? req.body?.full_name;
   const githubRepoId = req.body?.githubRepoId ?? req.body?.github_repo_id ?? null;
   const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? 'main';
+  const repoRoot = req.body?.repoRoot ?? req.body?.repo_root ?? null;
   if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
+
+  const prod = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod';
+  const allowLocal = String(process.env.GRAPHFLY_ALLOW_LOCAL_REPO_ROOT ?? '').trim() === '1';
+  if (typeof repoRoot === 'string' && repoRoot.trim().length > 0) {
+    if (prod) return { status: 400, body: { error: 'repoRoot_not_allowed_in_prod' } };
+    if (!allowLocal) return { status: 400, body: { error: 'local_repo_root_disabled' } };
+  }
+
   const repo = await repos.createRepo({ tenantId, fullName, defaultBranch, githubRepoId });
   await auditEvent({
     tenantId,
@@ -670,23 +688,47 @@ router.post('/api/v1/repos', async (req) => {
   const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
   let indexJob = null;
   try {
-    indexJob = await enqueueInitialFullIndexOnRepoCreate({
-      tenantId,
-      repo,
-      org,
-      indexQueue,
-      defaultBranch,
-      docsRepoFullNameFallback: docsRepoFullName,
-      resolveGitHubReaderToken,
-      githubApiBaseUrl
-    });
+    if (!prod && allowLocal && typeof repoRoot === 'string' && repoRoot.trim().length > 0) {
+      indexJob = await enqueueLocalFullIndexOnRepoCreate({
+        tenantId,
+        repo,
+        org,
+        indexQueue,
+        repoRoot: repoRoot.trim(),
+        docsRepoFullNameFallback: docsRepoFullName,
+        docsRepoPath
+      });
+    } else {
+      indexJob = await enqueueInitialFullIndexOnRepoCreate({
+        tenantId,
+        repo,
+        org,
+        indexQueue,
+        defaultBranch,
+        docsRepoFullNameFallback: docsRepoFullName,
+        resolveGitHubReaderToken,
+        githubApiBaseUrl
+      });
+    }
     await maybeDrainOnce();
   } catch (e) {
     const code = String(e?.code ?? '');
     if (code === 'docs_repo_not_configured' || code === 'github_reader_app_not_configured') {
+      try {
+        await repos.deleteRepo({ tenantId, repoId: repo.id });
+      } catch {}
       return { status: 400, body: { error: code } };
     }
+    if (code.startsWith('local_repo_') || code === 'docs_repo_path_collision') {
+      try {
+        await repos.deleteRepo({ tenantId, repoId: repo.id });
+      } catch {}
+      return { status: 400, body: { error: code, ...(e?.metadata ?? null) } };
+    }
     if (code === 'github_head_sha_unavailable') {
+      try {
+        await repos.deleteRepo({ tenantId, repoId: repo.id });
+      } catch {}
       return { status: 502, body: { error: code, ...(e?.metadata ?? null) } };
     }
     throw e;

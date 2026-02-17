@@ -86,8 +86,10 @@ export class ApiClient {
     return this.getJson(`/api/v1/repos?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
 
-  createRepo({ fullName, defaultBranch = 'main', githubRepoId = null }) {
-    return this.sendJson('POST', '/api/v1/repos', { tenantId: this.tenantId, fullName, defaultBranch, githubRepoId });
+  createRepo({ fullName, defaultBranch = 'main', githubRepoId = null, repoRoot = null }) {
+    const body = { tenantId: this.tenantId, fullName, defaultBranch, githubRepoId };
+    if (repoRoot) body.repoRoot = repoRoot;
+    return this.sendJson('POST', '/api/v1/repos', body);
   }
 
   deleteRepo({ repoId }) {

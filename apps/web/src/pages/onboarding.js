@@ -24,6 +24,8 @@ export function renderOnboardingPage({ state, pageEl }) {
 
   const reposListEl = el('ul', { class: 'list' });
   const repoHintEl = el('div', { class: 'small' }, ['Pick a source repo from the GitHub list to create a Project.']);
+  const localRepoRootInput = el('input', { class: 'input', id: 'localRepoRootInput', placeholder: 'Local repo path (dev only): /abs/path/to/repo' });
+  const localCreateBtn = el('button', { class: 'button' }, ['Create Local Project']);
 
   const stepBadgeEls = [];
   const stepListEl = el(
@@ -91,6 +93,8 @@ export function renderOnboardingPage({ state, pageEl }) {
       el('div', { class: 'card' }, [
         el('div', { class: 'card__title' }, ['3) Projects']),
         repoHintEl,
+        el('div', { class: 'small' }, ['Local dev (optional): index a local git repo when `GRAPHFLY_ALLOW_LOCAL_REPO_ROOT=1`.']),
+        el('div', { class: 'row' }, [localRepoRootInput, localCreateBtn]),
         el('div', { class: 'small' }, ['Available source repos (read-only):']),
         githubReposEl,
         el('div', { class: 'small' }, ['Existing projects:']),
@@ -328,6 +332,33 @@ export function renderOnboardingPage({ state, pageEl }) {
       statusEl.textContent = `Failed to load: ${String(e?.message ?? e)}`;
     }
   }
+
+  localCreateBtn.onclick = async () => {
+    const repoRoot = localRepoRootInput.value.trim();
+    if (!repoRoot) return;
+    try {
+      const org = await api.getCurrentOrg();
+      const hasDocsRepo = Boolean(org?.docsRepoFullName);
+      if (!hasDocsRepo) {
+        statusEl.textContent = 'Set a docs repo first (step 2).';
+        return;
+      }
+      const base = repoRoot.replaceAll('\\', '/').split('/').filter(Boolean).pop() ?? 'repo';
+      const fullName = `local/${base}`;
+      const created = await api.createRepo({ fullName, defaultBranch: 'main', githubRepoId: null, repoRoot });
+      const repo = created?.repo ?? null;
+      if (repo?.id) {
+        state.repoId = repo.id;
+        localStorage.setItem('graphfly_repo_id', repo.id);
+        state.realtime?.update?.({ nextRepoId: repo.id });
+        window.location.hash = 'graph';
+        return;
+      }
+      await refresh();
+    } catch (e) {
+      statusEl.textContent = `Create local project failed: ${String(e?.message ?? e)}`;
+    }
+  };
 
   // Kick off async status load.
   refresh();

@@ -171,6 +171,7 @@ The tables below capture the primary user journeys end-to-end. These are the flo
 | UF-ONB-03 | Owner/Admin | `/onboarding/docs` | Select/create docs repo → install **Docs App** (write to docs repo only) → `github_docs_install_id` detected | “Start Indexing” enabled |
 | UF-ONB-04 | Admin+ | `/onboarding/indexing` | Watch live index progress + live graph preview | `index:complete` → advance |
 | UF-ONB-05 | Admin+ | `/onboarding/ready` | Watch agent activity → first docs PR created in docs repo | User can open PR or go to Graph Explorer |
+| UF-ONB-LOCAL-01 (dev) | Admin+ | `#/onboarding` | Set docs repo → enter local git repo path → **Create Local Project** (guarded by `GRAPHFLY_ALLOW_LOCAL_REPO_ROOT=1`) | Local index + docs write pipeline runs end-to-end |
 
 #### Dashboard & Day-to-Day Usage
 

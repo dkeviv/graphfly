@@ -246,6 +246,37 @@ Workers require `TENANT_ID` in Phase‑1 (single-tenant worker loop).
 
 ---
 
+## 4B) Local Manual Testing (Developer Bring-up)
+
+Goal: run the full pipeline locally (API + Web + durable queues + local docs git writes) so onboarding can be QA’d without GitHub Apps.
+
+### 4B.1 Start Postgres (pgvector)
+- `docker compose -f docker-compose.local.yml up -d`
+
+### 4B.2 Configure env
+1. Copy `.env.local.example` to `.env.local` and fill:
+   - `DATABASE_URL`
+   - `DOCS_REPO_PATH` (must be a local git repo; separate from the source repo)
+2. Export it for your shell (example):
+   - `set -a && source .env.local && set +a`
+
+### 4B.3 Apply migrations
+- `npm run pg:migrate`
+
+### 4B.4 Run API + Web + workers
+- `npm run dev:all:pg`
+
+### 4B.5 Onboard (local source repo path)
+In the web UI:
+1. Set a docs repo full name (any placeholder like `acme/docs`) and click **Save**.
+2. In **Projects**, paste a local git repo path in “Local repo path” and click **Create Local Project**.
+
+Notes:
+- The local onboarding path is guarded by `GRAPHFLY_ALLOW_LOCAL_REPO_ROOT=1` and is blocked in production (`repoRoot_not_allowed_in_prod`).
+- Docs output writes into `DOCS_REPO_PATH` and must not be inside the source repo (enforced by `docs_repo_path_collision`).
+
+---
+
 ## 5) Onboarding Checklist (One-Click UX)
 
 For a new org:
