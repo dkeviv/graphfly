@@ -1531,6 +1531,10 @@ async function handlePushWebhook(payload: PushEvent) {
     payload.commits.flatMap(c => c.removed)
   )];
 
+  // IMPORTANT: removed files must prune graph state. The indexer worker will delete
+  // file-scoped nodes/edges/occurrences (and related derived records like unresolved_imports)
+  // before ingesting the new NDJSON for `sha`.
+
   // Enqueue incremental index
   await indexQueue.add('incremental', {
     tenantId: repoRecord.tenant_id,

@@ -172,6 +172,15 @@ Notes:
 - Tree-sitter requires native Node modules (`tree-sitter` plus language packages). Install dependencies in your deployment image so the engine is available.
 - If Tree-sitter is unavailable and `GRAPHFLY_AST_REQUIRED` is not set, Graphfly falls back to deterministic parsers and emits an `index_diagnostic`.
 
+### 2.6C.1 Removed files (prune graph state)
+
+GitHub push webhooks include a `removed` file list. Graphfly treats removed files as hard deletions and prunes any file-scoped graph state:
+- deletes `graph_nodes` where `file_path` matches a removed file (edges/occurrences cascade)
+- deletes `flow_entrypoints` and `dependency_manifests` with matching `file_path`
+- deletes `unresolved_imports` for the removed files
+
+This prevents stale symbols from surviving after deletions/renames.
+
 ### 2.6D Embeddings (semantic search)
 
 Graphfly stores 384‑dim embeddings on `graph_nodes.embedding` and uses `pgvector` + HNSW for fast semantic search.

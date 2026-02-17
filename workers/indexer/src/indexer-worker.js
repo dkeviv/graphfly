@@ -22,6 +22,11 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
 
       realtime?.publish?.({ tenantId, repoId, type: 'index:start', payload: { sha, mode: modeLabel } });
 
+      // Removed files must prune graph state (delete file-scoped nodes/edges/occurrences).
+      if (Array.isArray(removedFiles) && removedFiles.length > 0 && typeof store.deleteGraphForFilePaths === 'function') {
+        await Promise.resolve(store.deleteGraphForFilePaths({ tenantId, repoId, filePaths: removedFiles }));
+      }
+
       // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
       if (Array.isArray(changedFiles) && changedFiles.length > 0) {
         const impact = await computeImpact({ store, tenantId, repoId, changedFiles, removedFiles, depth: 2 });
