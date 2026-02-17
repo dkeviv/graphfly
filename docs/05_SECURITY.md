@@ -17,6 +17,7 @@
 - **Tenant isolation by construction**: cross-org data access must be impossible at the database layer (PostgreSQL RLS).
 - **No write access to source code repositories**: Graphfly must not have the ability to modify customer source repos.
 - **No source code body exposure by default**: Graphfly must not fetch/render source code bodies/snippets in the UI or embed them in doc blocks by default.
+- **No code in doc blocks**: doc block content must be validated and must reject fenced code, indented code blocks, and code-like multi-line bodies.
 - **Least-privilege GitHub access**: minimize GitHub scopes and enforce separation of duties.
 - **No code execution**: Graphfly reads and analyzes source code; it must never execute customer code.
 - **Auditable actions**: every indexing run and documentation PR should be attributable and reviewable.

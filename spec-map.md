@@ -13,7 +13,7 @@ Regenerate: `npm run spec:map`
 | `FR-GH-01B` — GitHub Docs App Installation (Docs Repo Only) | `docs/02_REQUIREMENTS.md:48` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-02` — Repository Connection | `docs/02_REQUIREMENTS.md:54` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-03` — Docs Repository Configuration | `docs/02_REQUIREMENTS.md:60` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
-| `FR-GH-06` — Create Docs Repo (Onboarding) | `docs/02_REQUIREMENTS.md:66` | ❌ | BLOCKER | apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
+| `FR-GH-06` — Create Docs Repo (Onboarding) | `docs/02_REQUIREMENTS.md:66` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-04` — Webhook Processing | `docs/02_REQUIREMENTS.md:80` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-GH-05` — Enforced No-Write To Source Code Repos | `docs/02_REQUIREMENTS.md:86` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, apps/api/src/server.js, apps/api/src/github-webhook.js, packages/github-*, packages/repos* |
 | `FR-CIG-01` — Full Index on Connection | `docs/02_REQUIREMENTS.md:96` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/indexer/, packages/cig/, packages/ndjson/, packages/cig-pg/, migrations/001_init.sql |
@@ -35,10 +35,10 @@ Regenerate: `npm run spec:map`
 | `FR-DOC-05` — New Node Documentation | `docs/02_REQUIREMENTS.md:206` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
 | `FR-DOC-06` — Docs PR Creation | `docs/02_REQUIREMENTS.md:211` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
 | `FR-DOC-07` — Doc Block Regeneration | `docs/02_REQUIREMENTS.md:217` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
-| `FR-DOC-08` — Docs Repository Browser (Read) | `docs/02_REQUIREMENTS.md:222` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
-| `FR-DOC-09` — Manual Documentation Editing (UI) | `docs/02_REQUIREMENTS.md:236` | ✅ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
-| `FR-AST-01` — Product Documentation Assistant (Explain & Navigate) | `docs/02_REQUIREMENTS.md:252` | ❌ | BLOCKER | docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
-| `FR-AST-02` — Product Documentation Assistant (Draft & Edit Docs via PR) | `docs/02_REQUIREMENTS.md:260` | ❌ | BLOCKER | docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-DOC-08` — Docs Repository Browser (Read) | `docs/02_REQUIREMENTS.md:222` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
+| `FR-DOC-09` — Manual Documentation Editing (UI) | `docs/02_REQUIREMENTS.md:236` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, workers/doc-agent/, packages/doc-blocks/, packages/doc-store/, packages/github-service/ |
+| `FR-AST-01` — Product Documentation Assistant (Explain & Navigate) | `docs/02_REQUIREMENTS.md:252` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
+| `FR-AST-02` — Product Documentation Assistant (Draft & Edit Docs via PR) | `docs/02_REQUIREMENTS.md:260` | ❌ | BLOCKER | `docs/02_REQUIREMENTS.md`, docs/02_REQUIREMENTS.md, docs/03_TECHNICAL_SPEC.md |
 | `FR-GX-01` — Interactive Graph View | `docs/02_REQUIREMENTS.md:275` | ✅ | BLOCKER | `docs/04_UX_SPEC.md`, apps/web/, apps/api/src/server.js, packages/cig/src/search.js |
 | `FR-GX-02` — Node Detail | `docs/02_REQUIREMENTS.md:281` | ✅ | BLOCKER | `docs/04_UX_SPEC.md`, apps/web/, apps/api/src/server.js, packages/cig/src/search.js |
 | `FR-GX-03` — Blast Radius Visualization | `docs/02_REQUIREMENTS.md:286` | ✅ | BLOCKER | `docs/03_TECHNICAL_SPEC.md`, `docs/02_REQUIREMENTS.md`, `docs/04_UX_SPEC.md`, apps/web/, apps/api/src/server.js, packages/cig/src/search.js |

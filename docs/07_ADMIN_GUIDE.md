@@ -231,6 +231,19 @@ Key env vars:
 - `OPENCLAW_AGENT_ID` — optional agent id (for routing/quotas)
 - `OPENCLAW_USE_REMOTE=0|false` — force deterministic local mode even when a gateway URL is configured
 
+Doc agent guardrails (recommended):
+- `GRAPHFLY_DOC_AGENT_LOCK_TTL_MS` (default `1800000`) — per-repo doc generation lock TTL (serializes runs)
+- `GRAPHFLY_DOC_AGENT_MAX_TURNS` (default `20`) — hard cap on agent loop turns
+- `GRAPHFLY_DOC_AGENT_MAX_TOOL_CALLS` (default `8000`) — hard cap on total tool calls per run
+- `GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS` (default `4`) — remote gateway HTTP retry attempts (429/5xx)
+- `GRAPHFLY_DOC_AGENT_RETRY_BASE_MS` (default `250`)
+- `GRAPHFLY_DOC_AGENT_RETRY_MAX_MS` (default `5000`)
+- `GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES` / `GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES` — truncation caps for `flows_trace`
+- `GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_NODES` — cap on evidence links derived from a trace (local deterministic mode)
+- `GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_LINKS` — cap on evidence links persisted per doc block
+- `GRAPHFLY_DOC_AGENT_MAX_BLOCK_CHARS` — reject oversized doc blocks
+- `GRAPHFLY_DOC_AGENT_MAX_EXISTING_BLOCK_CHARS` — truncate existing block content returned to the agent
+
 Manual block regeneration (FR-DOC-07):
 - `POST /docs/regenerate` (admin-only) with `{ tenantId, repoId, blockId }` enqueues a single-target doc job and opens a new PR.
 - The web UI exposes this as **Regenerate (Admin)** on the Doc Block detail view.
@@ -376,7 +389,7 @@ Monitor:
 ### 6.5 Docs PR health
 Monitor:
 - PR creation failures
-- doc block validation failures (must reject code fences)
+- doc block validation failures (must reject code fences, indented code blocks, and code-like multi-line content)
 
 ---
 
