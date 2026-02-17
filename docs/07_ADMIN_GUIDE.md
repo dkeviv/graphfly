@@ -213,6 +213,10 @@ Backfill control:
 
 Graphfly runs a documentation worker that updates **doc blocks** and opens PRs in the configured **docs repo only**.
 
+Docs output layout (Phase‑1):
+- `flows/` — flow entrypoints (HTTP routes, queue jobs, CLIs)
+- `contracts/` — public contracts (exported functions/classes, modules, schemas)
+
 Enable by running the worker:
 - `npm run worker:doc`
 

@@ -680,7 +680,7 @@ export async function runDocPrWithOpenClaw({
   const input = [
     `Create/update documentation for flow entrypoints (flows/) and public contracts (contracts/) for triggerSha=${triggerSha}.`,
     'For each flow entrypoint: fetch contract, trace derived flow, upsert a single doc block for it.',
-    'For each public contract node (API endpoints, exported functions/classes): fetch contract and upsert a single doc block for it.',
+    'For each public contract node (exported functions/classes, modules, schemas): fetch contract and upsert a single doc block for it.',
     'Finally, open a PR in the docs repo with the generated files.'
   ].join('\n');
 

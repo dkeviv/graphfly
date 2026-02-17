@@ -29,7 +29,7 @@
 | Impacted nodes (“blast radius”) correctness | `docs/02_REQUIREMENTS.md` | FR-GX-03 | DONE | `npm test` |
 | Incremental correctness diagnostics | `docs/02_REQUIREMENTS.md` | FR-CIG-12 | DONE | `npm test` |
 | GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | DONE | `npm test` (webhook → index → docs pipeline wired; ephemeral cloneAtSha path; supports `GITHUB_READER_TOKEN` or GitHub App installation token (`GITHUB_APP_ID` + private key + install id)) |
-| Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | DONE | `npm test` (docs-repo-only guard + LocalDocsWriter; GitHubDocsWriter can open PR via REST when `GITHUB_DOCS_TOKEN` configured; skip empty-file PRs; undocumented-only doc runs) |
+| Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | DONE | `npm test` (docs-repo-only guard + LocalDocsWriter; GitHubDocsWriter can open PR via REST when `GITHUB_DOCS_TOKEN` configured; skip empty-file PRs; undocumented-only doc runs; `flows/` + `contracts/` layout) |
 | Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | DONE | `npm test` |
 | PgQueue stale-lock recovery + heartbeat | `docs/03_TECHNICAL_SPEC.md` + `docs/06_OPERATIONS.md` | N/A | DONE | `npm test` (`test/pg-queue-stale-lock.test.js`) |
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
