@@ -113,12 +113,20 @@ function parseGoCalls(lines) {
   const calls = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.trim().startsWith('func ')) continue;
+    const trimmed = line.trim();
+    let scan = line;
+    // Avoid matching the function name in the signature, but still allow calls in one-line bodies:
+    // func Hello() { sub.Do() }
+    if (trimmed.startsWith('func ')) {
+      const brace = line.indexOf('{');
+      if (brace < 0) continue;
+      scan = line.slice(brace + 1);
+    }
     // pkg.Func(...)
-    const member = Array.from(line.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g));
+    const member = Array.from(scan.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g));
     for (const m of member) calls.push({ kind: 'member', a: m[1], b: m[2], line: i + 1 });
     // Func(...)
-    const direct = Array.from(line.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g));
+    const direct = Array.from(scan.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g));
     for (const m of direct) calls.push({ kind: 'direct', a: m[1], line: i + 1 });
   }
   return calls;
@@ -198,9 +206,21 @@ function makeApiEndpointNode({ method, routePath, filePath, line, sha, container
   };
 }
 
-export function* parseGoFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, goModuleName = null, fileByGoImportPath = null, sourceFileExists = null }) {
+export function* parseGoFile({
+  filePath,
+  lines,
+  sha,
+  containerUid,
+  exportedByFile,
+  packageToUid,
+  goModuleName = null,
+  fileByGoImportPath = null,
+  goExportsByImportPath = null,
+  sourceFileExists = null
+}) {
   const sourceUid = containerUid ?? null;
   const localByName = new Map();
+  const importAliasToImportPath = new Map(); // alias -> go import path (repo-local only)
 
   for (const r of parseGoHttpEntrypoints(lines)) {
     const ep = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha, containerUid: sourceUid });
@@ -246,6 +266,8 @@ export function* parseGoFile({ filePath, lines, sha, containerUid, exportedByFil
   for (const imp of parseGoImports(lines)) {
     const resolvedFile = resolveGoImportToFile({ impPath: imp.path, goModuleName, fileByGoImportPath });
     if (resolvedFile) {
+      const alias = imp.alias ?? String(imp.path).split('/').slice(-1)[0];
+      if (alias && alias !== '.') importAliasToImportPath.set(alias, imp.path);
       const targetUid = makeSymbolUid({
         language: 'go',
         qualifiedName: resolvedFile.replaceAll('/', '.'),
@@ -276,6 +298,16 @@ export function* parseGoFile({ filePath, lines, sha, containerUid, exportedByFil
       const targetUid = localByName.get(c.a) ?? null;
       if (!targetUid) continue;
       yield { type: 'edge', data: { source_symbol_uid: container, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee: c.a }, first_seen_sha: sha, last_seen_sha: sha } };
+      yield { type: 'edge_occurrence', data: { source_symbol_uid: container, target_symbol_uid: targetUid, edge_type: 'Calls', file_path: filePath, line_start: line, line_end: line, occurrence_kind: 'call', sha } };
+    }
+    if (c.kind === 'member') {
+      const impPath = importAliasToImportPath.get(c.a) ?? null;
+      if (!impPath) continue;
+      const pkg = goExportsByImportPath?.get?.(impPath) ?? null;
+      const targetUid = pkg?.get?.(c.b) ?? null;
+      if (!targetUid) continue;
+      const callee = `${c.a}.${c.b}`;
+      yield { type: 'edge', data: { source_symbol_uid: container, target_symbol_uid: targetUid, edge_type: 'Calls', metadata: { callee }, first_seen_sha: sha, last_seen_sha: sha } };
       yield { type: 'edge_occurrence', data: { source_symbol_uid: container, target_symbol_uid: targetUid, edge_type: 'Calls', file_path: filePath, line_start: line, line_end: line, occurrence_kind: 'call', sha } };
     }
   }

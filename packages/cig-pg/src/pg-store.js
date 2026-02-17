@@ -200,6 +200,53 @@ export class PgGraphStore {
     return Array.isArray(res.rows) ? res.rows : [];
   }
 
+  async deleteGraphForFilePaths({ tenantId, repoId, filePaths = [] } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    const fps = Array.from(new Set((Array.isArray(filePaths) ? filePaths : []).map((x) => String(x)).filter(Boolean)));
+    if (fps.length === 0) return { ok: true, deleted: { nodes: 0, entrypoints: 0, manifests: 0, unresolved: 0 } };
+
+    // Delete is scoped to file_path; graph_edges/occurrences cascade from graph_nodes.
+    const res = await this._c.query(
+      `WITH deleted_nodes AS (
+         DELETE FROM graph_nodes
+         WHERE tenant_id=$1 AND repo_id=$2 AND file_path = ANY($3::text[])
+         RETURNING 1
+       ),
+       deleted_entrypoints AS (
+         DELETE FROM flow_entrypoints
+         WHERE tenant_id=$1 AND repo_id=$2 AND file_path = ANY($3::text[])
+         RETURNING 1
+       ),
+       deleted_manifests AS (
+         DELETE FROM dependency_manifests
+         WHERE tenant_id=$1 AND repo_id=$2 AND file_path = ANY($3::text[])
+         RETURNING 1
+       ),
+       deleted_unresolved AS (
+         DELETE FROM unresolved_imports
+         WHERE tenant_id=$1 AND repo_id=$2 AND file_path = ANY($3::text[])
+         RETURNING 1
+       )
+       SELECT
+         (SELECT count(*) FROM deleted_nodes)::int as nodes,
+         (SELECT count(*) FROM deleted_entrypoints)::int as entrypoints,
+         (SELECT count(*) FROM deleted_manifests)::int as manifests,
+         (SELECT count(*) FROM deleted_unresolved)::int as unresolved`,
+      [tenantId, repoId, fps]
+    );
+
+    const row = res.rows?.[0] ?? {};
+    return {
+      ok: true,
+      deleted: {
+        nodes: Number(row.nodes ?? 0),
+        entrypoints: Number(row.entrypoints ?? 0),
+        manifests: Number(row.manifests ?? 0),
+        unresolved: Number(row.unresolved ?? 0)
+      }
+    };
+  }
+
   async listEdgeOccurrencesForEdge({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid }) {
     await this._ensureOrgRepo({ tenantId, repoId });
     const edgeId = await this._getEdgeIdByUids({ tenantId, repoId, sourceSymbolUid, edgeType, targetSymbolUid });

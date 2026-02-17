@@ -246,6 +246,13 @@ export class PgGraphStorePool {
       return store.listGraphAnnotationsBySymbolUid({ tenantId, repoId, symbolUid });
     });
   }
+
+  async deleteGraphForFilePaths({ tenantId, repoId, filePaths }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgGraphStore({ client, repoFullName: this._repoFullName });
+      return store.deleteGraphForFilePaths({ tenantId, repoId, filePaths });
+    });
+  }
 }
 
 export async function createGraphStoreFromEnv({ repoFullName = 'local/unknown' } = {}) {

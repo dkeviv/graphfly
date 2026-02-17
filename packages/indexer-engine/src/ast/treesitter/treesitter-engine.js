@@ -269,6 +269,8 @@ function makeSymbolNode({ kind, name, params = [], filePath, line, sha, language
       ? `class ${name}`
       : kind === 'method'
         ? `method ${name}(${params.join(', ')})`
+        : kind === 'variable'
+          ? `var ${name}`
         : `function ${name}(${params.join(', ')})`;
   const signatureHash = computeSignatureHash({ signature });
   const symbolUid = makeSymbolUid({ language, qualifiedName, signatureHash });
@@ -277,8 +279,8 @@ function makeSymbolNode({ kind, name, params = [], filePath, line, sha, language
     symbol_uid: symbolUid,
     qualified_name: qualifiedName,
     name,
-    node_type: kind === 'class' ? 'Class' : 'Function',
-    symbol_kind: kind === 'class' ? 'class' : kind === 'method' ? 'method' : 'function',
+    node_type: kind === 'class' ? 'Class' : kind === 'variable' ? 'Variable' : 'Function',
+    symbol_kind: kind === 'class' ? 'class' : kind === 'variable' ? 'variable' : kind === 'method' ? 'method' : 'function',
     container_uid: containerUid,
     file_path: filePath,
     line_start: line,
@@ -291,6 +293,8 @@ function makeSymbolNode({ kind, name, params = [], filePath, line, sha, language
     contract:
       kind === 'class'
         ? { kind: 'class', name, constructor: { parameters: params.map((p) => ({ name: p, type: null })) } }
+        : kind === 'variable'
+          ? { kind: 'variable', name, type: null, description: null }
         : { kind: kind === 'method' ? 'method' : 'function', name, parameters: params.map((p) => ({ name: p, type: null })), returns: null },
     constraints: null,
     allowable_values: null,
@@ -436,6 +440,112 @@ function extractImportSpec({ lang, text, node }) {
   return null;
 }
 
+function extractImportBindings({ lang, text, node }) {
+  const spec = extractImportSpec({ lang, text, node });
+  if (!spec) return null;
+  const raw = nodeText(text, node).trim();
+  const bindings = [];
+
+  if (lang === 'python') {
+    if (node.type === 'import_statement') {
+      // import pkg.sub as alias
+      const m = raw.match(/^\s*import\s+([A-Za-z0-9_\.]+)(?:\s+as\s+([A-Za-z0-9_]+))?/);
+      const alias = m?.[2] ?? null;
+      const local = alias || String(spec).split('.').slice(-1)[0];
+      if (local) bindings.push({ local, imported: '*', kind: 'namespace' });
+    }
+    if (node.type === 'import_from_statement') {
+      // from pkg.sub import a as b, c
+      const m = raw.match(/^\s*from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)\s*$/);
+      const rest = m?.[2] ?? '';
+      for (const part of rest.split(',')) {
+        const s = part.trim();
+        if (!s) continue;
+        if (s === '*') continue;
+        const mm = s.match(/^([A-Za-z0-9_]+)(?:\s+as\s+([A-Za-z0-9_]+))?$/);
+        const imported = mm?.[1] ?? null;
+        const local = mm?.[2] ?? imported;
+        if (local && imported) bindings.push({ local, imported, kind: 'named' });
+      }
+    }
+  }
+
+  if (lang === 'go' && node.type === 'import_spec') {
+    const nameNode = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
+    const alias = nameNode ? safeName(nodeText(text, nameNode)) : null;
+    const local = alias || String(spec).split('/').slice(-1)[0];
+    if (local) bindings.push({ local, imported: '*', kind: 'namespace' });
+  }
+
+  if (lang === 'java' && node.type === 'import_declaration') {
+    // import a.b.C; | import static a.b.C.m;
+    const m = raw.match(/import\s+(static\s+)?([A-Za-z0-9_\.]+)\s*;/);
+    const dotted = m?.[2] ?? null;
+    if (dotted) {
+      const parts = dotted.split('.');
+      const local = parts[parts.length - 1];
+      if (local) bindings.push({ local, imported: local, kind: 'named' });
+    }
+  }
+
+  if (lang === 'csharp' && node.type === 'using_directive') {
+    const m = raw.match(/using\s+([A-Za-z0-9_\.]+)\s*;/);
+    const dotted = m?.[1] ?? null;
+    if (dotted) {
+      const local = dotted.split('.').slice(-1)[0];
+      if (local) bindings.push({ local, imported: '*', kind: 'namespace' });
+    }
+  }
+
+  if (lang === 'swift' && node.type === 'import_declaration') {
+    const m = raw.match(/import\s+([A-Za-z0-9_\.]+)/);
+    const dotted = m?.[1] ?? null;
+    if (dotted) {
+      const local = dotted.split('.').slice(-1)[0];
+      if (local) bindings.push({ local, imported: '*', kind: 'namespace' });
+    }
+  }
+
+  if (lang === 'kotlin' && node.type === 'import_header') {
+    const m = raw.match(/import\s+([A-Za-z0-9_\.]+)(?:\s+as\s+([A-Za-z0-9_]+))?/);
+    const dotted = m?.[1] ?? null;
+    const alias = m?.[2] ?? null;
+    if (dotted) {
+      const local = alias || dotted.split('.').slice(-1)[0];
+      if (local) bindings.push({ local, imported: '*', kind: 'namespace' });
+    }
+  }
+
+  if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx') {
+    if (node.type === 'import_statement') {
+      const m = raw.match(/^\s*import\s+(.+?)\s+from\s+['"][^'"]+['"]/);
+      const binding = m?.[1]?.trim() ?? '';
+      if (binding) {
+        // import * as ns from 'x'
+        const ns = binding.match(/^\*\s+as\s+([A-Za-z0-9_$]+)/);
+        if (ns?.[1]) bindings.push({ local: ns[1], imported: '*', kind: 'namespace' });
+        // import Default from 'x'
+        const def = binding.split(',')[0]?.trim();
+        if (def && def !== '*' && !def.startsWith('{') && !def.startsWith('*')) bindings.push({ local: def, imported: 'default', kind: 'default' });
+        // import { a as b, c } from 'x'
+        const named = binding.match(/\{([^}]+)\}/);
+        if (named?.[1]) {
+          for (const part of named[1].split(',')) {
+            const p = part.trim();
+            if (!p) continue;
+            const mm = p.match(/^([A-Za-z0-9_$]+)(?:\s+as\s+([A-Za-z0-9_$]+))?$/);
+            const imported = mm?.[1] ?? null;
+            const local = mm?.[2] ?? imported;
+            if (local && imported) bindings.push({ local, imported, kind: 'named' });
+          }
+        }
+      }
+    }
+  }
+
+  return { spec, bindings };
+}
+
 function extractCallee({ lang, text, node }) {
   // Best-effort callee name for call expressions.
   if (lang === 'python') {
@@ -569,9 +679,17 @@ function declarationNameForNode({ lang, text, node }) {
       const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
+    if (t === 'assignment') {
+      const left = node.namedChildren?.[0] ?? null;
+      if (left?.type === 'identifier') return safeName(nodeText(text, left));
+    }
   }
   if (lang === 'go') {
     if (t === 'function_declaration' || t === 'method_declaration' || t === 'type_spec') {
+      const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
+      return id ? safeName(nodeText(text, id)) : null;
+    }
+    if (t === 'var_spec' || t === 'const_spec') {
       const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
@@ -581,9 +699,17 @@ function declarationNameForNode({ lang, text, node }) {
       const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
+    if (t === 'variable_declarator') {
+      const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
+      return id ? safeName(nodeText(text, id)) : null;
+    }
   }
   if (lang === 'csharp') {
     if (t === 'class_declaration' || t === 'interface_declaration' || t === 'method_declaration') {
+      const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
+      return id ? safeName(nodeText(text, id)) : null;
+    }
+    if (t === 'variable_declarator') {
       const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
@@ -591,6 +717,10 @@ function declarationNameForNode({ lang, text, node }) {
   if (lang === 'rust') {
     if (t === 'function_item' || t === 'struct_item' || t === 'enum_item' || t === 'impl_item') {
       const id = node.namedChildren?.find((c) => c.type === 'identifier' || c.type === 'type_identifier') ?? null;
+      return id ? safeName(nodeText(text, id)) : null;
+    }
+    if (t === 'const_item' || t === 'static_item') {
+      const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
   }
@@ -605,11 +735,17 @@ function declarationNameForNode({ lang, text, node }) {
       const id = node.namedChildren?.find((c) => c.type === 'name' || c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
+    if (t === 'variable_name') return safeName(nodeText(text, node).replace(/^\$/, ''));
   }
   if (lang === 'c' || lang === 'cpp') {
     if (t === 'function_definition') {
       const id = node.namedChildren?.find((c) => c.type === 'function_declarator' || c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id).split('(')[0].trim()) : null;
+    }
+    if (t === 'declarator' || t === 'identifier') {
+      const raw = nodeText(text, node);
+      const name = raw.split('(')[0]?.trim();
+      if (name && /^[A-Za-z_]/.test(name)) return safeName(name);
     }
   }
   if (lang === 'swift') {
@@ -617,9 +753,17 @@ function declarationNameForNode({ lang, text, node }) {
       const id = node.namedChildren?.find((c) => c.type === 'identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
+    if (t === 'pattern' || t === 'identifier') {
+      const raw = nodeText(text, node).trim();
+      if (raw && /^[A-Za-z_]/.test(raw)) return safeName(raw);
+    }
   }
   if (lang === 'kotlin') {
     if (t === 'function_declaration' || t === 'class_declaration' || t === 'object_declaration') {
+      const id = node.namedChildren?.find((c) => c.type === 'simple_identifier') ?? null;
+      return id ? safeName(nodeText(text, id)) : null;
+    }
+    if (t === 'property_declaration') {
       const id = node.namedChildren?.find((c) => c.type === 'simple_identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
@@ -629,29 +773,82 @@ function declarationNameForNode({ lang, text, node }) {
       const id = node.namedChildren?.find((c) => c.type === 'identifier' || c.type === 'property_identifier') ?? null;
       return id ? safeName(nodeText(text, id)) : null;
     }
+    if (t === 'variable_declarator') {
+      const id = node.namedChildren?.find((c) => c.type === 'identifier' || c.type === 'property_identifier') ?? null;
+      return id ? safeName(nodeText(text, id)) : null;
+    }
   }
   return null;
 }
 
 function kindForDecl({ lang, nodeType }) {
-  if (lang === 'python') return nodeType === 'class_definition' ? 'class' : nodeType === 'function_definition' ? 'function' : null;
-  if (lang === 'go') return nodeType === 'method_declaration' ? 'method' : nodeType === 'function_declaration' ? 'function' : null;
+  if (lang === 'python')
+    return nodeType === 'class_definition'
+      ? 'class'
+      : nodeType === 'function_definition'
+        ? 'function'
+        : nodeType === 'assignment'
+          ? 'variable'
+          : null;
+  if (lang === 'go')
+    return nodeType === 'method_declaration'
+      ? 'method'
+      : nodeType === 'function_declaration'
+        ? 'function'
+        : nodeType === 'var_spec' || nodeType === 'const_spec'
+          ? 'variable'
+          : null;
   if (lang === 'java') return nodeType === 'method_declaration' ? 'method' : nodeType.includes('class') ? 'class' : null;
   if (lang === 'csharp') return nodeType === 'method_declaration' ? 'method' : nodeType.includes('class') ? 'class' : null;
   if (lang === 'rust') return nodeType === 'function_item' ? 'function' : nodeType.endsWith('_item') ? 'class' : null;
   if (lang === 'ruby') return nodeType === 'method' ? 'method' : nodeType === 'class' ? 'class' : null;
-  if (lang === 'php') return nodeType === 'method_declaration' ? 'method' : nodeType === 'class_declaration' ? 'class' : nodeType === 'function_definition' ? 'function' : null;
+  if (lang === 'php')
+    return nodeType === 'method_declaration'
+      ? 'method'
+      : nodeType === 'class_declaration'
+        ? 'class'
+        : nodeType === 'function_definition'
+          ? 'function'
+          : nodeType === 'variable_name'
+            ? 'variable'
+            : null;
   if (lang === 'c' || lang === 'cpp') return nodeType === 'function_definition' ? 'function' : null;
   if (lang === 'swift') return nodeType === 'function_declaration' ? 'function' : nodeType.includes('class') || nodeType.includes('struct') ? 'class' : null;
-  if (lang === 'kotlin') return nodeType === 'function_declaration' ? 'function' : nodeType.includes('class') || nodeType.includes('object') ? 'class' : null;
+  if (lang === 'kotlin')
+    return nodeType === 'function_declaration'
+      ? 'function'
+      : nodeType.includes('class') || nodeType.includes('object')
+        ? 'class'
+        : nodeType === 'property_declaration'
+          ? 'variable'
+          : null;
   if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx')
-    return nodeType === 'method_definition' ? 'method' : nodeType === 'class_declaration' ? 'class' : nodeType === 'function_declaration' ? 'function' : null;
+    return nodeType === 'method_definition'
+      ? 'method'
+      : nodeType === 'class_declaration'
+        ? 'class'
+        : nodeType === 'function_declaration'
+          ? 'function'
+          : nodeType === 'variable_declarator'
+            ? 'variable'
+            : null;
   return null;
 }
 
 export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
   const Parser = loadTreeSitterRuntime();
   const parserCache = new Map(); // lang -> { parser }
+  const prod = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod';
+  const required = String(process.env.GRAPHFLY_AST_REQUIRED ?? '').trim() === '1';
+
+  // SaaS fail-safe: in prod (or when explicitly required), eagerly verify that every configured
+  // grammar module is installed. This prevents silently indexing with reduced fidelity.
+  if (prod || required) {
+    for (const lang of Object.keys(TREE_SITTER_LANGUAGE_CONFIG)) {
+      // Throws a coded error if missing.
+      loadTreeSitterLanguage(lang);
+    }
+  }
 
   function normalizeLang(v) {
     const s = String(v ?? '').toLowerCase();
@@ -678,7 +875,8 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
 
   function parse({ filePath, language, text }) {
     const inferred = treesitterLanguageForFilePath(filePath);
-    const lang = normalizeLang(language ?? inferred ?? '');
+    // Prefer file extension inference (e.g. .tsx) over the caller's coarse language hint.
+    const lang = normalizeLang(inferred ?? language ?? '');
     if (!supportsLanguage(lang)) return { ok: false, error: `treesitter_unsupported_language:${lang}`, diagnostics: [] };
     const { parser } = getParser(lang);
     const t = String(text ?? '');
@@ -697,7 +895,7 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
       const name = declarationNameForNode({ lang, text: parsed.text, node: n });
       if (!name) continue;
       const node = makeSymbolNode({
-        kind: k === 'function' ? 'function' : k === 'method' ? 'method' : 'class',
+        kind: k === 'function' ? 'function' : k === 'method' ? 'method' : k === 'variable' ? 'variable' : 'class',
         name,
         params: [],
         filePath: parsed.filePath,
@@ -726,7 +924,8 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
     sourceFileExists: existsImpl,
     resolveAliasImport,
     goModuleName,
-    fileByGoImportPath
+    fileByGoImportPath,
+    goExportsByImportPath
   }) {
     const parsed =
       ast?.root
@@ -737,6 +936,8 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
     const exists = typeof existsImpl === 'function' ? existsImpl : sourceFileExists;
 
     const localByName = exportedByFile?.get?.(fp) ?? new Map();
+    const declByName = new Map(); // local declarations (functions/classes/variables) by name
+    const localToImport = new Map(); // local identifier -> { resolvedFile, importedName }
     const declUidByNode = new WeakMap();
 
     // Entrypoints (HTTP routes + basic queue/cron for JS) derived from text lines.
@@ -787,7 +988,7 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
       const name = declarationNameForNode({ lang, text: parsed.text, node: n });
       if (!name) continue;
       const node = makeSymbolNode({
-        kind: k === 'function' ? 'function' : k === 'method' ? 'method' : 'class',
+        kind: k === 'function' ? 'function' : k === 'method' ? 'method' : k === 'variable' ? 'variable' : 'class',
         name,
         params: [],
         filePath: fp,
@@ -798,6 +999,7 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
         visibility: 'public'
       });
       yield { type: 'node', data: node };
+      declByName.set(name, node.symbol_uid);
       declUidByNode.set(n, node.symbol_uid);
       if (containerUid) {
         const edge = makeEdge({ sourceUid: containerUid, targetUid: node.symbol_uid, edgeType: 'Defines', sha, metadata: { kind: k } });
@@ -811,6 +1013,7 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
       const spec = extractImportSpec({ lang, text: parsed.text, node: n });
       if (!spec) continue;
       const line = nodeLine(n);
+      const binding = extractImportBindings({ lang, text: parsed.text, node: n });
       let resolvedFile = null;
       if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx') {
         resolvedFile = resolveJsImport({ filePath: fp, spec, sourceFileExists: exists, resolveAliasImport });
@@ -819,7 +1022,13 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
       } else if (lang === 'go') {
         resolvedFile = resolveGoImport({ spec, fileByGoImportPath });
       } else if (lang === 'java') {
-        resolvedFile = resolveDottedImport({ spec, sourceFileExists: exists, ext: '.java' });
+        // Java imports can be "a.b.C" or "a.b.C.m" (static member). Prefer the full class path, then fall back.
+        const dotted = String(spec);
+        resolvedFile = resolveDottedImport({ spec: dotted, sourceFileExists: exists, ext: '.java' });
+        if (!resolvedFile && dotted.split('.').length > 1) {
+          const fileSpec = dotted.split('.').slice(0, -1).join('.');
+          resolvedFile = resolveDottedImport({ spec: fileSpec, sourceFileExists: exists, ext: '.java' });
+        }
       } else if (lang === 'csharp') {
         resolvedFile = resolveDottedImport({ spec, sourceFileExists: exists, ext: '.cs' });
       } else if (lang === 'kotlin') {
@@ -848,6 +1057,14 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
         yield { type: 'unresolved_import', data: { file_path: fp, sha, language: lang, import_spec: spec, resolved_file_path: resolvedFile, line } };
       }
 
+      // Build a local binding map for cross-file call resolution (best-effort, conservative).
+      if (resolvedFile && binding?.bindings?.length) {
+        for (const b of binding.bindings) {
+          if (!b?.local || !b?.imported) continue;
+          localToImport.set(b.local, { resolvedFile, importedName: b.imported, importSpec: spec });
+        }
+      }
+
       const pkgName = packageNameFromImport(spec);
       if (pkgName && containerUid) {
         const packageKey = `${lang}:${pkgName}`;
@@ -872,12 +1089,40 @@ export function createTreeSitterAstEngine({ repoRoot, sourceFileExists }) {
     }
 
     // Calls → Calls edges when resolvable to local symbol, otherwise omit (conservative).
+    function resolveCalleeToUid(callee) {
+      if (!callee) return null;
+      const raw = String(callee);
+      const parts = raw.split('.');
+      if (parts.length === 1) {
+        const local = declByName.get(raw) ?? localByName.get(raw) ?? null;
+        if (local) return local;
+        const imp = localToImport.get(raw) ?? null;
+        if (!imp) return null;
+        const targets = exportedByFile?.get?.(imp.resolvedFile) ?? null;
+        if (!targets) return null;
+        const key = imp.importedName === 'default' ? 'default' : imp.importedName;
+        return targets.get(key) ?? null;
+      }
+      const base = parts[0];
+      const member = parts[parts.length - 1];
+      const imp = localToImport.get(base) ?? null;
+      if (!imp || imp.importedName !== '*') return null;
+      if (lang === 'go') {
+        const pkg = goExportsByImportPath?.get?.(imp.importSpec) ?? null;
+        const uid = pkg?.get?.(member) ?? null;
+        if (uid) return uid;
+      }
+      const targets = exportedByFile?.get?.(imp.resolvedFile) ?? null;
+      if (!targets) return null;
+      return targets.get(member) ?? null;
+    }
+
     for (const n of walkNamed(parsed.root)) {
       const callee = extractCallee({ lang, text: parsed.text, node: n });
       if (!callee) continue;
       const line = nodeLine(n);
       const calleeName = String(callee).split('.').slice(-1)[0];
-      const targetUid = localByName.get(calleeName) ?? null;
+      const targetUid = resolveCalleeToUid(callee) ?? resolveCalleeToUid(calleeName) ?? null;
       const sourceUid = enclosingUid(n);
       if (!targetUid || !sourceUid) continue;
       const edge = makeEdge({ sourceUid, targetUid, edgeType: 'Calls', sha, metadata: { callee } });

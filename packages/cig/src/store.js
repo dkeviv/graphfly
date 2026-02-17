@@ -67,6 +67,82 @@ export class InMemoryGraphStore {
     this._occByRepo.get(repoKey).set(occKey, occurrence);
   }
 
+  deleteGraphForFilePaths({ tenantId, repoId, filePaths = [] } = {}) {
+    const repoKey = key({ tenantId, repoId });
+    const fps = new Set((Array.isArray(filePaths) ? filePaths : []).map((x) => String(x)).filter(Boolean));
+    if (fps.size === 0) return { ok: true, deleted: { nodes: 0, entrypoints: 0, manifests: 0, unresolved: 0 } };
+
+    let deletedNodes = 0;
+    const nodes = this._nodesByRepo.get(repoKey) ?? new Map();
+    const removedUids = new Set();
+    for (const [uid, node] of nodes.entries()) {
+      if (node?.file_path && fps.has(String(node.file_path))) {
+        nodes.delete(uid);
+        removedUids.add(uid);
+        deletedNodes++;
+      }
+    }
+    this._nodesByRepo.set(repoKey, nodes);
+
+    // Edges
+    const edges = this._edgesByRepo.get(repoKey) ?? new Map();
+    for (const [k, e] of edges.entries()) {
+      if (removedUids.has(e.source_symbol_uid) || removedUids.has(e.target_symbol_uid)) edges.delete(k);
+    }
+    this._edgesByRepo.set(repoKey, edges);
+
+    // Occurrences
+    const occ = this._occByRepo.get(repoKey) ?? new Map();
+    for (const [k, o] of occ.entries()) {
+      if (removedUids.has(o.source_symbol_uid) || removedUids.has(o.target_symbol_uid) || fps.has(String(o.file_path))) occ.delete(k);
+    }
+    this._occByRepo.set(repoKey, occ);
+
+    // Flow entrypoints
+    let deletedEntrypoints = 0;
+    const eps = this._flowEntrypointsByRepo.get(repoKey) ?? new Map();
+    for (const [k, ep] of eps.entries()) {
+      if (ep?.file_path && fps.has(String(ep.file_path))) {
+        eps.delete(k);
+        deletedEntrypoints++;
+      }
+    }
+    this._flowEntrypointsByRepo.set(repoKey, eps);
+
+    // Dependency manifests + declared deps that reference them (by manifest_key prefix)
+    let deletedManifests = 0;
+    const manifests = this._depManifestsByRepo.get(repoKey) ?? new Map();
+    const removedManifestKeys = new Set();
+    for (const [k, m] of manifests.entries()) {
+      if (m?.file_path && fps.has(String(m.file_path))) {
+        manifests.delete(k);
+        removedManifestKeys.add(k);
+        deletedManifests++;
+      }
+    }
+    this._depManifestsByRepo.set(repoKey, manifests);
+
+    const declared = this._declaredDepsByRepo.get(repoKey) ?? new Map();
+    for (const [k, d] of declared.entries()) {
+      const mk = String(d?.manifest_key ?? '');
+      if (removedManifestKeys.has(mk)) declared.delete(k);
+    }
+    this._declaredDepsByRepo.set(repoKey, declared);
+
+    // Unresolved imports
+    let deletedUnresolved = 0;
+    const unresolved = this._unresolvedImportsByRepo.get(repoKey) ?? new Map();
+    for (const [k, u] of unresolved.entries()) {
+      if (u?.file_path && fps.has(String(u.file_path))) {
+        unresolved.delete(k);
+        deletedUnresolved++;
+      }
+    }
+    this._unresolvedImportsByRepo.set(repoKey, unresolved);
+
+    return { ok: true, deleted: { nodes: deletedNodes, entrypoints: deletedEntrypoints, manifests: deletedManifests, unresolved: deletedUnresolved } };
+  }
+
   getNodeBySymbolUid({ tenantId, repoId, symbolUid }) {
     const repoKey = key({ tenantId, repoId });
     return this._nodesByRepo.get(repoKey)?.get(symbolUid) ?? null;

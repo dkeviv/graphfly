@@ -163,7 +163,9 @@ async function treesitterCheck() {
       { filePath: 'x.rb', language: 'ruby', text: 'def f; end\n' },
       { filePath: 'x.php', language: 'php', text: '<?php function f(){}' },
       { filePath: 'x.c', language: 'c', text: 'int f(){return 1;}\n' },
-      { filePath: 'x.cpp', language: 'cpp', text: 'int f(){return 1;}\n' }
+      { filePath: 'x.cpp', language: 'cpp', text: 'int f(){return 1;}\n' },
+      { filePath: 'x.swift', language: 'swift', text: 'func f() -> Int { return 1 }\n' },
+      { filePath: 'x.kt', language: 'kotlin', text: 'fun f(): Int { return 1 }\n' }
     ];
     for (const s of samples) {
       try {

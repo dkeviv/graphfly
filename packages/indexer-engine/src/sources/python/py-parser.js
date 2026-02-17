@@ -271,6 +271,115 @@ function makeExportedSymbolNode({ kind, name, params, filePath, line, sha, conta
   };
 }
 
+function parsePydanticModels(lines) {
+  const models = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] ?? '');
+    const m = line.match(/^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*:/);
+    if (!m) continue;
+    const name = m[1];
+    const bases = m[2];
+    if (!/\bBaseModel\b/.test(bases)) continue;
+    const classIndent = (line.match(/^\s*/) ?? [''])[0].length;
+
+    const fields = [];
+    const constraints = Object.create(null);
+    const allowableValues = Object.create(null);
+
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = String(lines[j] ?? '');
+      const indent = (l.match(/^\s*/) ?? [''])[0].length;
+      if (l.trim() === '') continue;
+      // Stop when we dedent to the class level or hit a new top-level decl.
+      if (indent <= classIndent && (l.trim().startsWith('class ') || l.trim().startsWith('def ') || !l.startsWith(' '))) break;
+      if (indent <= classIndent) break;
+
+      const fm = l.match(/^\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?\s*$/);
+      if (!fm) continue;
+      const field = fm[1];
+      const typeAnn = (fm[2] ?? '').trim();
+      const rhs = (fm[3] ?? '').trim();
+
+      fields.push({ name: field, type: typeAnn || null, optional: false, description: null });
+
+      // Allowable values: typing.Literal['a','b']
+      const lit = typeAnn.match(/\bLiteral\s*\[([^\]]+)\]/);
+      if (lit?.[1]) {
+        const values = [];
+        for (const part of lit[1].split(',')) {
+          const s = part.trim();
+          const mm = s.match(/^['"]([^'"]+)['"]$/);
+          if (mm?.[1]) values.push(mm[1]);
+        }
+        if (values.length > 0) allowableValues[field] = values;
+      }
+
+      // Constraints: Field(..., ge=0, le=120, regex='...')
+      if (rhs.includes('Field(')) {
+        const argStr = rhs.replace(/.*Field\s*\(/, '').replace(/\)\s*$/, '');
+        const c = {};
+        const re = /\b(ge|gt|le|lt|min_length|max_length|regex|pattern)\b\s*=\s*([^,\)]+)/g;
+        let mm = null;
+        while ((mm = re.exec(argStr))) {
+          const k = mm[1];
+          const vRaw = String(mm[2] ?? '').trim();
+          if (k === 'regex' || k === 'pattern') {
+            const qm = vRaw.match(/^['"]([^'"]+)['"]$/);
+            c.pattern = qm?.[1] ?? vRaw;
+          } else {
+            const n = Number(vRaw);
+            if (Number.isFinite(n)) {
+              if (k === 'ge' || k === 'gt' || k === 'min_length') c.min = n;
+              if (k === 'le' || k === 'lt' || k === 'max_length') c.max = n;
+            }
+          }
+        }
+        if (Object.keys(c).length > 0) constraints[field] = c;
+      }
+    }
+
+    models.push({
+      name,
+      line: i + 1,
+      fields,
+      constraints: Object.keys(constraints).length > 0 ? constraints : null,
+      allowable_values: Object.keys(allowableValues).length > 0 ? allowableValues : null
+    });
+  }
+  return models;
+}
+
+function makeSchemaNode({ name, fields, constraints, allowableValues, filePath, line, sha, containerUid = null }) {
+  const qualifiedName = `${filePath}::${name}`;
+  const signature = `schema ${name}`;
+  const signatureHash = computeSignatureHash({ signature });
+  const symbolUid = makeSymbolUid({ language: 'python', qualifiedName, signatureHash });
+  const embeddingText = `${qualifiedName} ${signature}`.trim();
+  return {
+    symbol_uid: symbolUid,
+    qualified_name: qualifiedName,
+    name,
+    node_type: 'Schema',
+    symbol_kind: 'schema',
+    container_uid: containerUid,
+    file_path: filePath,
+    line_start: line,
+    line_end: line,
+    language: 'python',
+    visibility: 'public',
+    signature,
+    signature_hash: signatureHash,
+    parameters: null,
+    contract: { kind: 'schema', name, fields: Array.isArray(fields) ? fields : [] },
+    constraints: constraints ?? null,
+    allowable_values: allowableValues ?? null,
+    embedding_text: embeddingText,
+    embedding: embedText384(embeddingText),
+    first_seen_sha: sha ?? 'mock',
+    last_seen_sha: sha ?? 'mock'
+  };
+}
+
 export function* parsePythonFile({ filePath, lines, sha, containerUid, exportedByFile, packageToUid, sourceFileExists = null }) {
   const sourceUid = containerUid ?? null;
   const text = Array.isArray(lines) ? lines.join('\n') : '';
@@ -318,6 +427,45 @@ export function* parsePythonFile({ filePath, lines, sha, containerUid, exportedB
   }
   if (!exportedByFile.has(filePath)) exportedByFile.set(filePath, new Map());
   for (const [k, v] of localByName.entries()) exportedByFile.get(filePath).set(k, v);
+
+  // Pydantic models: extract schema + constraints/allowables (public contract-only, no code bodies).
+  for (const m of parsePydanticModels(lines)) {
+    const schema = makeSchemaNode({
+      name: m.name,
+      fields: m.fields,
+      constraints: m.constraints,
+      allowableValues: m.allowable_values,
+      filePath,
+      line: m.line,
+      sha,
+      containerUid: sourceUid
+    });
+    yield { type: 'node', data: schema };
+    yield {
+      type: 'edge',
+      data: {
+        source_symbol_uid: sourceUid,
+        target_symbol_uid: schema.symbol_uid,
+        edge_type: 'Defines',
+        metadata: { kind: 'schema' },
+        first_seen_sha: sha,
+        last_seen_sha: sha
+      }
+    };
+    yield {
+      type: 'edge_occurrence',
+      data: {
+        source_symbol_uid: sourceUid,
+        target_symbol_uid: schema.symbol_uid,
+        edge_type: 'Defines',
+        file_path: filePath,
+        line_start: m.line,
+        line_end: m.line,
+        occurrence_kind: 'other',
+        sha
+      }
+    };
+  }
 
   for (const r of [...parseFastApiRoutes(lines), ...parseFlaskRoutes(lines), ...parseDjangoRoutes(lines)]) {
     const ep = makeApiEndpointNode({ method: r.method, routePath: r.path, filePath, line: r.line, sha, containerUid: sourceUid });

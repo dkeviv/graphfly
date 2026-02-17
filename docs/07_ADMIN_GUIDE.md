@@ -82,6 +82,7 @@ Recommended explicit store modes:
 ### 2.3 GitHub App auth (installation tokens)
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY` (PEM or base64 PEM)
+- `GITHUB_API_BASE_URL` (optional; for GitHub Enterprise) — default `https://api.github.com`
 
 ### 2.4 Webhooks
 - `GITHUB_WEBHOOK_SECRET` (HMAC verification)
@@ -118,9 +119,10 @@ Indexer performance/safety caps:
 
 ### 2.6B AST engine (recommended)
 Graphfly supports a pluggable AST engine for AST‑grade extraction. Configure:
-- `GRAPHFLY_AST_ENGINE=typescript` (default; **vendored in-repo** so it is always available)
+- `GRAPHFLY_AST_ENGINE=composite` (**prod default**) — TypeScript compiler for JS/TS/TSX + Tree-sitter for other languages
+- `GRAPHFLY_AST_ENGINE=typescript` (**dev default**) — vendored TypeScript compiler engine for JS/TS/TSX
 - `GRAPHFLY_AST_ENGINE=none` (explicit opt-out; reduces fidelity)
-- `GRAPHFLY_AST_ENGINE=tree-sitter` (future)
+- `GRAPHFLY_AST_ENGINE=treesitter` — Tree-sitter only (all supported languages via grammars)
 
 Operational constraint:
 - In `GRAPHFLY_MODE=prod`, if an AST engine is requested but unavailable, the index job **fails fast** (prevents silently indexing at lower fidelity).
@@ -159,7 +161,7 @@ Enable:
 - `GRAPHFLY_AST_ENGINE=treesitter`
 
 SaaS default (prod):
-- When `GRAPHFLY_MODE=prod` and `GRAPHFLY_AST_ENGINE` is unset, Graphfly defaults to `treesitter`.
+- When `GRAPHFLY_MODE=prod` and `GRAPHFLY_AST_ENGINE` is unset, Graphfly defaults to `composite` (TypeScript compiler + Tree-sitter).
 
 Recommended enforcement (prod):
 - `GRAPHFLY_AST_REQUIRED=1` (fails fast if Tree-sitter is unavailable; prevents silent downgrade)
@@ -170,7 +172,17 @@ Operational verification:
 
 Notes:
 - Tree-sitter requires native Node modules (`tree-sitter` plus language packages). Install dependencies in your deployment image so the engine is available.
+- In `GRAPHFLY_MODE=prod` (or when `GRAPHFLY_AST_REQUIRED=1`), Graphfly eagerly verifies that all configured grammar modules are installed and fails fast if any are missing.
 - If Tree-sitter is unavailable and `GRAPHFLY_AST_REQUIRED` is not set, Graphfly falls back to deterministic parsers and emits an `index_diagnostic`.
+
+### 2.6C.1 Removed files (prune graph state)
+
+GitHub push webhooks include a `removed` file list. Graphfly treats removed files as hard deletions and prunes any file-scoped graph state:
+- deletes `graph_nodes` where `file_path` matches a removed file (edges/occurrences cascade)
+- deletes `flow_entrypoints` and `dependency_manifests` with matching `file_path`
+- deletes `unresolved_imports` for the removed files
+
+This prevents stale symbols from surviving after deletions/renames.
 
 ### 2.6D Embeddings (semantic search)
 

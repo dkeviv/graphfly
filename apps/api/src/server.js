@@ -38,6 +38,7 @@ import { createCheckoutUrl, createPortalUrl } from './billing-sessions.js';
 import { createInstallationToken } from '../../../packages/github-app-auth/src/app-auth.js';
 import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-store.js';
 import { GitHubClient } from '../../../packages/github-client/src/client.js';
+import { enqueueInitialFullIndexOnRepoCreate } from './lib/initial-index.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
@@ -102,6 +103,7 @@ const oauthStates = new InMemoryOAuthStateStore();
 const realtimeHub = new InMemoryRealtimeHub();
 const realtime = { publish: (evt) => realtimeHub.publish(evt) };
 const webhookDedupe = await createWebhookDeliveryDedupeFromEnv();
+const githubApiBaseUrl = () => String(process.env.GITHUB_API_BASE_URL ?? 'https://api.github.com');
 
 function tenantIdFromStripeEvent(event) {
   const md = event?.data?.object?.metadata;
@@ -427,7 +429,7 @@ router.post('/api/v1/integrations/github/oauth/callback', async (req) => {
   const jwtSecret = process.env.GRAPHFLY_JWT_SECRET ?? '';
   if (!jwtSecret) return { status: 500, body: { error: 'server_misconfigured', missing: ['GRAPHFLY_JWT_SECRET'] } };
 
-  const gh = new GitHubClient({ token: out.token });
+  const gh = new GitHubClient({ token: out.token, apiBaseUrl: githubApiBaseUrl() });
   const user = await gh.getCurrentUser();
   const userId = user?.id != null ? `gh:${String(user.id)}` : null;
   if (!userId) return { status: 500, body: { error: 'oauth_user_lookup_failed' } };
@@ -449,7 +451,7 @@ router.get('/api/v1/integrations/github/repos', async (req) => {
   try {
     const token = await resolveGitHubReaderToken({ tenantId, org });
     if (token && org?.githubReaderInstallId) {
-      const gh = new GitHubClient({ token });
+      const gh = new GitHubClient({ token, apiBaseUrl: githubApiBaseUrl() });
       const list = await gh.listInstallationRepos();
       return { status: 200, body: { repos: list, source: 'reader_app' } };
     }
@@ -459,7 +461,7 @@ router.get('/api/v1/integrations/github/repos', async (req) => {
 
   const userToken = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
   if (!userToken) return { status: 401, body: { error: 'github_not_connected' } };
-  const gh = new GitHubClient({ token: userToken });
+  const gh = new GitHubClient({ token: userToken, apiBaseUrl: githubApiBaseUrl() });
   const list = await gh.listUserRepos();
   return { status: 200, body: { repos: list, source: 'user_token' } };
 });
@@ -624,7 +626,7 @@ router.post('/api/v1/orgs/docs-repo/verify', async (req) => {
   }
   const token = await resolveGitHubDocsToken({ tenantId, org });
   if (!token) return { status: 501, body: { error: 'docs_auth_not_configured' } };
-  const gh = new GitHubClient({ token });
+  const gh = new GitHubClient({ token, apiBaseUrl: githubApiBaseUrl() });
   try {
     const info = await gh.getRepo({ fullName: docsRepoFullName });
     await auditEvent({
@@ -663,33 +665,34 @@ router.post('/api/v1/repos', async (req) => {
     targetId: repo?.id ?? null,
     metadata: { fullName, githubRepoId }
   });
-  // Kick off an initial full index if GitHub is connected and we can resolve the clone URL + head sha.
+  // FR-CIG-01: Full index on connection (initial project creation).
+  // Production path: use the GitHub Reader App installation token (read-only).
+  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+  let indexJob = null;
   try {
-    const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
-    const docsRepo = org?.docsRepoFullName ?? docsRepoFullName;
-    const token = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
-    if (token) {
-      const gh = new GitHubClient({ token });
-      const info = await gh.getRepo({ fullName });
-      const sha = await gh.getBranchHeadSha({ fullName, branch: info.defaultBranch ?? defaultBranch });
-      const cloneAuth = { username: 'x-access-token', password: token };
-      indexQueue.add('index.run', {
-        tenantId,
-        repoId: repo.id,
-        repoRoot: process.env.SOURCE_REPO_ROOT ?? 'fixtures/sample-repo',
-        sha: sha ?? 'mock',
-        changedFiles: [],
-        removedFiles: [],
-        docsRepoFullName: docsRepo,
-        cloneSource: info.cloneUrl ?? null,
-        cloneAuth
-      });
-      await maybeDrainOnce();
+    indexJob = await enqueueInitialFullIndexOnRepoCreate({
+      tenantId,
+      repo,
+      org,
+      indexQueue,
+      defaultBranch,
+      docsRepoFullNameFallback: docsRepoFullName,
+      resolveGitHubReaderToken,
+      githubApiBaseUrl
+    });
+    await maybeDrainOnce();
+  } catch (e) {
+    const code = String(e?.code ?? '');
+    if (code === 'docs_repo_not_configured' || code === 'github_reader_app_not_configured') {
+      return { status: 400, body: { error: code } };
     }
-  } catch {
-    // best-effort; explicit indexing is out of scope for this endpoint.
+    if (code === 'github_head_sha_unavailable') {
+      return { status: 502, body: { error: code, ...(e?.metadata ?? null) } };
+    }
+    throw e;
   }
-  return { status: 200, body: { repo } };
+
+  return { status: 200, body: { repo, indexJob } };
 });
 
 router.delete('/api/v1/repos/:repoId', async (req) => {

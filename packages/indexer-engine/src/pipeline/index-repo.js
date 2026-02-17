@@ -179,6 +179,7 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
   const packageToUid = new Map(); // package_key -> symbol_uid
   let goModuleName = null;
   const fileByGoImportPath = new Map(); // import path -> representative file_path
+  const goExportsByImportPath = new Map(); // go import path -> Map(exported_name -> symbol_uid)
 
   function jsLikeLanguageForFile(filePath) {
     const p = String(filePath);
@@ -337,6 +338,52 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
     }
   }
 
+  // Go exports are package-scoped (spread across multiple files). Precompute an explicit package export map
+  // that is independent of file traversal order and AST availability.
+  if (goModuleName) {
+    const byImportPathAbs = new Map(); // importPath -> [{ abs, rel }]
+    for (const absFile of sourceFiles) {
+      const fileRel = rel(absRoot, absFile);
+      if (!fileRel.endsWith('.go')) continue;
+      const dir = path.posix.dirname(fileRel);
+      const importPath = dir === '.' ? goModuleName : `${goModuleName}/${dir}`;
+      const arr = byImportPathAbs.get(importPath) ?? [];
+      arr.push({ abs: absFile, rel: fileRel });
+      byImportPathAbs.set(importPath, arr);
+    }
+    for (const [importPath, entries] of byImportPathAbs.entries()) {
+      const byName = new Map();
+      for (const ent of entries) {
+        let text = '';
+        try {
+          text = fs.readFileSync(ent.abs, 'utf8');
+        } catch {
+          continue;
+        }
+        const lines = text.split('\n');
+        for (const line of lines) {
+          const fm = line.match(/^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+          if (fm && /^[A-Z]/.test(fm[1])) {
+            const name = fm[1];
+            const qualifiedName = `${ent.rel}::${name}`;
+            const signatureHash = computeSignatureHash({ signature: `func ${name}()` });
+            const uid = makeSymbolUid({ language: 'go', qualifiedName, signatureHash });
+            byName.set(name, uid);
+          }
+          const tm = line.match(/^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(struct|interface)\b/);
+          if (tm && /^[A-Z]/.test(tm[1])) {
+            const name = tm[1];
+            const qualifiedName = `${ent.rel}::${name}`;
+            const signatureHash = computeSignatureHash({ signature: `type ${name}` });
+            const uid = makeSymbolUid({ language: 'go', qualifiedName, signatureHash });
+            byName.set(name, uid);
+          }
+        }
+      }
+      if (byName.size > 0) goExportsByImportPath.set(importPath, byName);
+    }
+  }
+
   function emitParseError({ filePath, phase, err }) {
     return {
       type: 'index_diagnostic',
@@ -431,7 +478,8 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
                 sourceFileExists,
                 resolveAliasImport: resolveTsAliasImport,
                 goModuleName,
-                fileByGoImportPath
+                fileByGoImportPath,
+                goExportsByImportPath
               })) {
                 yield record;
               }
@@ -459,6 +507,7 @@ export async function* indexRepoRecords({ repoRoot, sha, changedFiles = [], remo
           packageToUid,
           goModuleName,
           fileByGoImportPath,
+          goExportsByImportPath,
           sourceFileExists
         })) {
           yield record;

@@ -193,48 +193,221 @@ function extractIdentifierParamName(ts, nameNode) {
   return null;
 }
 
-	function makeSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language, containerUid = null, visibility = 'internal' }) {
-	  const qualifiedName = `${filePath}::${name}`;
-	  const signature =
-	    kind === 'class'
-	      ? `class ${name}`
-	      : kind === 'method'
-	        ? `method ${name}(${params.join(', ')})`
-	        : `function ${name}(${params.join(', ')})`;
-	  const signatureHash = computeSignatureHash({ signature });
-	  const symbolUid = makeSymbolUid({ language, qualifiedName, signatureHash });
-	  const embeddingText = `${qualifiedName} ${signature} ${jsdoc?.description ?? ''}`.trim();
+function extractZodObjectSchemaFromInitializer(ts, initializer) {
+  if (!initializer || !ts.isCallExpression(initializer)) return null;
+  if (!ts.isPropertyAccessExpression(initializer.expression)) return null;
+  const base = initializer.expression.expression;
+  const member = initializer.expression.name?.text ?? null;
+  if (!base || !ts.isIdentifier(base) || base.text !== 'z') return null;
+  if (member !== 'object') return null;
+  const arg0 = initializer.arguments?.[0] ?? null;
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return null;
+
+  const fields = [];
+  const constraints = {};
+  const allowableValues = {};
+
+  function parseZodChain(expr) {
+    const out = { base: null, constraints: {}, allowable: null };
+    let cur = expr;
+    // Handle chained calls: z.string().min(1).max(2)
+    while (cur && ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+      const name = cur.expression.name?.text ?? null;
+      const args = cur.arguments ?? [];
+      const isConstraint = name === 'min' || name === 'max' || name === 'regex';
+      if (!isConstraint) break;
+      if (name === 'min' || name === 'max') {
+        const v = args[0];
+        const n = v && ts.isNumericLiteral(v) ? Number(v.text) : null;
+        if (Number.isFinite(n)) out.constraints[name] = n;
+      } else if (name === 'regex') {
+        const v = args[0];
+        if (v && ts.isRegularExpressionLiteral?.(v)) out.constraints.pattern = String(v.text);
+        if (v && ts.isStringLiteral(v)) out.constraints.pattern = String(v.text);
+      }
+      cur = cur.expression.expression;
+    }
+
+    // Handle base call: z.enum([...]) / z.string() / z.number()
+    if (cur && ts.isCallExpression(cur)) {
+      const callee = cur.expression;
+      if (ts.isPropertyAccessExpression(callee)) {
+        const b = callee.expression;
+        const m = callee.name?.text ?? null;
+        if (b && ts.isIdentifier(b) && b.text === 'z') out.base = m;
+      }
+      if (ts.isIdentifier(callee) && callee.text === 'z') out.base = 'z';
+
+      if (out.base === 'enum') {
+        const a0 = cur.arguments?.[0] ?? null;
+        if (a0 && ts.isArrayLiteralExpression(a0)) {
+          const values = [];
+          for (const el of a0.elements ?? []) {
+            if (ts.isStringLiteral(el)) values.push(el.text);
+          }
+          if (values.length > 0) out.allowable = values;
+        }
+      }
+    }
+    return out;
+  }
+
+  for (const prop of arg0.properties ?? []) {
+    if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment?.(prop)) continue;
+    const key =
+      ts.isIdentifier(prop.name) ? prop.name.text : ts.isStringLiteral(prop.name) ? prop.name.text : null;
+    if (!key) continue;
+    const init = ts.isPropertyAssignment(prop) ? prop.initializer : prop.name;
+    const parsed = parseZodChain(init);
+    const type = parsed.base ? `z.${parsed.base}` : null;
+    fields.push({ name: key, type, optional: false, description: null });
+    if (parsed.allowable && parsed.allowable.length > 0) allowableValues[key] = parsed.allowable;
+    if (parsed.constraints && Object.keys(parsed.constraints).length > 0) constraints[key] = parsed.constraints;
+  }
+
+  return {
+    fields,
+    constraints: Object.keys(constraints).length > 0 ? constraints : null,
+    allowable_values: Object.keys(allowableValues).length > 0 ? allowableValues : null
+  };
+}
+
+function extractJoiObjectSchemaFromInitializer(ts, initializer) {
+  if (!initializer || !ts.isCallExpression(initializer)) return null;
+  if (!ts.isPropertyAccessExpression(initializer.expression)) return null;
+  const base = initializer.expression.expression;
+  const member = initializer.expression.name?.text ?? null;
+  if (!base || !ts.isIdentifier(base) || base.text !== 'Joi') return null;
+  if (member !== 'object') return null;
+  const arg0 = initializer.arguments?.[0] ?? null;
+  if (!arg0 || !ts.isObjectLiteralExpression(arg0)) return null;
+
+  const fields = [];
+  const constraints = {};
+  const allowableValues = {};
+
+  function parseJoiChain(expr) {
+    const out = { base: null, constraints: {}, allowable: null };
+    let cur = expr;
+    // Walk chained calls: Joi.string().valid('a').min(1).max(2)
+    while (cur && ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+      const name = cur.expression.name?.text ?? null;
+      const args = cur.arguments ?? [];
+      const isConstraint = name === 'min' || name === 'max' || name === 'regex' || name === 'pattern' || name === 'valid';
+      if (!isConstraint) break;
+
+      if (name === 'min' || name === 'max') {
+        const v = args[0];
+        const n = v && ts.isNumericLiteral(v) ? Number(v.text) : null;
+        if (Number.isFinite(n)) out.constraints[name] = n;
+      } else if (name === 'regex' || name === 'pattern') {
+        const v = args[0];
+        if (v && ts.isRegularExpressionLiteral?.(v)) out.constraints.pattern = String(v.text);
+        if (v && ts.isStringLiteral(v)) out.constraints.pattern = String(v.text);
+      } else if (name === 'valid') {
+        const values = [];
+        for (const a of args) {
+          if (ts.isStringLiteral(a)) values.push(a.text);
+          if (ts.isNumericLiteral(a)) values.push(Number(a.text));
+        }
+        if (values.length > 0) out.allowable = values;
+      }
+
+      cur = cur.expression.expression;
+    }
+
+    // Base call: Joi.string() / Joi.number() / Joi.boolean()
+    if (cur && ts.isCallExpression(cur)) {
+      const callee = cur.expression;
+      if (ts.isPropertyAccessExpression(callee)) {
+        const b = callee.expression;
+        const m = callee.name?.text ?? null;
+        if (b && ts.isIdentifier(b) && b.text === 'Joi') out.base = m;
+      }
+    }
+
+    return out;
+  }
+
+  for (const prop of arg0.properties ?? []) {
+    if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment?.(prop)) continue;
+    const key = ts.isIdentifier(prop.name) ? prop.name.text : ts.isStringLiteral(prop.name) ? prop.name.text : null;
+    if (!key) continue;
+    const init = ts.isPropertyAssignment(prop) ? prop.initializer : prop.name;
+    const parsed = parseJoiChain(init);
+    const type = parsed.base ? `joi.${parsed.base}` : null;
+    fields.push({ name: key, type, optional: false, description: null });
+    if (parsed.allowable && parsed.allowable.length > 0) allowableValues[key] = parsed.allowable;
+    if (parsed.constraints && Object.keys(parsed.constraints).length > 0) constraints[key] = parsed.constraints;
+  }
+
+  return {
+    fields,
+    constraints: Object.keys(constraints).length > 0 ? constraints : null,
+    allowable_values: Object.keys(allowableValues).length > 0 ? allowableValues : null
+  };
+}
+
+		function makeSymbolNode({ kind, name, params, jsdoc, filePath, line, sha, language, containerUid = null, visibility = 'internal', schema = null }) {
+		  const qualifiedName = `${filePath}::${name}`;
+		  const signature =
+		    kind === 'class'
+		      ? `class ${name}`
+		      : kind === 'method'
+		        ? `method ${name}(${params.join(', ')})`
+		        : kind === 'variable'
+		          ? `var ${name}`
+		          : kind === 'schema'
+		            ? `schema ${name}`
+		            : `function ${name}(${params.join(', ')})`;
+		  const signatureHash = computeSignatureHash({ signature });
+		  const symbolUid = makeSymbolUid({ language, qualifiedName, signatureHash });
+		  const embeddingText = `${qualifiedName} ${signature} ${jsdoc?.description ?? ''}`.trim();
 
   const parameters = params.map((p) => {
     const info = jsdoc?.params?.get?.(p) ?? null;
     return { name: p, type: info?.type ?? null, optional: Boolean(info?.optional) || undefined, description: info?.description ?? null };
   });
 
-	  const contract =
-	    kind === 'class'
-	      ? { kind: 'class', name, constructor: { parameters } }
-	      : {
-	          kind: kind === 'method' ? 'method' : 'function',
-	          name,
-	          parameters,
-	          returns: jsdoc?.returnsType ? { type: jsdoc.returnsType } : null,
-	          description: jsdoc?.description ?? null
-	        };
+		  const contract =
+		    kind === 'class'
+		      ? { kind: 'class', name, constructor: { parameters } }
+		      : kind === 'variable'
+		        ? { kind: 'variable', name, type: null, description: jsdoc?.description ?? null }
+		        : kind === 'schema'
+		          ? { kind: 'schema', name, fields: schema?.fields ?? [] }
+		          : {
+		              kind: kind === 'method' ? 'method' : 'function',
+		              name,
+		              parameters,
+		              returns: jsdoc?.returnsType ? { type: jsdoc.returnsType } : null,
+		              description: jsdoc?.description ?? null
+		            };
 
-  const constraints = jsdoc?.constraints && Object.keys(jsdoc.constraints).length > 0 ? jsdoc.constraints : null;
-  const allowableValues = jsdoc?.allowableValues && Object.keys(jsdoc.allowableValues).length > 0 ? jsdoc.allowableValues : null;
+	  const constraints =
+	    kind === 'schema'
+	      ? (schema?.constraints ?? null)
+	      : jsdoc?.constraints && Object.keys(jsdoc.constraints).length > 0
+	        ? jsdoc.constraints
+	        : null;
+	  const allowableValues =
+	    kind === 'schema'
+	      ? (schema?.allowable_values ?? null)
+	      : jsdoc?.allowableValues && Object.keys(jsdoc.allowableValues).length > 0
+	        ? jsdoc.allowableValues
+	        : null;
 
-	  return {
-	    symbol_uid: symbolUid,
-	    qualified_name: qualifiedName,
-	    name,
-	    node_type: kind === 'class' ? 'Class' : 'Function',
-	    symbol_kind: kind === 'class' ? 'class' : kind === 'method' ? 'method' : 'function',
-	    container_uid: containerUid,
-	    file_path: filePath,
-	    line_start: line,
-	    line_end: line,
-	    language,
+		  return {
+		    symbol_uid: symbolUid,
+		    qualified_name: qualifiedName,
+		    name,
+		    node_type: kind === 'class' ? 'Class' : kind === 'schema' ? 'Schema' : kind === 'variable' ? 'Variable' : 'Function',
+		    symbol_kind: kind === 'class' ? 'class' : kind === 'schema' ? 'schema' : kind === 'variable' ? 'variable' : kind === 'method' ? 'method' : 'function',
+		    container_uid: containerUid,
+		    file_path: filePath,
+		    line_start: line,
+		    line_end: line,
+		    language,
 	    visibility,
 	    signature,
 	    signature_hash: signatureHash,
@@ -249,17 +422,21 @@ function extractIdentifierParamName(ts, nameNode) {
 	  };
 	}
 
-	function uidForDecl({ kind, name, params, filePath, language }) {
-	  const qualifiedName = `${filePath}::${name}`;
-	  const signature =
-	    kind === 'class'
-	      ? `class ${name}`
-	      : kind === 'method'
-	        ? `method ${name}(${(params ?? []).join(', ')})`
-	        : `function ${name}(${(params ?? []).join(', ')})`;
-	  const signatureHash = computeSignatureHash({ signature });
-	  return makeSymbolUid({ language, qualifiedName, signatureHash });
-	}
+		function uidForDecl({ kind, name, params, filePath, language }) {
+		  const qualifiedName = `${filePath}::${name}`;
+		  const signature =
+		    kind === 'class'
+		      ? `class ${name}`
+		      : kind === 'method'
+		        ? `method ${name}(${(params ?? []).join(', ')})`
+		        : kind === 'variable'
+		          ? `var ${name}`
+		          : kind === 'schema'
+		            ? `schema ${name}`
+		            : `function ${name}(${(params ?? []).join(', ')})`;
+		  const signatureHash = computeSignatureHash({ signature });
+		  return makeSymbolUid({ language, qualifiedName, signatureHash });
+		}
 
 function hasExportModifier(ts, node) {
   const mods = node?.modifiers;
@@ -326,10 +503,10 @@ function extractImportsFromAst(ts, sf) {
   return out;
 }
 
-	function extractExportedDeclsFromAst(ts, sf) {
-	  const decls = [];
-	  for (const st of sf.statements ?? []) {
-    if (ts.isFunctionDeclaration(st) && st.name?.text && hasExportModifier(ts, st)) {
+		function extractExportedDeclsFromAst(ts, sf) {
+		  const decls = [];
+		  for (const st of sf.statements ?? []) {
+	    if (ts.isFunctionDeclaration(st) && st.name?.text && hasExportModifier(ts, st)) {
       const params = (st.parameters ?? [])
         .map((p) => extractIdentifierParamName(ts, p.name))
         .filter((x) => Boolean(x));
@@ -348,28 +525,43 @@ function extractImportsFromAst(ts, sf) {
         line: posToLine(sf, st.getStart(sf)),
         isDefault: hasDefaultModifier(ts, st)
       });
-    } else if (ts.isVariableStatement(st) && hasExportModifier(ts, st)) {
-      for (const d of st.declarationList?.declarations ?? []) {
-        const name = d.name && ts.isIdentifier(d.name) ? d.name.text : null;
-        if (!name) continue;
-        const init = d.initializer ?? null;
-        const isFn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
-        if (!isFn) continue;
-        const params = (init.parameters ?? [])
-          .map((p) => extractIdentifierParamName(ts, p.name))
-          .filter((x) => Boolean(x));
-        decls.push({
-          kind: 'function',
-          name,
-          params,
-          line: posToLine(sf, d.getStart(sf)),
-          isDefault: false
-        });
-      }
-    }
-  }
-	  return decls;
-	}
+	    } else if (ts.isVariableStatement(st) && hasExportModifier(ts, st)) {
+	      for (const d of st.declarationList?.declarations ?? []) {
+	        const name = d.name && ts.isIdentifier(d.name) ? d.name.text : null;
+	        if (!name) continue;
+	        const init = d.initializer ?? null;
+	        const isFn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
+	        if (isFn) {
+	          const params = (init.parameters ?? [])
+	            .map((p) => extractIdentifierParamName(ts, p.name))
+	            .filter((x) => Boolean(x));
+	          decls.push({
+	            kind: 'function',
+	            name,
+	            params,
+	            line: posToLine(sf, d.getStart(sf)),
+	            isDefault: false
+	          });
+	          continue;
+	        }
+	
+	        const schema = extractZodObjectSchemaFromInitializer(ts, init);
+	        if (schema) {
+	          decls.push({ kind: 'schema', name, params: [], line: posToLine(sf, d.getStart(sf)), isDefault: false, schema });
+	          continue;
+	        }
+	        const joiSchema = extractJoiObjectSchemaFromInitializer(ts, init);
+	        if (joiSchema) {
+	          decls.push({ kind: 'schema', name, params: [], line: posToLine(sf, d.getStart(sf)), isDefault: false, schema: joiSchema });
+	          continue;
+	        }
+	
+	        decls.push({ kind: 'variable', name, params: [], line: posToLine(sf, d.getStart(sf)), isDefault: false });
+	      }
+	    }
+	  }
+		  return decls;
+		}
 
 	function isPrivateLike(ts, node) {
 	  const mods = node?.modifiers;
@@ -377,10 +569,10 @@ function extractImportsFromAst(ts, sf) {
 	  return mods.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword || m.kind === ts.SyntaxKind.ProtectedKeyword);
 	}
 
-	function extractTopLevelDeclsAndMethodsFromAst(ts, sf) {
-	  const decls = [];
+		function extractTopLevelDeclsAndMethodsFromAst(ts, sf) {
+		  const decls = [];
 
-	  for (const st of sf.statements ?? []) {
+		  for (const st of sf.statements ?? []) {
 	    if (ts.isFunctionDeclaration(st) && st.name?.text) {
 	      const params = (st.parameters ?? [])
 	        .map((p) => extractIdentifierParamName(ts, p.name))
@@ -433,31 +625,72 @@ function extractImportsFromAst(ts, sf) {
 	      continue;
 	    }
 
-	    if (ts.isVariableStatement(st)) {
-	      const exported = hasExportModifier(ts, st);
-	      for (const d of st.declarationList?.declarations ?? []) {
-	        const name = d.name && ts.isIdentifier(d.name) ? d.name.text : null;
-	        if (!name) continue;
-	        const init = d.initializer ?? null;
-	        const isFn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
-	        if (!isFn) continue;
-	        const params = (init.parameters ?? [])
-	          .map((p) => extractIdentifierParamName(ts, p.name))
-	          .filter((x) => Boolean(x));
-	        decls.push({
-	          kind: 'function',
-	          name,
-	          params,
-	          line: posToLine(sf, d.getStart(sf)),
-	          isExported: exported,
-	          isDefault: false,
-	          visibility: exported ? 'public' : 'internal'
-	        });
-	      }
-	    }
-	  }
-	  return decls;
-	}
+		    if (ts.isVariableStatement(st)) {
+		      const exported = hasExportModifier(ts, st);
+		      for (const d of st.declarationList?.declarations ?? []) {
+		        const name = d.name && ts.isIdentifier(d.name) ? d.name.text : null;
+		        if (!name) continue;
+		        const init = d.initializer ?? null;
+		        const isFn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
+		        if (isFn) {
+		          const params = (init.parameters ?? [])
+		            .map((p) => extractIdentifierParamName(ts, p.name))
+		            .filter((x) => Boolean(x));
+		          decls.push({
+		            kind: 'function',
+		            name,
+		            params,
+		            line: posToLine(sf, d.getStart(sf)),
+		            isExported: exported,
+		            isDefault: false,
+		            visibility: exported ? 'public' : 'internal'
+		          });
+		          continue;
+		        }
+
+		        const schema = extractZodObjectSchemaFromInitializer(ts, init);
+		        if (schema) {
+		          decls.push({
+		            kind: 'schema',
+		            name,
+		            params: [],
+		            line: posToLine(sf, d.getStart(sf)),
+		            isExported: exported,
+		            isDefault: false,
+		            visibility: exported ? 'public' : 'internal',
+		            schema
+		          });
+		          continue;
+		        }
+		        const joiSchema = extractJoiObjectSchemaFromInitializer(ts, init);
+		        if (joiSchema) {
+		          decls.push({
+		            kind: 'schema',
+		            name,
+		            params: [],
+		            line: posToLine(sf, d.getStart(sf)),
+		            isExported: exported,
+		            isDefault: false,
+		            visibility: exported ? 'public' : 'internal',
+		            schema: joiSchema
+		          });
+		          continue;
+		        }
+
+		        decls.push({
+		          kind: 'variable',
+		          name,
+		          params: [],
+		          line: posToLine(sf, d.getStart(sf)),
+		          isExported: exported,
+		          isDefault: false,
+		          visibility: exported ? 'public' : 'internal'
+		        });
+		      }
+		    }
+		  }
+		  return decls;
+		}
 
 function parseExpressRoutes(lines) {
   const routes = [];
@@ -629,18 +862,19 @@ export function createTypeScriptAstEngine({ sourceFileExists } = {}) {
 	              ? classUidByName.get(d.className) ?? sourceUid
 	              : sourceUid;
 	          const nodeName = d.kind === 'method' ? d.methodName : d.name;
-	          const node = makeSymbolNode({
-	            kind: d.kind,
-	            name: nodeName,
-	            params: d.params ?? [],
-	            jsdoc,
-	            filePath,
-	            line: d.line,
-	            sha,
-	            language,
-	            containerUid: container,
-	            visibility: d.visibility ?? (d.isExported ? 'public' : 'internal')
-	          });
+		          const node = makeSymbolNode({
+		            kind: d.kind,
+		            name: nodeName,
+		            params: d.params ?? [],
+		            jsdoc,
+		            filePath,
+		            line: d.line,
+		            sha,
+		            language,
+		            containerUid: container,
+		            visibility: d.visibility ?? (d.isExported ? 'public' : 'internal'),
+		            schema: d.schema ?? null
+		          });
 	          localByName.set(d.name, node.symbol_uid);
 	          if (d.kind === 'class') classUidByName.set(d.name, node.symbol_uid);
 	          if (d.kind === 'method') {
