@@ -20,6 +20,10 @@ export class PgQueue {
     this._q = String(queueName);
   }
 
+  _clampLockMs(lockMs) {
+    return Number.isFinite(lockMs) ? Math.max(5000, Math.min(10 * 60 * 1000, Math.trunc(lockMs))) : 60000;
+  }
+
   async add(jobName, payload, { runAt = null, maxAttempts = 5 } = {}) {
     const tenantId = payload?.tenantId ?? payload?.tenant_id ?? null;
     assertUuid(tenantId, 'payload.tenantId');
@@ -38,16 +42,34 @@ export class PgQueue {
   async lease({ tenantId, limit = 1, lockMs = 60000 } = {}) {
     assertUuid(tenantId, 'tenantId');
     const n = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 1;
-    const lm = Number.isFinite(lockMs) ? Math.max(5000, Math.min(10 * 60 * 1000, Math.trunc(lockMs))) : 60000;
+    const lm = this._clampLockMs(lockMs);
     const lockToken = crypto.randomUUID();
     const res = await this._c.query(
-      `WITH picked AS (
+      `WITH expired_dead AS (
+         UPDATE jobs
+         SET status='dead',
+             locked_at=NULL,
+             lock_expires_at=NULL,
+             lock_token=NULL,
+             updated_at=now(),
+             last_error=COALESCE(last_error, 'lock_expired_active')
+         WHERE tenant_id=$1
+           AND queue_name=$2
+           AND status='active'
+           AND (lock_expires_at IS NULL OR lock_expires_at <= now())
+           AND attempts >= max_attempts
+         RETURNING id
+       ),
+       picked AS (
          SELECT id
          FROM jobs
          WHERE tenant_id=$1
            AND queue_name=$2
-           AND status='queued'
-           AND run_at <= now()
+           AND attempts < max_attempts
+           AND (
+             (status='queued' AND run_at <= now())
+             OR (status='active' AND (lock_expires_at IS NULL OR lock_expires_at <= now()))
+           )
          ORDER BY created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT $3
@@ -73,15 +95,32 @@ export class PgQueue {
   // The worker is expected to set tenant context per job when calling stores (withTenantClient).
   async leaseAny({ limit = 1, lockMs = 60000 } = {}) {
     const n = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 1;
-    const lm = Number.isFinite(lockMs) ? Math.max(5000, Math.min(10 * 60 * 1000, Math.trunc(lockMs))) : 60000;
+    const lm = this._clampLockMs(lockMs);
     const lockToken = crypto.randomUUID();
     const res = await this._c.query(
-      `WITH picked AS (
+      `WITH expired_dead AS (
+         UPDATE jobs
+         SET status='dead',
+             locked_at=NULL,
+             lock_expires_at=NULL,
+             lock_token=NULL,
+             updated_at=now(),
+             last_error=COALESCE(last_error, 'lock_expired_active')
+         WHERE queue_name=$1
+           AND status='active'
+           AND (lock_expires_at IS NULL OR lock_expires_at <= now())
+           AND attempts >= max_attempts
+         RETURNING id
+       ),
+       picked AS (
          SELECT id
          FROM jobs
          WHERE queue_name=$1
-           AND status='queued'
-           AND run_at <= now()
+           AND attempts < max_attempts
+           AND (
+             (status='queued' AND run_at <= now())
+             OR (status='active' AND (lock_expires_at IS NULL OR lock_expires_at <= now()))
+           )
          ORDER BY created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT $2
@@ -100,6 +139,21 @@ export class PgQueue {
     );
     const rows = res.rows ?? [];
     return rows.map((r) => ({ id: r.id, tenantId: r.tenant_id, name: r.job_name, payload: r.payload, lockToken }));
+  }
+
+  async renew({ tenantId, jobId, lockToken, lockMs = 60000 } = {}) {
+    assertUuid(tenantId, 'tenantId');
+    assertUuid(jobId, 'jobId');
+    const lm = this._clampLockMs(lockMs);
+    const res = await this._c.query(
+      `UPDATE jobs
+       SET locked_at=now(),
+           lock_expires_at=now() + ($4::int * interval '1 millisecond'),
+           updated_at=now()
+       WHERE tenant_id=$1 AND id=$2 AND lock_token=$3 AND status='active'`,
+      [tenantId, jobId, String(lockToken ?? ''), lm]
+    );
+    return { ok: true, updated: (res.rowCount ?? 0) > 0 };
   }
 
   async complete({ tenantId, jobId, lockToken } = {}) {

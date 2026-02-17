@@ -2,9 +2,38 @@ import { runOpenClawToolLoop } from '../../../packages/openclaw-client/src/openr
 import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/validate.js';
 import { renderContractDocBlock } from './doc-block-render.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
+import { redactSecrets } from '../../../packages/security/src/redact.js';
+import { hashString } from '../../../packages/cig/src/types.js';
 
 function slugify(key) {
   return String(key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '');
+}
+
+function safeDocPathFromFilePath(filePath) {
+  const raw = String(filePath ?? '')
+    .replaceAll('\\', '/')
+    .replace(/^\/+/, '')
+    .trim();
+  if (!raw) return null;
+  const segments = raw.split('/').filter(Boolean);
+  const safe = [];
+  for (const seg of segments) {
+    if (seg === '.' || seg === '..') continue;
+    const normalized = seg
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9._-]+/g, '-')
+      .replaceAll(/^-+|-+$/g, '');
+    if (!normalized || normalized === '.' || normalized === '..') continue;
+    safe.push(normalized);
+  }
+  return safe.length ? safe.join('/') : null;
+}
+
+function docFileForContractNode({ blockType, qualifiedName, symbolUid, filePath }) {
+  const slug = slugify(qualifiedName ?? symbolUid ?? 'unknown');
+  const fp = safeDocPathFromFilePath(filePath);
+  if (fp) return `contracts/${blockType}/${fp}/${slug}.md`;
+  return `contracts/${blockType}/${slug}.md`;
 }
 
 function filterEntrypoints(entrypoints, allowedKeys) {
@@ -25,7 +54,15 @@ function blockTypeFromNodeType(nodeType) {
   if (t === 'apiendpoint') return 'api_endpoint';
   if (t === 'module' || t === 'file') return 'module';
   if (t === 'package') return 'package';
+  if (t === 'schema') return 'schema';
   return 'overview';
+}
+
+function safeString(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  return redactSecrets(s);
 }
 
 function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha, entrypointKeys, symbolUids }) {
@@ -158,7 +195,7 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
         const qualifiedName = contractPayload.qualifiedName ?? symbolUid;
         const nodeType = contractPayload.nodeType ?? null;
         const blockType = blockTypeFromNodeType(nodeType);
-        const docFile = `contracts/${blockType}/${slugify(qualifiedName)}.md`;
+        const docFile = docFileForContractNode({ blockType, qualifiedName, symbolUid, filePath: contractPayload?.location?.filePath ?? null });
         const blockAnchor = `## ${qualifiedName}`;
         const evidence = [
           {
@@ -242,6 +279,9 @@ export async function runDocPrWithOpenClaw({
   if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) throw new Error('docsRepoFullName is required');
 
   let prResult = null;
+  const stats = { blocksCreated: 0, blocksUpdated: 0, blocksUnchanged: 0, blocksLocked: 0 };
+  const triggeringSymbolUids = new Set();
+  const changedFilesByPath = new Map(); // docFile -> content
 
   const tools = [
     {
@@ -252,6 +292,45 @@ export async function runDocPrWithOpenClaw({
         const eps = await store.listFlowEntrypoints({ tenantId, repoId });
         const allowed = entrypointKeys ? new Set(entrypointKeys) : null;
         return filterEntrypoints(eps, allowed);
+      }
+    },
+    {
+      name: 'docs_blocks_list',
+      description: 'Lists doc blocks for this repo (for surgical updates and coverage).',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { status: { type: ['string', 'null'] } },
+        required: []
+      },
+      handler: async ({ status = null } = {}) => {
+        const blocks = await docStore.listBlocks({ tenantId, repoId, status });
+        return (Array.isArray(blocks) ? blocks : []).map((b) => ({
+          id: b.id ?? null,
+          doc_file: b.doc_file ?? b.docFile ?? null,
+          block_anchor: b.block_anchor ?? b.blockAnchor ?? null,
+          block_type: b.block_type ?? b.blockType ?? null,
+          status: b.status ?? null,
+          content_hash: b.content_hash ?? b.contentHash ?? null,
+          updated_at: b.updated_at ?? b.updatedAt ?? null
+        }));
+      }
+    },
+    {
+      name: 'docs_block_get',
+      description: 'Fetches a doc block content and all evidence links.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          blockId: { type: 'string' }
+        },
+        required: ['blockId']
+      },
+      handler: async ({ blockId }) => {
+        const block = await docStore.getBlock({ tenantId, repoId, blockId });
+        const evidence = await docStore.getEvidence({ tenantId, repoId, blockId });
+        return { block, evidence };
       }
     },
     {
@@ -268,12 +347,15 @@ export async function runDocPrWithOpenClaw({
       handler: async ({ nodeTypes = null } = {}) => {
         const allowTypes = Array.isArray(nodeTypes) && nodeTypes.length > 0 ? new Set(nodeTypes) : null;
         const nodes = await store.listNodes({ tenantId, repoId });
-        const docTypes = new Set(['ApiEndpoint', 'Function', 'Class', 'Package', 'Module', 'File']);
+        const docTypes = new Set(['Function', 'Class', 'Package', 'Module', 'File', 'Schema']);
         const filtered = nodes.filter((n) => {
-          if (n?.visibility !== 'public') return false;
           const t = String(n?.node_type ?? '');
           if (allowTypes && !allowTypes.has(t)) return false;
-          return docTypes.has(t);
+          if (!docTypes.has(t)) return false;
+          // Requirements: document all modules; exported functions/classes are visibility=public.
+          // HTTP routes are covered by flow entrypoints (flows/), not contract docs (contracts/).
+          if (t === 'Module' || t === 'File' || t === 'Package' || t === 'Schema') return true;
+          return n?.visibility === 'public';
         });
         const allowed = symbolUids ? new Set(symbolUids) : null;
         const out = filterPublicNodes(filtered, allowed);
@@ -281,9 +363,58 @@ export async function runDocPrWithOpenClaw({
           symbol_uid: n.symbol_uid,
           qualified_name: n.qualified_name ?? null,
           node_type: n.node_type ?? null,
+          signature: n.signature ?? null,
           file_path: n.file_path ?? null,
           line_start: n.line_start ?? null,
           line_end: n.line_end ?? null
+        }));
+      }
+    },
+    {
+      name: 'undocumented_public_nodes_list',
+      description: 'Lists public nodes that have no doc block evidence (new-node doc generation).',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          nodeTypes: { type: 'array', items: { type: 'string' } },
+          limit: { type: 'integer', minimum: 1, maximum: 5000 }
+        },
+        required: []
+      },
+      handler: async ({ nodeTypes = null, limit = 500 } = {}) => {
+        const blocks = await docStore.listBlocks({ tenantId, repoId });
+        const documented = new Set();
+        for (const b of blocks ?? []) {
+          const ev = await docStore.getEvidence({ tenantId, repoId, blockId: b.id ?? b.blockId ?? b.block_id });
+          for (const e of ev ?? []) {
+            const uid = e?.symbol_uid ?? e?.symbolUid ?? null;
+            if (typeof uid === 'string' && uid.length > 0) documented.add(uid);
+          }
+        }
+
+        const allowTypes = Array.isArray(nodeTypes) && nodeTypes.length > 0 ? new Set(nodeTypes) : null;
+        const nodes = await store.listNodes({ tenantId, repoId });
+        const docTypes = new Set(['Function', 'Class', 'Package', 'Module', 'File', 'Schema']);
+        const filtered = nodes
+          .filter((n) => docTypes.has(String(n?.node_type ?? '')))
+          .filter((n) => {
+            const t = String(n?.node_type ?? '');
+            if (t === 'Module' || t === 'File' || t === 'Package' || t === 'Schema') return true;
+            return n?.visibility === 'public';
+          })
+          .filter((n) => (allowTypes ? allowTypes.has(String(n?.node_type ?? '')) : true))
+          .filter((n) => !documented.has(n.symbol_uid));
+
+        const n = Number.isFinite(limit) ? Math.max(1, Math.min(5000, Math.trunc(limit))) : 500;
+        return filtered.slice(0, n).map((x) => ({
+          symbol_uid: x.symbol_uid,
+          qualified_name: x.qualified_name ?? null,
+          node_type: x.node_type ?? null,
+          signature: x.signature ?? null,
+          file_path: x.file_path ?? null,
+          line_start: x.line_start ?? null,
+          line_end: x.line_end ?? null
         }));
       }
     },
@@ -306,6 +437,9 @@ export async function runDocPrWithOpenClaw({
           symbolKind: n.symbol_kind ?? null,
           visibility: n.visibility ?? null,
           signature: n.signature ?? null,
+          parameters: n.parameters ?? null,
+          returnType: n.return_type ?? null,
+          docstring: safeString(n.docstring ?? null),
           contract: n.contract ?? null,
           constraints: n.constraints ?? null,
           allowableValues: n.allowable_values ?? null,
@@ -326,7 +460,29 @@ export async function runDocPrWithOpenClaw({
         required: ['startSymbolUid']
       },
       handler: async ({ startSymbolUid, depth = 3 }) => {
-        return traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
+        const out = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
+        return {
+          startSymbolUid: out.startSymbolUid,
+          depth: out.depth,
+          nodes: (out.nodes ?? []).map((n) => ({
+            symbol_uid: n.symbol_uid,
+            qualified_name: n.qualified_name ?? null,
+            node_type: n.node_type ?? null,
+            visibility: n.visibility ?? null,
+            signature: n.signature ?? null,
+            contract: n.contract ?? null,
+            constraints: n.constraints ?? null,
+            allowable_values: n.allowable_values ?? null,
+            file_path: n.file_path ?? null,
+            line_start: n.line_start ?? null,
+            line_end: n.line_end ?? null
+          })),
+          edges: (out.edges ?? []).map((e) => ({
+            source_symbol_uid: e.source_symbol_uid,
+            edge_type: e.edge_type,
+            target_symbol_uid: e.target_symbol_uid
+          }))
+        };
       }
     },
     {
@@ -359,20 +515,42 @@ export async function runDocPrWithOpenClaw({
         required: ['docFile', 'blockAnchor', 'blockType', 'content']
       },
       handler: async ({ docFile, blockAnchor, blockType, content, evidence = [] }) => {
-        const v = validateDocBlockMarkdown(content);
+        const contentText = String(content ?? '');
+        const v = validateDocBlockMarkdown(contentText);
         if (!v.ok) throw new Error(`doc_block_invalid:${v.reason}`);
+
+        const existing =
+          typeof docStore.getBlockByKey === 'function'
+            ? await docStore.getBlockByKey({ tenantId, repoId, docFile, blockAnchor })
+            : null;
+        const status = existing?.status ?? null;
+        if (status === 'locked') {
+          stats.blocksLocked++;
+          return { ok: true, skipped: true, reason: 'locked', docFile, blockAnchor };
+        }
+        const existingHash = existing?.content_hash ?? existing?.contentHash ?? null;
+        const nextHash = hashString(contentText);
+        const created = !existing;
+        const unchanged = Boolean(existing) && typeof existingHash === 'string' && existingHash.length > 0 && existingHash === nextHash;
+        const changed = !unchanged;
+
         const block = await docStore.upsertBlock({
           tenantId,
           repoId,
           docFile,
           blockAnchor,
           blockType,
-          content: String(content ?? ''),
+          content: contentText,
           status: 'fresh',
           lastIndexSha: triggerSha,
           lastPrId: prRunId
         });
         if (block && docStore.setEvidence) {
+          for (const e of Array.isArray(evidence) ? evidence : []) {
+            const uid = e?.symbolUid ?? e?.symbol_uid ?? null;
+            if (typeof uid === 'string' && uid.length > 0) triggeringSymbolUids.add(uid);
+          }
+          const defaultEvidenceKind = blockType === 'flow' ? 'flow' : 'contract_location';
           await docStore.setEvidence({
             tenantId,
             repoId,
@@ -384,12 +562,27 @@ export async function runDocPrWithOpenClaw({
                   lineStart: e?.lineStart ?? null,
                   lineEnd: e?.lineEnd ?? null,
                   sha: e?.sha ?? triggerSha,
-                  evidenceKind: e?.evidenceKind ?? 'flow'
+                  evidenceKind: e?.evidenceKind ?? defaultEvidenceKind
                 }))
               : []
           });
         }
-        return { ok: true, blockId: block?.id ?? null, docFile, content: String(content ?? '') };
+        if (created) stats.blocksCreated++;
+        else if (unchanged) stats.blocksUnchanged++;
+        else stats.blocksUpdated++;
+
+        if (changed) changedFilesByPath.set(docFile, contentText);
+        return {
+          ok: true,
+          blockId: block?.id ?? null,
+          docFile,
+          blockAnchor,
+          blockType,
+          created,
+          changed,
+          unchanged,
+          content: changed ? contentText : undefined
+        };
       }
     },
     {
@@ -408,23 +601,57 @@ export async function runDocPrWithOpenClaw({
         required: ['targetRepoFullName', 'title', 'branchName', 'files']
       },
       handler: async ({ targetRepoFullName, title, body, branchName, files }) => {
+        const shaRaw = String(triggerSha ?? '').trim();
+        const sha8 = shaRaw.replaceAll(/[^a-z0-9]/gi, '').slice(0, 8) || 'manual';
+        const effectiveBranchName =
+          sha8 === 'manual' ? `docs/update-${sha8}-${Date.now()}` : `docs/update-${sha8}`;
+        const effectiveTitle = `docs: update for ${sha8}`;
+        const effectiveBody =
+          [
+            `Triggered by: ${shaRaw || 'manual'}`,
+            '',
+            `Blocks updated: ${stats.blocksUpdated}`,
+            `Blocks created: ${stats.blocksCreated}`,
+            `Blocks unchanged: ${stats.blocksUnchanged}`,
+            stats.blocksLocked ? `Blocks locked: ${stats.blocksLocked}` : null,
+            '',
+            'Triggering graph symbols:',
+            ...(Array.from(triggeringSymbolUids).slice(0, 200).map((uid) => `- ${uid}`) || [])
+          ]
+            .filter(Boolean)
+            .join('\n') + '\n';
+
+        const effectiveFiles = Array.from(changedFilesByPath.entries()).map(([path, content]) => ({ path, content }));
+        if (effectiveFiles.length === 0) {
+          prResult = { ok: true, empty: true, targetRepoFullName, title: effectiveTitle, body: effectiveBody, branchName: effectiveBranchName, filesCount: 0 };
+          return prResult;
+        }
+
         prResult = await docsWriter.openPullRequest({
           targetRepoFullName,
-          title,
-          body,
-          branchName,
-          files: Array.isArray(files) ? files : []
+          title: effectiveTitle,
+          body: effectiveBody,
+          branchName: effectiveBranchName,
+          files: effectiveFiles
         });
         return prResult;
       }
     }
   ];
 
-  const gatewayUrl = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? 'http://local-openclaw.invalid';
-  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? '';
+  const configuredGatewayUrlRaw = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? null;
+  const configuredGatewayUrl = typeof configuredGatewayUrlRaw === 'string' ? configuredGatewayUrlRaw.trim() : null;
+  const gatewayUrl = configuredGatewayUrl ? configuredGatewayUrl : 'http://local-openclaw.invalid';
+  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.OPENCLAW_TOKEN ?? '';
   const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'doc-agent';
   const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const useRemote = Boolean(openclaw?.useRemote ?? (process.env.OPENCLAW_USE_REMOTE === '1' && process.env.OPENCLAW_GATEWAY_URL));
+  const envRemote = String(process.env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
+  const useRemote =
+    typeof openclaw?.useRemote === 'boolean'
+      ? openclaw.useRemote
+      : envRemote === '0' || envRemote === 'false'
+        ? false
+        : Boolean(configuredGatewayUrl);
   const requestJson =
     openclaw?.requestJson ??
     (useRemote
@@ -443,12 +670,15 @@ export async function runDocPrWithOpenClaw({
     'You are Graphfly Doc Agent.',
     'You must be safe-by-design: never request or output source code bodies/snippets.',
     'Doc blocks must be contract-first and must not contain code fences.',
+    'When updating existing docs, use docs_blocks_list + docs_block_get to understand current content and preserve structure.',
+    'When new public nodes exist with no doc evidence, generate new doc blocks (undocumented_public_nodes_list).',
+    'The flows_entrypoints_list and public_nodes_list tools already return only the targets for this run.',
     'Only open PRs in the configured docs repo.',
     'Use tools to list entrypoints, fetch contracts/flows, upsert doc blocks, then create a PR.'
   ].join('\n');
 
   const input = [
-    'Create/update documentation for flow entrypoints (flows/) and public contracts (contracts/).',
+    `Create/update documentation for flow entrypoints (flows/) and public contracts (contracts/) for triggerSha=${triggerSha}.`,
     'For each flow entrypoint: fetch contract, trace derived flow, upsert a single doc block for it.',
     'For each public contract node (API endpoints, exported functions/classes): fetch contract and upsert a single doc block for it.',
     'Finally, open a PR in the docs repo with the generated files.'
@@ -493,5 +723,12 @@ export async function runDocPrWithOpenClaw({
   });
 
   if (!prResult) throw new Error('doc_agent_missing_pr_result');
-  return { pr: prResult };
+  return {
+    pr: prResult,
+    stats: {
+      ...stats,
+      triggeringSymbolUids: Array.from(triggeringSymbolUids),
+      filesChanged: changedFilesByPath.size
+    }
+  };
 }

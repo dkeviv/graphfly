@@ -17,7 +17,7 @@ test('renderContractDocBlock is contract-first and does not emit code fences', (
   assert.ok(md.includes('## pkg.mod.fn'));
   assert.ok(md.includes('**Symbol UID:**'));
   assert.ok(md.includes('**Signature:**'));
-  assert.ok(md.includes('Evidence: `src/mod.js:12`'));
+  assert.ok(md.includes('Evidence: `src/mod.js:12-20`'));
   assert.equal(md.includes('```'), false);
   assert.deepEqual(validateDocBlockMarkdown(md), { ok: true });
 });

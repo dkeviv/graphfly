@@ -209,6 +209,28 @@ Backfill control:
   - Computes missing embeddings for nodes that have `embedding_text` but no valid embedding.
   - Uses the configured embeddings provider (deterministic or HTTP).
 
+### 2.6D Documentation agent worker (recommended)
+
+Graphfly runs a documentation worker that updates **doc blocks** and opens PRs in the configured **docs repo only**.
+
+Enable by running the worker:
+- `npm run worker:doc`
+
+Agent runtime modes:
+- **LLM-backed (remote)**: set `OPENCLAW_GATEWAY_URL` (token optional).
+- **Deterministic local loop (offline/tests)**: unset `OPENCLAW_GATEWAY_URL` or set `OPENCLAW_USE_REMOTE=0` (or `false`).
+
+Key env vars:
+- `OPENCLAW_GATEWAY_URL` — remote agent gateway base URL (enables LLM-agentic mode by default when set)
+- `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) — optional bearer token for your gateway
+- `OPENCLAW_MODEL` — optional model identifier (gateway-defined)
+- `OPENCLAW_AGENT_ID` — optional agent id (for routing/quotas)
+- `OPENCLAW_USE_REMOTE=0|false` — force deterministic local mode even when a gateway URL is configured
+
+Manual block regeneration (FR-DOC-07):
+- `POST /docs/regenerate` (admin-only) with `{ tenantId, repoId, blockId }` enqueues a single-target doc job and opens a new PR.
+- The web UI exposes this as **Regenerate (Admin)** on the Doc Block detail view.
+
 ### 2.7 Docs sync fence (recommended)
 To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:
 - `GRAPHFLY_CLOUD_SYNC_REQUIRED=1`
@@ -394,3 +416,13 @@ Likely causes:
 - Workers not running
 - Wrong `TENANT_ID` for Phase‑1 worker loop
 - DB connectivity or RLS misconfiguration
+
+### 8.4 “Jobs stuck active”
+Likely causes:
+- Worker crashed mid-job (process kill, OOM, deploy restart)
+- Worker cannot renew job leases (DB connectivity issues)
+
+Notes / recovery:
+- Jobs are leased with a TTL (`lock_expires_at`). When the TTL expires, another worker can re-lease the job.
+- Confirm workers are running and can reach the database.
+- Inspect `jobs` rows for `status='active'` with `lock_expires_at <= now()` to find stale locks.

@@ -1,6 +1,7 @@
 import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
 import { createQueueFromEnv } from '../../../packages/stores/src/queue.js';
 import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
+import { startQueueHeartbeat } from '../../../packages/stores/src/queue-heartbeat.js';
 import { createGraphAgentWorker } from './graph-agent-worker.js';
 
 function sleep(ms) {
@@ -21,12 +22,13 @@ async function main() {
   }
 
   const worker = createGraphAgentWorker({ store, lockStore });
+  const lockMs = 10 * 60 * 1000;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const leased = configuredTenantId
-      ? await graphQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs: 10 * 60 * 1000 })
-      : await graphQueue.leaseAny({ limit: 1, lockMs: 10 * 60 * 1000 });
+      ? await graphQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs })
+      : await graphQueue.leaseAny({ limit: 1, lockMs });
     const job = Array.isArray(leased) ? leased[0] : null;
     if (!job) {
       await sleep(750);
@@ -37,6 +39,15 @@ async function main() {
       await sleep(250);
       continue;
     }
+    const hb = startQueueHeartbeat({
+      queue: graphQueue,
+      tenantId,
+      jobId: job.id,
+      lockToken: job.lockToken,
+      lockMs,
+      onLostLock: () => console.warn(`WARN: lost queue lock for graph job ${job.id}`),
+      onError: (e) => console.warn(`WARN: queue heartbeat failed for graph job ${job.id}: ${String(e?.message ?? e)}`)
+    });
     try {
       await worker.handle({ id: job.id, payload: job.payload });
       await graphQueue.complete({ tenantId, jobId: job.id, lockToken: job.lockToken });
@@ -48,6 +59,8 @@ async function main() {
         errorMessage: String(err?.message ?? err),
         backoffSec: 60
       });
+    } finally {
+      await hb.stop();
     }
   }
 }

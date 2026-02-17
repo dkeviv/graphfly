@@ -50,6 +50,14 @@ export class PgQueuePool {
     });
   }
 
+  async renew({ tenantId, jobId, lockToken, lockMs = 60000 } = {}) {
+    if (!tenantId) throw new Error('tenantId is required');
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const q = new PgQueue({ client, queueName: this._name });
+      return q.renew({ tenantId, jobId, lockToken, lockMs });
+    });
+  }
+
   async fail({ tenantId, jobId, lockToken, errorMessage, backoffSec } = {}) {
     if (!tenantId) throw new Error('tenantId is required');
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
