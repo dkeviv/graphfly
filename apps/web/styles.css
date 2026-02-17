@@ -209,6 +209,16 @@ body {
   cursor: pointer;
 }
 
+.button[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  background: rgba(122, 162, 255, 0.32);
+  border-color: rgba(122, 162, 255, 0.55);
+}
+
 .button:hover {
   border-color: rgba(122, 162, 255, 0.55);
 }
@@ -234,8 +244,46 @@ body {
   border-color: rgba(45, 212, 191, 0.35);
 }
 
+.banner--warn {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.banner--error {
+  border-color: rgba(255, 95, 109, 0.45);
+}
+
 .banner--hidden {
   display: none;
+}
+
+.details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(16, 31, 59, 0.55);
+  padding: 10px 12px;
+}
+
+.details > summary {
+  cursor: pointer;
+  font-weight: 650;
+  list-style: none;
+}
+
+.details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.details__body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 0;
 }
 
 .list {

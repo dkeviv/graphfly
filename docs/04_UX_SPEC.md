@@ -80,6 +80,11 @@ Build custom for:
 - Progress log stream
 - PR timeline
 
+**Enterprise UX note (Phase-1 UI in this repo):**
+- Onboarding is presented as a **single guided stepper** with progressive disclosure.
+- “Advanced / dev-only” controls (PAT connect, local repo path, API URL) are tucked behind collapsible panels.
+- Primary CTAs are visually distinct and the UI gates actions (docs repo must be set before project creation).
+
 ---
 
 ## 2. Application Structure
