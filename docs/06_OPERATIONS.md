@@ -111,6 +111,12 @@ Restore drills should be run periodically and documented (steps, expected timing
 - Workers are stateless: scale `indexer-worker` and `doc-agent-worker` independently.
 - Use queue priority to protect interactive/user-triggered actions during high webhook volume.
 
+### 6.1 SaaS Multi-Tenancy (Workers)
+
+Workers can run in two modes:
+- **Single-tenant lane:** set `TENANT_ID=<uuid>` to process jobs for one org only (simplest for early deployments).
+- **Multi-tenant SaaS:** omit `TENANT_ID` and run workers with a DB role that can lease jobs across tenants (requires a privileged DB role for reading `jobs` without tenant scoping). Each job is then executed under the correct tenant context (RLS via `SET app.tenant_id`).
+
 ---
 
 ## 7. Maintenance

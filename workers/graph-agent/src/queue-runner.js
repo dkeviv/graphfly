@@ -8,8 +8,7 @@ function sleep(ms) {
 }
 
 async function main() {
-  const tenantId = process.env.TENANT_ID ?? '';
-  if (!tenantId) throw new Error('TENANT_ID is required');
+  const configuredTenantId = process.env.TENANT_ID ?? null;
 
   const store = await createGraphStoreFromEnv({ repoFullName: 'worker' });
   const lockStore = await createLockStoreFromEnv();
@@ -17,15 +16,25 @@ async function main() {
   if (typeof graphQueue.lease !== 'function') {
     throw new Error('queue_mode_not_supported: set GRAPHFLY_QUEUE_MODE=pg and DATABASE_URL to enable durable workers');
   }
+  if (!configuredTenantId && typeof graphQueue.leaseAny !== 'function') {
+    throw new Error('queue_global_lease_not_supported: update queue implementation or set TENANT_ID');
+  }
 
   const worker = createGraphAgentWorker({ store, lockStore });
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const leased = await graphQueue.lease({ tenantId, limit: 1, lockMs: 10 * 60 * 1000 });
+    const leased = configuredTenantId
+      ? await graphQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs: 10 * 60 * 1000 })
+      : await graphQueue.leaseAny({ limit: 1, lockMs: 10 * 60 * 1000 });
     const job = Array.isArray(leased) ? leased[0] : null;
     if (!job) {
       await sleep(750);
+      continue;
+    }
+    const tenantId = job.tenantId ?? job.payload?.tenantId ?? job.payload?.tenant_id ?? null;
+    if (!tenantId) {
+      await sleep(250);
       continue;
     }
     try {

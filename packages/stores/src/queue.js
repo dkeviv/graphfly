@@ -28,6 +28,20 @@ export class PgQueuePool {
     });
   }
 
+  // Lease across all tenants. Intended for multi-tenant SaaS workers.
+  // Requires DATABASE_URL (or worker DB URL) to use a role with BYPASSRLS so the jobs table can be scanned.
+  async leaseAny({ limit = 1, lockMs = 60000 } = {}) {
+    const client = await this._pool.connect();
+    try {
+      const q = new PgQueue({ client, queueName: this._name });
+      return q.leaseAny({ limit, lockMs });
+    } finally {
+      try {
+        client.release();
+      } catch {}
+    }
+  }
+
   async complete({ tenantId, jobId, lockToken } = {}) {
     if (!tenantId) throw new Error('tenantId is required');
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
@@ -68,4 +82,3 @@ export async function createQueueFromEnv({ queueName }) {
   const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgQueuePool({ pool, queueName });
 }
-

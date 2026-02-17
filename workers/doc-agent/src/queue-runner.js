@@ -20,14 +20,16 @@ function privateKeyPemFromEnv() {
 }
 
 async function main() {
-  const tenantId = process.env.TENANT_ID ?? '';
-  if (!tenantId) throw new Error('TENANT_ID is required');
+  const configuredTenantId = process.env.TENANT_ID ?? null;
 
   const store = await createGraphStoreFromEnv({ repoFullName: 'worker' });
   const docStore = await createDocStoreFromEnv({ repoFullName: 'worker' });
   const docQueue = await createQueueFromEnv({ queueName: 'doc' });
   if (typeof docQueue.lease !== 'function') {
     throw new Error('queue_mode_not_supported: set GRAPHFLY_QUEUE_MODE=pg and DATABASE_URL to enable durable workers');
+  }
+  if (!configuredTenantId && typeof docQueue.leaseAny !== 'function') {
+    throw new Error('queue_global_lease_not_supported: update queue implementation or set TENANT_ID');
   }
 
   const orgs = await createOrgStoreFromEnv();
@@ -39,7 +41,7 @@ async function main() {
   const appId = process.env.GITHUB_APP_ID ?? '';
   const privateKeyPem = privateKeyPemFromEnv();
 
-  const docsWriterFactory = async ({ configuredDocsRepoFullName }) => {
+  const docsWriterFactory = async ({ configuredDocsRepoFullName, tenantId }) => {
     const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
     const docsInstallId = org?.githubDocsInstallId ?? null;
     return docsRepoPath
@@ -56,10 +58,17 @@ async function main() {
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const leased = await docQueue.lease({ tenantId, limit: 1, lockMs: 10 * 60 * 1000 });
+    const leased = configuredTenantId
+      ? await docQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs: 10 * 60 * 1000 })
+      : await docQueue.leaseAny({ limit: 1, lockMs: 10 * 60 * 1000 });
     const job = Array.isArray(leased) ? leased[0] : null;
     if (!job) {
       await sleep(750);
+      continue;
+    }
+    const tenantId = job.tenantId ?? job.payload?.tenantId ?? job.payload?.tenant_id ?? null;
+    if (!tenantId) {
+      await sleep(250);
       continue;
     }
     try {

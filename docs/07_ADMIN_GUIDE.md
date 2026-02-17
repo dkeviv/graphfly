@@ -242,7 +242,9 @@ Run both worker processes:
 - `npm run worker:indexer`
 - `npm run worker:doc`
 
-Workers require `TENANT_ID` in Phase‑1 (single-tenant worker loop).
+Worker tenancy modes:
+- **Single-tenant (strict RLS lane):** set `TENANT_ID=<uuid>` to process jobs for one org only.
+- **Multi-tenant SaaS:** omit `TENANT_ID` and run workers with a DB role that can **lease** jobs across tenants (requires `BYPASSRLS` or equivalent for the `jobs` table). Each job is then processed under its own tenant context (RLS via `SET app.tenant_id`).
 
 ---
 

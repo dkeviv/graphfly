@@ -9,8 +9,7 @@ function sleep(ms) {
 }
 
 async function main() {
-  const tenantId = process.env.TENANT_ID ?? '';
-  if (!tenantId) throw new Error('TENANT_ID is required');
+  const configuredTenantId = process.env.TENANT_ID ?? null;
 
   const store = await createGraphStoreFromEnv({ repoFullName: 'worker' });
   const docStore = await createDocStoreFromEnv({ repoFullName: 'worker' });
@@ -19,20 +18,34 @@ async function main() {
   const graphQueue = await createQueueFromEnv({ queueName: 'graph' });
   const realtime = createRealtimePublisherFromEnv() ?? null;
 
-  if (typeof indexQueue.lease !== 'function') {
+  const canLease = typeof indexQueue.lease === 'function';
+  const canLeaseAny = typeof indexQueue.leaseAny === 'function';
+  if (!canLease) {
     throw new Error('queue_mode_not_supported: set GRAPHFLY_QUEUE_MODE=pg and DATABASE_URL to enable durable workers');
+  }
+  if (!configuredTenantId && !canLeaseAny) {
+    throw new Error('queue_global_lease_not_supported: update queue implementation or set TENANT_ID');
   }
 
   const worker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
 
-  // Phase-1: single-tenant worker loop (RLS enforced via app.tenant_id).
-  // Run one job at a time; retries handled by queue.fail().
+  // Phase-1: single concurrency. Supports:
+  // - single-tenant mode: set TENANT_ID (strict RLS lane)
+  // - multi-tenant mode: unset TENANT_ID and run with a DB role that can lease jobs across tenants (BYPASSRLS).
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const leased = await indexQueue.lease({ tenantId, limit: 1, lockMs: 5 * 60 * 1000 });
+    const leased = configuredTenantId
+      ? await indexQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs: 5 * 60 * 1000 })
+      : await indexQueue.leaseAny({ limit: 1, lockMs: 5 * 60 * 1000 });
     const job = Array.isArray(leased) ? leased[0] : null;
     if (!job) {
       await sleep(750);
+      continue;
+    }
+    const tenantId = job.tenantId ?? job.payload?.tenantId ?? job.payload?.tenant_id ?? null;
+    if (!tenantId) {
+      // Cannot safely process without tenant context.
+      await sleep(250);
       continue;
     }
     try {

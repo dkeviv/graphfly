@@ -68,6 +68,40 @@ export class PgQueue {
     return rows.map((r) => ({ id: r.id, name: r.job_name, payload: r.payload, lockToken }));
   }
 
+  // Global leasing across tenants.
+  // Requires the DB role to have BYPASSRLS (or equivalent) so the jobs table can be read without tenant scoping.
+  // The worker is expected to set tenant context per job when calling stores (withTenantClient).
+  async leaseAny({ limit = 1, lockMs = 60000 } = {}) {
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 1;
+    const lm = Number.isFinite(lockMs) ? Math.max(5000, Math.min(10 * 60 * 1000, Math.trunc(lockMs))) : 60000;
+    const lockToken = crypto.randomUUID();
+    const res = await this._c.query(
+      `WITH picked AS (
+         SELECT id
+         FROM jobs
+         WHERE queue_name=$1
+           AND status='queued'
+           AND run_at <= now()
+         ORDER BY created_at ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT $2
+       )
+       UPDATE jobs j
+       SET status='active',
+           locked_at=now(),
+           lock_expires_at=now() + ($3::int * interval '1 millisecond'),
+           lock_token=$4,
+           attempts=attempts + 1,
+           updated_at=now()
+       FROM picked
+       WHERE j.id = picked.id
+       RETURNING j.id, j.tenant_id, j.job_name, j.payload`,
+      [this._q, n, lm, lockToken]
+    );
+    const rows = res.rows ?? [];
+    return rows.map((r) => ({ id: r.id, tenantId: r.tenant_id, name: r.job_name, payload: r.payload, lockToken }));
+  }
+
   async complete({ tenantId, jobId, lockToken } = {}) {
     assertUuid(tenantId, 'tenantId');
     assertUuid(jobId, 'jobId');
@@ -157,4 +191,3 @@ export class PgQueue {
     }));
   }
 }
-
