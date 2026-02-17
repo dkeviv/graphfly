@@ -3,7 +3,7 @@ import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
 import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
 
-export function createDocWorker({ store, docsWriter, docStore, entitlementsStore = null, usageCounters = null, realtime = null }) {
+export function createDocWorker({ store, docsWriter, docStore, entitlementsStore = null, usageCounters = null, realtime = null, lockStore = null }) {
   const entitlements = entitlementsStore ?? new InMemoryEntitlementsStore();
   const usage = usageCounters ?? new InMemoryUsageCounters();
 
@@ -17,15 +17,30 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
       if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
         throw new Error('docsRepoFullName is required');
       }
-      const writer = typeof docsWriter === 'function' ? await docsWriter({ configuredDocsRepoFullName: docsRepoFullName, tenantId }) : docsWriter;
-      const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
-      const docPathByEntrypointKey = new Map(
-        entrypoints.map((ep) => [ep.entrypoint_key, `flows/${String(ep.entrypoint_key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '')}.md`])
-      );
+      const lockName = 'docs_generate';
+      const ttlMs = Number(process.env.GRAPHFLY_DOC_AGENT_LOCK_TTL_MS ?? 30 * 60 * 1000);
+      let lockToken = null;
+      if (lockStore?.tryAcquire) {
+        const lease = await lockStore.tryAcquire({
+          tenantId,
+          repoId,
+          lockName,
+          ttlMs: Number.isFinite(ttlMs) ? Math.trunc(ttlMs) : 30 * 60 * 1000
+        });
+        if (!lease.acquired) throw new Error('doc_agent_lock_busy');
+        lockToken = lease.token;
+      }
 
-      const prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha, status: 'running' }) ?? null;
-
+      let prRun = null;
       try {
+        const writer = typeof docsWriter === 'function' ? await docsWriter({ configuredDocsRepoFullName: docsRepoFullName, tenantId }) : docsWriter;
+        const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
+        const docPathByEntrypointKey = new Map(
+          entrypoints.map((ep) => [ep.entrypoint_key, `flows/${String(ep.entrypoint_key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '')}.md`])
+        );
+
+        prRun = docStore?.createPrRun?.({ tenantId, repoId, triggerSha, status: 'running' }) ?? null;
+
         realtime?.publish?.({ tenantId, repoId, type: 'agent:start', payload: { agent: 'doc', sha: triggerSha, prRunId: prRun?.id ?? null } });
         // Explicit request (coverage dashboard / single-target regeneration): honor requested targets.
         if ((requestedEntrypointKeys && requestedEntrypointKeys.length > 0) || (requestedSymbolUids && requestedSymbolUids.length > 0)) {
@@ -243,6 +258,10 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
         }
         realtime?.publish?.({ tenantId, repoId, type: 'agent:error', payload: { agent: 'doc', sha: triggerSha, error: String(err?.message ?? err) } });
         throw err;
+      } finally {
+        if (lockStore?.release && lockToken) {
+          await lockStore.release({ tenantId, repoId, lockName, token: lockToken });
+        }
       }
     }
   };

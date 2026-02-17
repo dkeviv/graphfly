@@ -5,6 +5,7 @@ import { startQueueHeartbeat } from '../../../packages/stores/src/queue-heartbea
 import { createOrgStoreFromEnv } from '../../../packages/stores/src/org-store.js';
 import { createEntitlementsStoreFromEnv } from '../../../packages/stores/src/entitlements-store.js';
 import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-counters.js';
+import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
 import { createDocWorker } from './doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
@@ -37,6 +38,7 @@ async function main() {
   const entitlements = await createEntitlementsStoreFromEnv();
   const usageCounters = await createUsageCountersFromEnv();
   const realtime = createRealtimePublisherFromEnv() ?? null;
+  const lockStore = await createLockStoreFromEnv();
 
   const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
   const appId = process.env.GITHUB_APP_ID ?? '';
@@ -55,7 +57,7 @@ async function main() {
         });
   };
 
-  const worker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters, realtime });
+  const worker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters, realtime, lockStore });
   const lockMs = 10 * 60 * 1000;
 
   // eslint-disable-next-line no-constant-condition

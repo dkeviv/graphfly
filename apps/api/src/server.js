@@ -203,7 +203,7 @@ const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
       });
 };
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
-const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage, realtime });
+const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage, realtime, lockStore });
 
 async function maybeDrainOnce() {
   if (typeof indexQueue?.drain !== 'function' || typeof docQueue?.drain !== 'function' || typeof graphQueue?.drain !== 'function') return;
