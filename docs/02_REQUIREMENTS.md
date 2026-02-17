@@ -60,8 +60,22 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 #### FR-GH-03: Docs Repository Configuration
 - User shall set one "docs repo" per organization — the target for documentation PRs
 - Docs repo shall be explicitly selected by the user as part of onboarding
-- System shall provide an option to create a new empty docs repo
 - System shall require the Docs App to be installed on the configured docs repo before opening any PRs
+- System shall enforce that the docs repo is **separate** from any connected source repos for the organization
+
+#### FR-GH-06: Create Docs Repo (Onboarding)
+- System shall allow an Owner/Admin to create a new empty docs repository in GitHub from the SaaS UI during onboarding
+- Docs repo creation shall support:
+  - owner namespace (user or org)
+  - repo name
+  - visibility (private/public)
+  - default branch name (optional; defaults to GitHub default)
+- After creation, system shall guide the user to install the Docs App on the new docs repo and verify access
+- If automatic creation is blocked (missing permissions or org policy), system shall provide a guided fallback:
+  - deep-link to GitHub “New repository” with the intended repo name
+  - return to Graphfly for verification and selection
+- System shall hard-fail docs writes until the docs repo is configured and Docs App verification succeeds
+- Docs repo creation, verification, and selection shall be recorded in the audit log
 
 #### FR-GH-04: Webhook Processing
 - System shall receive and validate GitHub push webhooks (HMAC-SHA256 signature)
@@ -205,6 +219,55 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - Regeneration shall re-run the doc agent for that block and open a new PR
 - Regeneration shall update the evidence links if the underlying code has changed
 
+#### FR-DOC-08: Docs Repository Browser (Read)
+- System shall provide an in-product docs repository browser for the configured docs repo
+- Docs repo browser shall support:
+  - file tree navigation (folders/files)
+  - safe Markdown rendering (sanitized HTML; no script execution)
+  - deep-linking to a file and section anchor
+- Docs repo browser shall provide “evidence overlays” for doc-block-managed sections:
+  - show the doc block type/status
+  - show evidence links (symbol UID + file path + line range + commit SHA)
+- Docs repo browser shall support viewing documentation as-of:
+  - default branch (merged docs)
+  - a preview branch for a Graphfly-created docs PR (latest PR run), so agent/user edits are visible before merge
+- Docs repo browser shall never browse, fetch, or render source repository files or code bodies/snippets
+
+#### FR-DOC-09: Manual Documentation Editing (UI)
+- Admin users shall be able to create and edit documentation files in the docs repo from the SaaS UI
+- Manual editing shall support:
+  - create new Markdown file
+  - edit existing Markdown file
+  - preview rendered Markdown
+  - view a diff before committing
+- Manual edits shall use Git-backed operations against the docs repo:
+  - create a branch from the docs repo default branch
+  - commit changes
+  - push the branch
+  - open a PR
+- Manual edits shall be visible in the docs repository browser preview mode prior to merge
+- System shall enforce doc policy constraints (no source code bodies/snippets; doc-block sections must not include code fences)
+- System shall hard-fail any attempted write where the target repo is not the configured docs repo for the organization
+
+#### FR-AST-01: Product Documentation Assistant (Explain & Navigate)
+- System shall provide an in-product assistant that helps users understand the system using:
+  - the Public Contract Graph (contracts/constraints/allowable values)
+  - flow entities + flow graphs
+  - docs repo content (Markdown)
+- Assistant responses shall cite evidence (symbol UIDs, flow entrypoints, doc file paths, and PR run IDs where applicable)
+- Assistant shall not fetch, store, or display source code bodies/snippets by default
+
+#### FR-AST-02: Product Documentation Assistant (Draft & Edit Docs via PR)
+- Assistant shall be able to draft documentation changes based on user instructions, including:
+  - create a new docs file
+  - edit an existing docs file
+  - add/update doc-block-managed sections
+- Assistant-proposed changes shall be presented as a preview diff before any write
+- Writing changes shall require explicit user confirmation
+- Assistant writes shall use Git-backed operations against the docs repo (branch + commit + push + PR)
+- Assistant changes shall be visible in the docs repository browser preview mode prior to merge
+- Assistant shall never write to source repos and shall hard-fail any attempted write outside the configured docs repo
+
 ---
 
 ### 2.4 Graph Exploration
@@ -330,6 +393,20 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 
 ---
 
+### 2.9 UX Flows (Docs Repo + Assistant)
+
+The tables below are the canonical UX flows for docs repo creation, browsing, manual editing, and the in-product assistant.
+
+| Flow ID | Actor | Entry | Steps (happy path) | Success |
+|---|---|---|---|---|
+| UF-ONB-06 | Owner/Admin | Setup → Docs Repo | Click **Create docs repo** → choose owner/name/visibility → repo created → install Docs App → verify → set as docs repo | Docs repo configured without leaving onboarding |
+| UF-ONB-07 | Owner/Admin | Setup → Docs Repo | Click **Create docs repo** → blocked by policy → deep-link to GitHub create page → user creates → return → verify → set | Works under org policy limits |
+| UF-DOCS-07 | Any user | Docs → Repo Browser | Navigate file tree → open a file | Files are readable in-product |
+| UF-DOCS-08 | Any user | Docs → Repo Browser | Toggle view: default branch vs preview branch (latest PR run) → view Markdown + evidence overlays | Agent/user edits are visible before merge |
+| UF-DOCS-10 | Admin | Docs → Repo Browser | Edit file → preview → view diff → **Create PR** | Manual doc change shipped via PR |
+| UF-AST-01 | Any user | Graph/Docs | Ask a question → assistant responds with evidence citations | User understands contracts/flows without source code bodies |
+| UF-AST-02 | Admin | Docs → Repo Browser | Ask assistant to create/update docs → preview diff → confirm → PR opened | Docs change authored by assistant via PR |
+
 ## 3. Non-Functional Requirements
 
 ### 3.1 Performance
@@ -395,6 +472,8 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 
 **US-003**: As a developer, I can specify a docs repository where Graphfly will open documentation PRs, and authorize write access to that docs repo only (Docs App).
 
+**US-006**: As an admin, I can create a new empty docs repository from onboarding so I can start with a clean documentation workspace.
+
 **US-004**: As a developer, I see a live progress bar while my repository is being indexed, showing which files are being parsed and how many nodes and edges have been found.
 
 **US-005**: As a developer, I receive a notification when indexing is complete with a summary of the graph that was built.
@@ -410,6 +489,12 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 **US-013**: As a developer, I can manually trigger regeneration of a specific doc block from the UI.
 
 **US-014**: As a developer, I can edit a doc block manually in the UI and have my changes committed as a separate PR (without triggering the agent).
+
+**US-015**: As a developer, I can browse the documentation repository from within Graphfly and read the generated documentation files.
+
+**US-016**: As a developer, I can manually edit documentation files in Graphfly and have my changes shipped as a PR to the docs repo.
+
+**US-017**: As a developer, I can ask an in-product assistant to draft new documentation or edits, review the diff, and create a PR to the docs repo.
 
 ### Epic 3: Graph Exploration
 
