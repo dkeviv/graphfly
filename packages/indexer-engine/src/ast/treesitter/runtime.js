@@ -14,7 +14,9 @@ const LANGUAGE_MODULES = {
   ruby: { pkg: 'tree-sitter-ruby', export: 'default' },
   php: { pkg: 'tree-sitter-php', export: 'php' },
   c: { pkg: 'tree-sitter-c', export: 'default' },
-  cpp: { pkg: 'tree-sitter-cpp', export: 'default' }
+  cpp: { pkg: 'tree-sitter-cpp', export: 'default' },
+  swift: { pkg: 'tree-sitter-swift', export: 'default' },
+  kotlin: { pkg: 'tree-sitter-kotlin', export: 'default' }
 };
 
 export function loadTreeSitterRuntime() {
@@ -47,4 +49,3 @@ export function loadTreeSitterLanguage(lang) {
     throw err;
   }
 }
-

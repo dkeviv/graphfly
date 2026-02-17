@@ -1,13 +1,22 @@
 import { createTypeScriptAstEngine } from './typescript/typescript-engine.js';
 import { createTreeSitterAstEngine } from './treesitter/treesitter-engine.js';
+import { createCompositeAstEngine } from './composite/composite-engine.js';
 
 export function createAstEngineFromEnv({ env = process.env, repoRoot, sourceFileExists }) {
   const prod = String(env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod';
-  // SaaS default: Tree-sitter in prod for multi-language parity.
+  // SaaS default: composite engine.
+  // - TypeScript compiler API for JS/TS/TSX (best cross-file resolution + validator extraction)
+  // - Tree-sitter for all other supported languages (uniform multi-language coverage)
   // Dev default: TypeScript engine (vendored; zero-install).
-  const defaultMode = prod ? 'treesitter' : 'typescript';
+  const defaultMode = prod ? 'composite' : 'typescript';
   const mode = String(env.GRAPHFLY_AST_ENGINE ?? defaultMode).toLowerCase();
   if (mode === 'none' || mode === 'off' || mode === '') return null;
+
+  if (mode === 'composite' || mode === 'auto') {
+    const engine = createCompositeAstEngine({ repoRoot, sourceFileExists });
+    assertAstEngineShape(engine);
+    return engine;
+  }
 
   if (mode === 'tree-sitter' || mode === 'treesitter') {
     const engine = createTreeSitterAstEngine({ repoRoot, sourceFileExists });

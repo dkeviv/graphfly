@@ -30,19 +30,25 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
     write(path.join(tmp, 'Cargo.toml'), ['[package]', 'name="foo"', '', '[dependencies]', 'serde = "1.0"'].join('\n'));
     write(path.join(tmp, 'requirements.txt'), ['fastapi==0.100.0', 'requests>=2.0'].join('\n'));
     write(path.join(tmp, 'composer.json'), JSON.stringify({ require: { 'monolog/monolog': '^3.0' } }, null, 2));
-    write(
-      path.join(tmp, 'src', 'mod.ts'),
-      [
-        "import _ from 'lodash';",
-        "import leftPad from 'left-pad';",
-        "import { b } from './b';",
-        "import * as bmod from './b';",
-        "import { missing } from './missing';",
-        "import { util } from '@/util';",
-        '',
-        'export function callB() { return b(); }',
-        'export function callB2() { return bmod.b(); }',
-        'export function callUtil() { return util(); }',
+	    write(
+	      path.join(tmp, 'src', 'mod.ts'),
+	      [
+	        "import _ from 'lodash';",
+	        "import leftPad from 'left-pad';",
+	        "import Joi from 'joi';",
+	        "import { z } from 'zod';",
+	        "import { b } from './b';",
+	        "import * as bmod from './b';",
+	        "import { missing } from './missing';",
+	        "import { util } from '@/util';",
+	        '',
+	        "export const MODE = 'formal' as const;",
+	        "export const UserSchema = z.object({ role: z.enum(['admin','user']), age: z.number().min(0).max(120) });",
+	        "export const AccountSchema = Joi.object({ tier: Joi.string().valid('free','pro'), seats: Joi.number().min(1).max(100) });",
+	        '',
+	        'export function callB() { return b(); }',
+	        'export function callB2() { return bmod.b(); }',
+	        'export function callUtil() { return util(); }',
         '',
         'export class X { static hi() { return 1; } }',
         'export function callStatic() { return X.hi(); }',
@@ -62,11 +68,17 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       path.join(tmp, 'src', 'app.py'),
       [
         'from fastapi import FastAPI',
+        'from pydantic import BaseModel, Field',
+        'from typing import Literal',
         'app = FastAPI()',
         '',
         "@app.get('/ping')",
         'def ping():',
         "    return {'ok': True}",
+        '',
+        'class User(BaseModel):',
+        "    role: Literal['admin','user'] = 'user'",
+        '    age: int = Field(ge=0, le=120)',
         '',
         'class Greeter:',
         '    pass'
@@ -74,8 +86,16 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
     );
     write(
       path.join(tmp, 'src', 'main.go'),
-      ['package main', 'import "github.com/gin-gonic/gin"', 'func Hello() {}', 'type Thing struct {}'].join('\n')
+      [
+        'package main',
+        'import "github.com/gin-gonic/gin"',
+        'import "example.com/foo/sub"',
+        'func Hello() { sub.Do() }',
+        'type Thing struct {}'
+      ].join('\n')
     );
+    write(path.join(tmp, 'sub', 'a.go'), ['package sub', 'type X struct {}'].join('\n'));
+    write(path.join(tmp, 'sub', 'b.go'), ['package sub', 'func Do() {}'].join('\n'));
     write(path.join(tmp, 'src', 'lib.rs'), ['use serde::Serialize;', 'pub fn hi() {}', 'pub struct S {}'].join('\n'));
     write(path.join(tmp, 'src', 'A.java'), ['package a;', 'public class A { public void m() {} }'].join('\n'));
     write(path.join(tmp, 'src', 'B.cs'), ['using System;', 'public class B { public void M() {} }'].join('\n'));
@@ -121,14 +141,30 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'requirements.txt'));
       assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'pypi:fastapi'));
       assert.ok(nodes.some((n) => n.node_type === 'Manifest' && n.file_path === 'composer.json'));
-      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'composer:monolog/monolog'));
+	      assert.ok(nodes.some((n) => n.node_type === 'Package' && n.qualified_name === 'composer:monolog/monolog'));
       assert.ok(nodes.some((n) => n.node_type === 'ApiEndpoint' && n.signature === 'GET /health'));
       assert.ok(nodes.some((n) => n.node_type === 'ApiEndpoint' && n.signature === 'GET /ping'));
+      const pySchema = nodes.find((n) => n.node_type === 'Schema' && n.name === 'User' && n.file_path === 'src/app.py');
+      assert.ok(pySchema, 'expected Schema node User (pydantic)');
+      assert.deepEqual(pySchema.allowable_values?.role ?? null, ['admin', 'user']);
+      assert.equal(pySchema.constraints?.age?.min, 0);
+      assert.equal(pySchema.constraints?.age?.max, 120);
       assert.ok(nodes.some((n) => n.node_type === 'Function' && n.name === 'hello' && n.file_path === 'src/mod.ts'));
-      const callB = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB' && n.file_path === 'src/mod.ts');
-      const callB2 = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB2' && n.file_path === 'src/mod.ts');
-      const callStatic = nodes.find((n) => n.node_type === 'Function' && n.name === 'callStatic' && n.file_path === 'src/mod.ts');
-      const fnB = nodes.find((n) => n.node_type === 'Function' && n.name === 'b' && n.file_path === 'src/b.ts');
+	      assert.ok(nodes.some((n) => n.node_type === 'Variable' && n.name === 'MODE' && n.file_path === 'src/mod.ts'));
+	      const schema = nodes.find((n) => n.node_type === 'Schema' && n.name === 'UserSchema' && n.file_path === 'src/mod.ts');
+	      assert.ok(schema, 'expected Schema node UserSchema');
+	      assert.deepEqual(schema.allowable_values?.role ?? null, ['admin', 'user']);
+	      assert.equal(schema.constraints?.age?.min, 0);
+	      assert.equal(schema.constraints?.age?.max, 120);
+	      const joiSchema = nodes.find((n) => n.node_type === 'Schema' && n.name === 'AccountSchema' && n.file_path === 'src/mod.ts');
+	      assert.ok(joiSchema, 'expected Schema node AccountSchema (joi)');
+	      assert.deepEqual(joiSchema.allowable_values?.tier ?? null, ['free', 'pro']);
+	      assert.equal(joiSchema.constraints?.seats?.min, 1);
+	      assert.equal(joiSchema.constraints?.seats?.max, 100);
+	      const callB = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB' && n.file_path === 'src/mod.ts');
+	      const callB2 = nodes.find((n) => n.node_type === 'Function' && n.name === 'callB2' && n.file_path === 'src/mod.ts');
+	      const callStatic = nodes.find((n) => n.node_type === 'Function' && n.name === 'callStatic' && n.file_path === 'src/mod.ts');
+	      const fnB = nodes.find((n) => n.node_type === 'Function' && n.name === 'b' && n.file_path === 'src/b.ts');
       const methodHi = nodes.find((n) => n.node_type === 'Function' && n.name === 'hi' && n.file_path === 'src/mod.ts');
       assert.ok(callB && callB2 && callStatic && fnB && methodHi, 'expected Function nodes callB, callB2, callStatic, b and hi');
       assert.ok(
@@ -174,7 +210,13 @@ test('builtin indexer indexes JS/TS + Python + package.json deps (auto mode fall
         'expected Calls edge_occurrence for callStatic in src/mod.ts'
       );
       assert.ok(nodes.some((n) => n.node_type === 'Class' && n.name === 'Greeter' && n.file_path === 'src/app.py'));
-      assert.ok(nodes.some((n) => n.language === 'go' && n.name === 'Hello'));
+      const goHello = nodes.find((n) => n.node_type === 'Function' && n.language === 'go' && n.name === 'Hello' && n.file_path === 'src/main.go');
+      const goDo = nodes.find((n) => n.node_type === 'Function' && n.language === 'go' && n.name === 'Do' && n.file_path === 'sub/b.go');
+      assert.ok(goHello && goDo, 'expected Go Function nodes Hello and Do');
+      assert.ok(
+        edges.some((e) => e.edge_type === 'Calls' && e.source_symbol_uid === goHello.symbol_uid && e.target_symbol_uid === goDo.symbol_uid),
+        'expected Go Calls edge Hello -> sub.Do'
+      );
       assert.ok(nodes.some((n) => n.language === 'rust' && n.name === 'hi'));
       assert.ok(nodes.some((n) => n.language === 'java' && n.name === 'A'));
       assert.ok(nodes.some((n) => n.language === 'csharp' && n.name === 'B'));

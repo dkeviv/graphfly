@@ -1134,14 +1134,20 @@ The graph builder pipeline is designed as a hardened orchestration loop that run
 - LLM/agent logic is **not** trusted for syntactic extraction because it is probabilistic and can hallucinate or miss edge cases.
 - LLM/agent logic is used later for **semantic enrichment** and doc generation, and must be grounded in evidence (graph node + file path + line ranges + SHA).
 - Graphfly supports a pluggable **AST engine** to upgrade from heuristic adapters to AST‑grade extraction without changing the NDJSON ingest contract.
-- V1 ships with a **vendored TypeScript compiler AST engine** (default) for JS/TS so production deployments do not depend on network installs at runtime; Tree‑sitter is a future engine for broader multi‑language AST coverage.
+- V1 ships with a **Composite AST engine** (default in `GRAPHFLY_MODE=prod`):
+  - **TypeScript compiler API** for JS/TS/TSX (best cross-file resolution + validator extraction).
+  - **Tree-sitter** for the remaining supported languages (uniform multi-language AST coverage).
+- **Fail-safe in prod:** in `GRAPHFLY_MODE=prod` (or when `GRAPHFLY_AST_REQUIRED=1`), the Tree-sitter engine eagerly verifies that all configured grammar modules are installed and fails fast if any are missing.
 
 **Language & manifest coverage (V1 built-in analyzer)**
-- Languages (initial adapters): JavaScript/TypeScript, Python, Go, Rust, Java, C# (plus basic Ruby/PHP heuristics).
+- Languages: Python, JavaScript, TypeScript, TSX, Rust, Go, Java, C, C++, Ruby, PHP, Swift, Kotlin.
 - Manifests (initial adapters): `package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `composer.json`.
 - Coverage expands via modular adapters without changing the NDJSON ingestion contract.
 - Cross-file import edges must resolve to **real files** when possible (e.g., TS import `./x` resolves to `./x.ts` / `./x.tsx` / `./x/index.ts` etc) to keep impacted-node and traversal correctness.
 - Cross-file import edges must also respect **tsconfig/jsconfig** `baseUrl` + `paths` mappings where present (for monorepo aliases like `@/*`).
+- Constraints/allowables extraction from validators is deterministic and contract-first:
+  - JS/TS: `zod` (`z.object`) and `joi` (`Joi.object`) ⇒ emit `Schema` nodes with `constraints` + `allowable_values`.
+  - Python: Pydantic `BaseModel` ⇒ emit `Schema` nodes with `constraints` + `allowable_values`.
 
 **Run structure**
 1. Resolve `(tenant_id, repo_id, sha, branch)` and clone a read-only checkout (ephemeral).

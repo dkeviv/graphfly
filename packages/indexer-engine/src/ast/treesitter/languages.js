@@ -12,7 +12,9 @@ export const TREE_SITTER_LANGUAGE_CONFIG = {
   ruby: { wasm: 'tree-sitter-ruby.wasm', exts: ['.rb'] },
   php: { wasm: 'tree-sitter-php.wasm', exts: ['.php'] },
   c: { wasm: 'tree-sitter-c.wasm', exts: ['.c', '.h'] },
-  cpp: { wasm: 'tree-sitter-cpp.wasm', exts: ['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'] }
+  cpp: { wasm: 'tree-sitter-cpp.wasm', exts: ['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'] },
+  swift: { wasm: 'tree-sitter-swift.wasm', exts: ['.swift'] },
+  kotlin: { wasm: 'tree-sitter-kotlin.wasm', exts: ['.kt', '.kts'] }
 };
 
 const EXT_TO_LANG = new Map();

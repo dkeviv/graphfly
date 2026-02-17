@@ -6,16 +6,18 @@
 | Encrypted secrets store (org-scoped) | `docs/05_SECURITY.md` | NFR-SEC-* | DONE | `npm test` |
 | Orgs + members + RBAC (JWT mode) | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md` | FR-TM-01, FR-TM-02 | DONE | `npm test` |
 | GitHub OAuth connect + repo picker | `docs/02_REQUIREMENTS.md` | FR-GH-02 | DONE | `npm test` (OAuth endpoints + token storage; onboarding repo list + project creation triggers index) |
+| Full index on repo connection (project create) | `docs/02_REQUIREMENTS.md` | FR-CIG-01 | DONE | `npm test` (`test/initial-index-helper.test.js`) |
 | GitHub Reader App install + webhook indexing | `docs/02_REQUIREMENTS.md` | FR-GH-01, FR-GH-02, FR-GH-04, FR-CIG-02 | DONE | `npm test` (webhook verify+dedupe; indexing enqueued; removed files prune graph state) |
 | GitHub Docs App install + docs-repo-only writes | `docs/02_REQUIREMENTS.md` | FR-GH-01B, FR-GH-03, FR-GH-05, FR-DOC-06 | DONE | `npm test` (docs repo verification + docs writer guard + PR creation stubbed when creds missing) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-06, FR-GX-03 | DONE | `npm test` (blast radius traversal + impacted symbols) |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-06 | DONE | `npm test` |
-| AST engines (TypeScript + Tree-sitter multi-language) | `docs/03_TECHNICAL_SPEC.md` + `docs/07_ADMIN_GUIDE.md` | FR-CIG-03 | PARTIAL | `npm test` (**pending**: Tree-sitter parity for Swift/Kotlin + richer entity extraction like variables) |
-| Cross-file symbol resolution | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | PARTIAL | `npm test` (JS/TS strong; **pending**: import→symbol + cross-file calls parity across languages) |
-| Call graph + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | PARTIAL | `npm test` (JS/TS strong; **pending**: cross-file call resolution across languages) |
-| Constraints/allowables extraction (validators) | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-08 | PARTIAL | `npm test` (**pending**: zod/joi/pydantic extraction) |
+| Public Contract Graph enforcement (no code bodies) | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md` | FR-CIG-07, FR-CIG-11 | DONE | `npm test` (`test/no-code-persistence.test.js`, `test/doc-blocks-validate.test.js`) |
+| AST engines (Composite: TS compiler + Tree-sitter multi-language) | `docs/03_TECHNICAL_SPEC.md` + `docs/07_ADMIN_GUIDE.md` | FR-CIG-03 | DONE | `npm test` |
+| Cross-file symbol resolution | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | DONE | `npm test` (`test/indexer-builtin.test.js`) |
+| Call graph + edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | DONE | `npm test` (`test/indexer-builtin.test.js`) |
+| Constraints/allowables extraction (validators) | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-08 | DONE | `npm test` (`test/indexer-builtin.test.js`) |
 | Dev harness: mock indexer PCG enrichment (functions/classes + allowables/constraints) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
-| Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | PARTIAL | `npm test` (edge occurrences persisted + deduped; **pending**: import→symbol parity + cross-file Calls parity for full FR-CIG-04) |
+| Edge occurrence handling (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | DONE | `npm test` (`test/cig-ingest.test.js`, `test/indexer-builtin.test.js`) |
 | Edge occurrence storage (dedupe + occurrences) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Flow entities ingestion + APIs | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-09 | DONE | `npm test` (entrypoints + trace + materialized flow_graph persisted) |
 | Dependency & manifest intelligence (declared/observed/mismatch) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-10 | DONE | `npm test` (built-in indexer emits declared+observed deps + mismatches: declared_but_unused / used_but_undeclared / version_conflict) |
@@ -47,7 +49,7 @@
 | GitHub | Prefer GitHub App installs (Reader + Docs) | Installation callbacks persist IDs; clones + PRs use installation tokens (no PATs) | DONE | `npm test` |
 | GitHub | Webhook routing per org/project | Webhook maps repo→tenant/repo deterministically (by `github_repo_id`); durable delivery dedupe via `webhook_deliveries` | DONE | `npm test` + integration |
 | Indexing | Production indexer (no mock) | Built-in indexer-engine emits NDJSON (streamed) and ingests it; optional external NDJSON indexer supported via `GRAPHFLY_INDEXER_CMD`; mock remains dev-only | DONE | `npm test` + integration |
-| Indexing | AST engine always available | Default `GRAPHFLY_AST_ENGINE=typescript` is present in-repo; disabling requires explicit opt-out; requesting missing engines fails fast in prod | DONE | `npm test` |
+| Indexing | AST engine always available | Default `GRAPHFLY_AST_ENGINE=composite` in prod (TS compiler for JS/TS/TSX + Tree-sitter for others); missing AST modules fail fast in prod | DONE | `npm test` |
 | Jobs | Durable queues + workers | Postgres-backed durable jobs; retries/backoff; worker runners; job status endpoints | DONE | `npm test` + integration |
 | Storage | Required Postgres in prod | `GRAPHFLY_MODE=prod` enforces Postgres + pg queue + jwt auth + secret key | DONE | `npm test` |
 | Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify via server call using docs auth | DONE | `npm test` + integration |
@@ -69,8 +71,8 @@
 | Item | Spec Anchor | Requirement IDs | Status | Evidence / Gate |
 |---|---|---|---|---|
 | Removed files prune graph state | `docs/02_REQUIREMENTS.md` | FR-GH-04 | DONE | `npm test` (`test/removed-files-prune.test.js`) |
-| Cross-file/module resolution (import→file + import→symbol) | `docs/02_REQUIREMENTS.md` | FR-CIG-04 | PARTIAL | `npm test` |
-| Call graph + per-callsite edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | PARTIAL | `npm test` |
+| Cross-file/module resolution (import→file + import→symbol) | `docs/02_REQUIREMENTS.md` | FR-CIG-04 | DONE | `npm test` (`test/indexer-builtin.test.js`) |
+| Call graph + per-callsite edge occurrences | `docs/02_REQUIREMENTS.md` + `docs/03_TECHNICAL_SPEC.md` | FR-CIG-04 | DONE | `npm test` (`test/indexer-builtin.test.js`) |
 | Incremental indexing correctness (importer closure + impacted symbols + diagnostics) | `docs/02_REQUIREMENTS.md` | FR-CIG-02, FR-CIG-12 | DONE | `npm test` (`test/index-diagnostics.test.js`, `test/impact.test.js`) |
 | Manifest/lockfile coverage expansion (npm, Go, Rust, Python, Ruby, Java, C#/.NET, PHP; incl. common lockfiles) | `docs/02_REQUIREMENTS.md` | FR-CIG-10 | DONE | `npm test` |
 | Framework entrypoints + flow fidelity (HTTP + queue + cron across common stacks) | `docs/02_REQUIREMENTS.md` | FR-CIG-09 | DONE | `npm test` |
