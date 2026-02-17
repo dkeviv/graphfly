@@ -145,9 +145,9 @@ This repository includes a local/test mode that avoids external dependencies and
 **OpenClaw remote mode (optional)**
 - Set:
   - `OPENCLAW_GATEWAY_URL`
-  - `OPENCLAW_GATEWAY_TOKEN` (if required by your gateway)
-  - `OPENCLAW_USE_REMOTE=1`
-- If `OPENCLAW_USE_REMOTE` is not set, Graphfly uses a local deterministic OpenClaw-compatible tool loop for tests and offline dev.
+  - `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) (if required by your gateway)
+- By default, if `OPENCLAW_GATEWAY_URL` is set, Graphfly uses the remote OpenClaw gateway (LLM-agentic mode).
+- To force the deterministic local OpenClaw-compatible loop (offline/tests), set `OPENCLAW_USE_REMOTE=0` (or `false`).
 
 **Key environment variables**
 - `SOURCE_REPO_ROOT`: local filesystem path to the **source repo** to index (read-only). Default: `fixtures/sample-repo`.

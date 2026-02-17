@@ -1,6 +1,7 @@
 import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
 import { createDocStoreFromEnv } from '../../../packages/stores/src/doc-store.js';
 import { createQueueFromEnv } from '../../../packages/stores/src/queue.js';
+import { startQueueHeartbeat } from '../../../packages/stores/src/queue-heartbeat.js';
 import { createIndexerWorker } from './indexer-worker.js';
 import { createRealtimePublisherFromEnv } from '../../../packages/realtime/src/publisher.js';
 
@@ -28,6 +29,7 @@ async function main() {
   }
 
   const worker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
+  const lockMs = 5 * 60 * 1000;
 
   // Phase-1: single concurrency. Supports:
   // - single-tenant mode: set TENANT_ID (strict RLS lane)
@@ -35,8 +37,8 @@ async function main() {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const leased = configuredTenantId
-      ? await indexQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs: 5 * 60 * 1000 })
-      : await indexQueue.leaseAny({ limit: 1, lockMs: 5 * 60 * 1000 });
+      ? await indexQueue.lease({ tenantId: configuredTenantId, limit: 1, lockMs })
+      : await indexQueue.leaseAny({ limit: 1, lockMs });
     const job = Array.isArray(leased) ? leased[0] : null;
     if (!job) {
       await sleep(750);
@@ -48,6 +50,15 @@ async function main() {
       await sleep(250);
       continue;
     }
+    const hb = startQueueHeartbeat({
+      queue: indexQueue,
+      tenantId,
+      jobId: job.id,
+      lockToken: job.lockToken,
+      lockMs,
+      onLostLock: () => console.warn(`WARN: lost queue lock for index job ${job.id}`),
+      onError: (e) => console.warn(`WARN: queue heartbeat failed for index job ${job.id}: ${String(e?.message ?? e)}`)
+    });
     try {
       await worker.handle({ id: job.id, payload: job.payload });
       await indexQueue.complete({ tenantId, jobId: job.id, lockToken: job.lockToken });
@@ -59,6 +70,8 @@ async function main() {
         errorMessage: String(err?.message ?? err),
         backoffSec: 30
       });
+    } finally {
+      await hb.stop();
     }
   }
 }

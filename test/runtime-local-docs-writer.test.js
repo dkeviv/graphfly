@@ -45,7 +45,6 @@ test('runtime: local docs repo path writes flow docs on a new branch', async () 
   await rt.runToIdle();
 
   const branch = git(docsRepoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  assert.ok(branch.startsWith('graphfly/docs/'));
+  assert.ok(branch.startsWith('docs/update-'));
   assert.ok(fs.existsSync(path.join(docsRepoPath, 'flows/http-get-health.md')));
 });
-

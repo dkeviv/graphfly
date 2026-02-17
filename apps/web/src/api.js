@@ -70,6 +70,10 @@ export class ApiClient {
     return this.getJson(`/docs/block?tenantId=${encodeURIComponent(this.tenantId)}&repoId=${encodeURIComponent(this.repoId)}&blockId=${encodeURIComponent(blockId)}`);
   }
 
+  regenerateDocBlock({ blockId }) {
+    return this.sendJson('POST', '/docs/regenerate', { tenantId: this.tenantId, repoId: this.repoId, blockId });
+  }
+
   getCurrentOrg() {
     return this.getJson(`/api/v1/orgs/current?tenantId=${encodeURIComponent(this.tenantId)}`);
   }

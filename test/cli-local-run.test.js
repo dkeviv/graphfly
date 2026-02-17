@@ -46,7 +46,7 @@ test('CLI local-run auto-detects source git root and writes docs to local docs r
 
   assert.ok(fs.existsSync(path.join(docsRepo, 'flows/http-get-health.md')));
   const branch = git(docsRepo, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  assert.ok(branch.startsWith('graphfly/docs/'));
+  assert.ok(branch.startsWith('docs/update-'));
 });
 
 test('CLI local-run rejects docs repo path inside source repo', async () => {

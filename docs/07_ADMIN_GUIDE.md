@@ -209,6 +209,45 @@ Backfill control:
   - Computes missing embeddings for nodes that have `embedding_text` but no valid embedding.
   - Uses the configured embeddings provider (deterministic or HTTP).
 
+### 2.6D Documentation agent worker (recommended)
+
+Graphfly runs a documentation worker that updates **doc blocks** and opens PRs in the configured **docs repo only**.
+
+Docs output layout (Phase‑1):
+- `flows/` — flow entrypoints (HTTP routes, queue jobs, CLIs)
+- `contracts/` — public contracts (exported functions/classes, modules, schemas)
+
+Enable by running the worker:
+- `npm run worker:doc`
+
+Agent runtime modes:
+- **LLM-backed (remote)**: set `OPENCLAW_GATEWAY_URL` (token optional).
+- **Deterministic local loop (offline/tests)**: unset `OPENCLAW_GATEWAY_URL` or set `OPENCLAW_USE_REMOTE=0` (or `false`).
+
+Key env vars:
+- `OPENCLAW_GATEWAY_URL` — remote agent gateway base URL (enables LLM-agentic mode by default when set)
+- `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) — optional bearer token for your gateway
+- `OPENCLAW_MODEL` — optional model identifier (gateway-defined)
+- `OPENCLAW_AGENT_ID` — optional agent id (for routing/quotas)
+- `OPENCLAW_USE_REMOTE=0|false` — force deterministic local mode even when a gateway URL is configured
+
+Doc agent guardrails (recommended):
+- `GRAPHFLY_DOC_AGENT_LOCK_TTL_MS` (default `1800000`) — per-repo doc generation lock TTL (serializes runs)
+- `GRAPHFLY_DOC_AGENT_MAX_TURNS` (default `20`) — hard cap on agent loop turns
+- `GRAPHFLY_DOC_AGENT_MAX_TOOL_CALLS` (default `8000`) — hard cap on total tool calls per run
+- `GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS` (default `4`) — remote gateway HTTP retry attempts (429/5xx)
+- `GRAPHFLY_DOC_AGENT_RETRY_BASE_MS` (default `250`)
+- `GRAPHFLY_DOC_AGENT_RETRY_MAX_MS` (default `5000`)
+- `GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES` / `GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES` — truncation caps for `flows_trace`
+- `GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_NODES` — cap on evidence links derived from a trace (local deterministic mode)
+- `GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_LINKS` — cap on evidence links persisted per doc block
+- `GRAPHFLY_DOC_AGENT_MAX_BLOCK_CHARS` — reject oversized doc blocks
+- `GRAPHFLY_DOC_AGENT_MAX_EXISTING_BLOCK_CHARS` — truncate existing block content returned to the agent
+
+Manual block regeneration (FR-DOC-07):
+- `POST /docs/regenerate` (admin-only) with `{ tenantId, repoId, blockId }` enqueues a single-target doc job and opens a new PR.
+- The web UI exposes this as **Regenerate (Admin)** on the Doc Block detail view.
+
 ### 2.7 Docs sync fence (recommended)
 To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:
 - `GRAPHFLY_CLOUD_SYNC_REQUIRED=1`
@@ -350,7 +389,7 @@ Monitor:
 ### 6.5 Docs PR health
 Monitor:
 - PR creation failures
-- doc block validation failures (must reject code fences)
+- doc block validation failures (must reject code fences, indented code blocks, and code-like multi-line content)
 
 ---
 
@@ -394,3 +433,13 @@ Likely causes:
 - Workers not running
 - Wrong `TENANT_ID` for Phase‑1 worker loop
 - DB connectivity or RLS misconfiguration
+
+### 8.4 “Jobs stuck active”
+Likely causes:
+- Worker crashed mid-job (process kill, OOM, deploy restart)
+- Worker cannot renew job leases (DB connectivity issues)
+
+Notes / recovery:
+- Jobs are leased with a TTL (`lock_expires_at`). When the TTL expires, another worker can re-lease the job.
+- Confirm workers are running and can reach the database.
+- Inspect `jobs` rows for `status='active'` with `lock_expires_at <= now()` to find stale locks.

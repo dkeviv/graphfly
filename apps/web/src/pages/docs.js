@@ -6,7 +6,7 @@ export function renderDocsPage({ state, pageEl }) {
   const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
   const listEl = el('ul', { class: 'list' });
-  const detailEl = el('div', { class: 'card' }, [
+  let detailEl = el('div', { class: 'card' }, [
     el('div', { class: 'card__title' }, ['Doc Block Detail']),
     el('div', { class: 'small' }, ['Select a block to view evidence (contracts + locations only).'])
   ]);
@@ -62,20 +62,67 @@ export function renderDocsPage({ state, pageEl }) {
           class: 'list__item',
           onclick: async () => {
             const d = await api.getDocBlock({ blockId: b.id });
-            detailEl.replaceWith(
-              el('div', { class: 'card' }, [
-                el('div', { class: 'card__title' }, ['Doc Block Detail']),
-                el('div', { class: 'h' }, [b.docFile]),
-                el('div', { class: 'small k' }, [`${b.blockType} • ${b.status}`]),
-                el('div', { class: 'card__title' }, ['Evidence']),
-                el('ul', { class: 'list' }, (d.evidence ?? []).map((ev) =>
-                  el('li', { class: 'list__item' }, [
-                    el('div', { class: 'h' }, [ev.symbolUid]),
-                    el('div', { class: 'small k' }, [`${ev.filePath ?? ''}:${ev.lineStart ?? ''}`])
-                  ])
-                ))
-              ])
-            );
+            const block = d?.block ?? null;
+            const evidence = Array.isArray(d?.evidence) ? d.evidence : [];
+            const regenStatusEl = el('div', { class: 'small k' }, ['']);
+            const regenBtn = el('button', { class: 'button' }, ['Regenerate (Admin)']);
+            regenBtn.onclick = async (evt) => {
+              evt?.preventDefault?.();
+              evt?.stopPropagation?.();
+              regenBtn.disabled = true;
+              regenStatusEl.textContent = 'Enqueuing regeneration…';
+              try {
+                const out = await api.regenerateDocBlock({ blockId: b.id });
+                regenStatusEl.textContent = `Enqueued: ${out?.enqueued ?? 1} targets.`;
+              } catch (e) {
+                regenStatusEl.textContent = `Regenerate failed: ${String(e?.message ?? e)}`;
+              } finally {
+                regenBtn.disabled = false;
+              }
+            };
+
+            const evidenceListEl = el('ul', { class: 'list' }, []);
+            const contractCache = new Map();
+
+            for (const ev of evidence) {
+              const uid = ev?.symbolUid ?? null;
+              const nameEl = el('div', { class: 'h' }, [uid ?? '']);
+              const sigEl = el('div', { class: 'small k' }, ['Loading contract…']);
+              const locEl = el('div', { class: 'small k' }, [`${ev?.filePath ?? ''}:${ev?.lineStart ?? ''}-${ev?.lineEnd ?? ev?.lineStart ?? ''}`]);
+              evidenceListEl.appendChild(el('li', { class: 'list__item' }, [nameEl, sigEl, locEl]));
+
+              if (!uid) {
+                sigEl.textContent = 'Contract unavailable';
+                continue;
+              }
+              if (!contractCache.has(uid)) contractCache.set(uid, api.contractsGet({ symbolUid: uid }));
+              contractCache
+                .get(uid)
+                .then((c) => {
+                  const qn = c?.qualifiedName ?? uid;
+                  nameEl.textContent = qn;
+                  const sig = c?.signature ?? null;
+                  sigEl.textContent = sig ? `Signature: ${sig}` : 'Signature: —';
+                })
+                .catch((e) => {
+                  sigEl.textContent = `Contract unavailable: ${String(e?.message ?? e)}`;
+                });
+            }
+
+            const nextDetail = el('div', { class: 'card' }, [
+              el('div', { class: 'card__title' }, ['Doc Block Detail']),
+              el('div', { class: 'h' }, [b.docFile]),
+              el('div', { class: 'small k' }, [`${b.blockType} • ${b.status}`]),
+              el('div', { class: 'row' }, [regenBtn]),
+              regenStatusEl,
+              el('div', { class: 'card__title' }, ['Content (Markdown)']),
+              el('pre', { class: 'pre' }, [block?.content ?? '']),
+              el('div', { class: 'card__title' }, ['Evidence (Contracts + Locations)']),
+              evidenceListEl
+            ]);
+
+            detailEl.replaceWith(nextDetail);
+            detailEl = nextDetail;
           }
         }, [
           el('div', { class: 'h' }, [b.docFile]),

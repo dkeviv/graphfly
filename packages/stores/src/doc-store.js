@@ -25,6 +25,14 @@ export class PgDocStorePool {
     });
   }
 
+  async getBlockByKey(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgDocStore({ client, repoFullName: this._repoFullName });
+      return store.getBlockByKey(args);
+    });
+  }
+
   async getBlock(args) {
     const { tenantId } = args ?? {};
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {

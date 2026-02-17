@@ -90,6 +90,17 @@ export class PgDocStore {
     return Array.isArray(res.rows) ? res.rows : [];
   }
 
+  async getBlockByKey({ tenantId, repoId, docFile, blockAnchor }) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    if (!isNonEmptyString(docFile)) throw new Error('docFile required');
+    if (!isNonEmptyString(blockAnchor)) throw new Error('blockAnchor required');
+    const res = await this._c.query(
+      `SELECT * FROM doc_blocks WHERE tenant_id=$1 AND repo_id=$2 AND doc_file=$3 AND block_anchor=$4 LIMIT 1`,
+      [tenantId, repoId, docFile, blockAnchor]
+    );
+    return res.rows?.[0] ?? null;
+  }
+
   async getBlock({ tenantId, repoId, blockId }) {
     await this._ensureOrgRepo({ tenantId, repoId });
     const res = await this._c.query(`SELECT * FROM doc_blocks WHERE tenant_id=$1 AND repo_id=$2 AND id=$3 LIMIT 1`, [

@@ -28,14 +28,17 @@ export class LocalDocsWriter {
     assertDocsRepoOnlyWrite({ configuredDocsRepoFullName: this._docsRepo, targetRepoFullName });
     if (!title || !branchName) throw new Error('missing_title_or_branch');
     if (!Array.isArray(files)) throw new Error('files must be array');
+    if (files.length === 0) {
+      return { ok: true, targetRepoFullName, title, body: body ?? '', branchName, filesCount: 0, commit: null, empty: true };
+    }
 
     // Ensure repo exists and is a git repo.
     runGit(['rev-parse', '--is-inside-work-tree'], this._path);
 
-    // Create branch (fail if it already exists).
+    // Create branch (or re-use if it already exists).
     const existing = runGit(['branch', '--list', branchName], this._path);
-    if (existing) throw new Error('branch_already_exists');
-    runGit(['checkout', '-b', branchName], this._path);
+    if (existing) runGit(['checkout', branchName], this._path);
+    else runGit(['checkout', '-b', branchName], this._path);
 
     // Write files.
     for (const f of files) {
@@ -57,4 +60,3 @@ export class LocalDocsWriter {
     return { ok: true, targetRepoFullName, title, body: body ?? '', branchName, filesCount: files.length, commit };
   }
 }
-

@@ -9,6 +9,7 @@
 | Full index on repo connection (project create) | `docs/02_REQUIREMENTS.md` | FR-CIG-01 | DONE | `npm test` (`test/initial-index-helper.test.js`) |
 | GitHub Reader App install + webhook indexing | `docs/02_REQUIREMENTS.md` | FR-GH-01, FR-GH-02, FR-GH-04, FR-CIG-02 | DONE | `npm test` (webhook verify+dedupe; indexing enqueued; removed files prune graph state) |
 | GitHub Docs App install + docs-repo-only writes | `docs/02_REQUIREMENTS.md` | FR-GH-01B, FR-GH-03, FR-GH-05, FR-DOC-06 | DONE | `npm test` (docs repo verification + docs writer guard + PR creation stubbed when creds missing) |
+| Docs repo creation (onboarding) | `docs/02_REQUIREMENTS.md` | FR-GH-06 | PENDING | TBD (e2e) |
 | CIG core (identity/store/blast radius) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-06, FR-GX-03 | DONE | `npm test` (blast radius traversal + impacted symbols) |
 | NDJSON ingestion (node/edge/edge_occurrence + forward-compatible types) | `docs/01_ARCHITECTURE.md` | FR-CIG-06 | DONE | `npm test` |
 | Public Contract Graph enforcement (no code bodies) | `docs/02_REQUIREMENTS.md` + `docs/05_SECURITY.md` | FR-CIG-07, FR-CIG-11 | DONE | `npm test` (`test/no-code-persistence.test.js`, `test/doc-blocks-validate.test.js`) |
@@ -29,8 +30,13 @@
 | Impacted nodes (“blast radius”) correctness | `docs/02_REQUIREMENTS.md` | FR-GX-03 | DONE | `npm test` |
 | Incremental correctness diagnostics | `docs/02_REQUIREMENTS.md` | FR-CIG-12 | DONE | `npm test` |
 | GitHub Reader App integration (webhooks + clone @sha) | `docs/02_REQUIREMENTS.md` | FR-CIG-02 | DONE | `npm test` (webhook → index → docs pipeline wired; ephemeral cloneAtSha path; supports `GITHUB_READER_TOKEN` or GitHub App installation token (`GITHUB_APP_ID` + private key + install id)) |
-| Docs repo onboarding + Docs App (docs-repo-only writes) | `docs/02_REQUIREMENTS.md` | FR-DOC-* | DONE | `npm test` (docs-repo-only guard + LocalDocsWriter; GitHubDocsWriter can open PR via REST when `GITHUB_DOCS_TOKEN` configured; org/repo onboarding APIs added) |
-| Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02 | DONE | `npm test` |
+| Doc agent: initial + surgical docs PRs | `docs/02_REQUIREMENTS.md` | FR-DOC-01, FR-DOC-04, FR-DOC-05, FR-DOC-06, FR-DOC-07 | DONE | `npm test` (docs-generate lock; tool/turn budgets; gateway retry; trace/evidence caps; docs-repo-only guard; `flows/` + `contracts/` layout; `test/doc-agent-guardrails.test.js`) |
+| Doc blocks + evidence model (contract-first; no code bodies) | `docs/02_REQUIREMENTS.md` | FR-DOC-02, FR-DOC-03 | DONE | `npm test` |
+| Docs repository browser (read-only) | `docs/02_REQUIREMENTS.md` | FR-DOC-08 | PENDING | TBD |
+| Manual documentation editing (UI + PR) | `docs/02_REQUIREMENTS.md` | FR-DOC-09 | PENDING | TBD |
+| Documentation assistant (explain + navigate) | `docs/02_REQUIREMENTS.md` | FR-AST-01 | PENDING | TBD |
+| Documentation assistant (draft + edit via PR) | `docs/02_REQUIREMENTS.md` | FR-AST-02 | PENDING | TBD |
+| PgQueue stale-lock recovery + heartbeat | `docs/03_TECHNICAL_SPEC.md` + `docs/06_OPERATIONS.md` | N/A | DONE | `npm test` (`test/pg-queue-stale-lock.test.js`) |
 | OpenClaw agent runtime integration (tool loop) | `docs/03_TECHNICAL_SPEC.md` | N/A | DONE | `npm test` |
 | Graph enrichment agent (flow_summary annotations) | `docs/03_TECHNICAL_SPEC.md` | FR-CIG-09, FR-CIG-11 | DONE | `npm test` (graph worker enqueued after index; annotations stored separately from canonical graph) |
 | Graph builder agent hardening (locks/retries/compaction/redaction) | `docs/03_TECHNICAL_SPEC.md` + `docs/07_ADMIN_GUIDE.md` | FR-CIG-11 | DONE | `npm test` (agent locks; HTTP/tool retry budgets; trace compaction; tool output redaction) |
@@ -53,6 +59,7 @@
 | Jobs | Durable queues + workers | Postgres-backed durable jobs; retries/backoff; worker runners; job status endpoints; workers support single-tenant (`TENANT_ID`) and multi-tenant (`leaseAny`) | DONE | `npm test` + integration |
 | Storage | Required Postgres in prod | `GRAPHFLY_MODE=prod` enforces Postgres + pg queue + jwt auth + secret key | DONE | `npm test` |
 | Docs | Docs repo selection UI + verification | Pick docs repo from GitHub; verify via server call using docs auth | DONE | `npm test` + integration |
+| Docs | Doc agent guardrails | Serialize doc runs per repo; enforce budgets; retry transient gateway failures; reject code-like doc blocks | DONE | `npm test` |
 | Billing | Stripe customer lifecycle | Auto-create + persist Stripe customer when missing; checkout/portal require stored customer | DONE | `npm test` |
 | Security | Secrets management hardening | Keyring-based secret key rotation + rewrap endpoint; no tokens in logs; RLS verified in CI | DONE | `npm test` + CI |
 | Observability | Metrics + tracing | Structured JSON logs (API) + request IDs + Prometheus `/metrics` (token protected) + Admin dashboard | DONE | `npm test` + integration |

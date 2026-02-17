@@ -86,6 +86,19 @@ export class GitHubDocsWriter {
     assertDocsRepoOnlyWrite({ configuredDocsRepoFullName: this._docsRepo, targetRepoFullName });
     if (!title || !branchName) throw new Error('missing_title_or_branch');
     if (!Array.isArray(files)) throw new Error('files must be array');
+    if (files.length === 0) {
+      return {
+        ok: true,
+        empty: true,
+        targetRepoFullName,
+        title,
+        body: body ?? '',
+        branchName,
+        filesCount: 0,
+        prNumber: null,
+        prUrl: null
+      };
+    }
 
     const token = this._token || (await this._resolveTokenFromInstallation());
     if (!token) {

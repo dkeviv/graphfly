@@ -11,6 +11,12 @@ export class InMemoryDocStore {
     this._prRuns = new Map(); // repoKey -> Map(prRunId -> prRun)
   }
 
+  getBlockByKey({ tenantId, repoId, docFile, blockAnchor }) {
+    const rk = repoKey({ tenantId, repoId });
+    const id = hashString(`${docFile}::${blockAnchor}`);
+    return this._blocks.get(rk)?.get(id) ?? null;
+  }
+
   upsertBlock({ tenantId, repoId, docFile, blockAnchor, blockType, content, status = 'fresh' }) {
     const rk = repoKey({ tenantId, repoId });
     if (!this._blocks.has(rk)) this._blocks.set(rk, new Map());

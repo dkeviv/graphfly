@@ -2,6 +2,14 @@ import { runOpenClawToolLoop } from '../../../packages/openclaw-client/src/openr
 import { renderContractDocBlock } from './doc-block-render.js';
 import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/validate.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
+import { redactSecrets } from '../../../packages/security/src/redact.js';
+
+function safeString(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  return redactSecrets(s);
+}
 
 function makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }) {
   let callCount = 0;
@@ -93,6 +101,9 @@ export async function generateFlowDocWithOpenClaw({
           symbolUid: n.symbol_uid,
           qualifiedName: n.qualified_name,
           signature: n.signature ?? null,
+          parameters: n.parameters ?? null,
+          returnType: n.return_type ?? null,
+          docstring: safeString(n.docstring ?? null),
           contract: n.contract ?? null,
           constraints: n.constraints ?? null,
           allowableValues: n.allowable_values ?? null,
@@ -113,16 +124,46 @@ export async function generateFlowDocWithOpenClaw({
         required: ['startSymbolUid']
       },
       handler: async ({ startSymbolUid, depth = 3 }) => {
-        return traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
+        const out = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
+        return {
+          startSymbolUid: out.startSymbolUid,
+          depth: out.depth,
+          nodes: (out.nodes ?? []).map((n) => ({
+            symbol_uid: n.symbol_uid,
+            qualified_name: n.qualified_name ?? null,
+            node_type: n.node_type ?? null,
+            visibility: n.visibility ?? null,
+            signature: n.signature ?? null,
+            contract: n.contract ?? null,
+            constraints: n.constraints ?? null,
+            allowable_values: n.allowable_values ?? null,
+            file_path: n.file_path ?? null,
+            line_start: n.line_start ?? null,
+            line_end: n.line_end ?? null
+          })),
+          edges: (out.edges ?? []).map((e) => ({
+            source_symbol_uid: e.source_symbol_uid,
+            edge_type: e.edge_type,
+            target_symbol_uid: e.target_symbol_uid
+          }))
+        };
       }
     }
   ];
 
-  const gatewayUrl = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? 'http://local-openclaw.invalid';
-  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? '';
+  const configuredGatewayUrlRaw = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? null;
+  const configuredGatewayUrl = typeof configuredGatewayUrlRaw === 'string' ? configuredGatewayUrlRaw.trim() : null;
+  const gatewayUrl = configuredGatewayUrl ? configuredGatewayUrl : 'http://local-openclaw.invalid';
+  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.OPENCLAW_TOKEN ?? '';
   const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'doc-agent';
   const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const useRemote = Boolean(openclaw?.useRemote ?? (process.env.OPENCLAW_USE_REMOTE === '1' && process.env.OPENCLAW_GATEWAY_URL));
+  const envRemote = String(process.env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
+  const useRemote =
+    typeof openclaw?.useRemote === 'boolean'
+      ? openclaw.useRemote
+      : envRemote === '0' || envRemote === 'false'
+        ? false
+        : Boolean(configuredGatewayUrl);
   const requestJson =
     openclaw?.requestJson ??
     (useRemote ? undefined : makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }));

@@ -200,6 +200,10 @@ The tables below capture the primary user journeys end-to-end. These are the flo
 
 #### Documentation (Evidence-backed)
 
+**Phase-1 implementation note (this repo):**
+- Doc block detail renders a read-only Markdown preview and an Evidence list that inlines contract metadata (e.g., signature) plus file+line locations (no source code bodies/snippets).
+- Regeneration is exposed as **Regenerate (Admin)** in the doc block detail view (admin-only in Phase‑1).
+
 | Flow ID | Actor | Entry | Steps (happy path) | Success |
 |---|---|---|---|---|
 | UF-DOCS-01 | Any user | `/repos/:repoId/docs` | Filter by status/file/type → open a block | User reaches doc block detail |

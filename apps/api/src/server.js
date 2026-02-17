@@ -203,7 +203,7 @@ const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
       });
 };
 const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
-const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage, realtime });
+const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage, realtime, lockStore });
 
 async function maybeDrainOnce() {
   if (typeof indexQueue?.drain !== 'function' || typeof docQueue?.drain !== 'function' || typeof graphQueue?.drain !== 'function') return;
@@ -1293,11 +1293,111 @@ router.post('/coverage/document', async (req) => {
   return { status: 200, body: { ok: true, enqueued: symbolUids.length } };
 });
 
+router.post('/docs/regenerate', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, OrgRoles.ADMIN);
+  if (forbid) return forbid;
+  const repoId = req.body?.repoId ?? DEFAULT_REPO_ID;
+  const blockId = req.body?.blockId ?? null;
+  if (typeof blockId !== 'string' || blockId.length === 0) return { status: 400, body: { error: 'blockId is required' } };
+
+  const block = await docStore.getBlock({ tenantId, repoId, blockId });
+  if (!block) return { status: 404, body: { error: 'not_found' } };
+  const evidence = await docStore.getEvidence({ tenantId, repoId, blockId });
+
+  const symbolUids = Array.from(
+    new Set(
+      (evidence ?? [])
+        .map((e) => e?.symbol_uid ?? e?.symbolUid ?? null)
+        .filter((uid) => typeof uid === 'string' && uid.length > 0)
+    )
+  );
+
+  let entrypointKeys = null;
+  const docFile = block.doc_file ?? block.docFile ?? null;
+  const blockType = block.block_type ?? block.blockType ?? null;
+  if (blockType === 'flow' && typeof docFile === 'string' && docFile.startsWith('flows/')) {
+    const entrypoints = await store.listFlowEntrypoints({ tenantId, repoId });
+    const byDocFile = new Map(
+      entrypoints.map((ep) => [
+        `flows/${String(ep.entrypoint_key).toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-+|-+$/g, '')}.md`,
+        ep.entrypoint_key
+      ])
+    );
+    const k = byDocFile.get(docFile) ?? null;
+    if (k) entrypointKeys = [k];
+  }
+
+  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+  const effectiveDocsRepoFullName = org?.docsRepoFullName ?? docsRepoFullName;
+  if (!effectiveDocsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+
+  if (!entrypointKeys && symbolUids.length === 0) {
+    return { status: 400, body: { error: 'block_has_no_regeneratable_evidence' } };
+  }
+
+  docQueue.add('doc.generate', {
+    tenantId,
+    repoId,
+    sha: 'manual',
+    changedFiles: [],
+    docsRepoFullName: effectiveDocsRepoFullName,
+    entrypointKeys,
+    symbolUids
+  });
+  await maybeDrainOnce();
+  return { status: 200, body: { ok: true, blockId, enqueued: (entrypointKeys?.length ?? 0) + symbolUids.length } };
+});
+
+function normalizeDocBlockRow(b) {
+  if (!b || typeof b !== 'object') return null;
+  return {
+    id: b.id ?? b.blockId ?? b.block_id ?? null,
+    docFile: b.doc_file ?? b.docFile ?? null,
+    blockAnchor: b.block_anchor ?? b.blockAnchor ?? null,
+    blockType: b.block_type ?? b.blockType ?? null,
+    status: b.status ?? null,
+    content: b.content ?? null,
+    contentHash: b.content_hash ?? b.contentHash ?? null,
+    lastIndexSha: b.last_index_sha ?? b.lastIndexSha ?? null,
+    lastPrId: b.last_pr_id ?? b.lastPrId ?? null,
+    createdAt: b.created_at ?? b.createdAt ?? null,
+    updatedAt: b.updated_at ?? b.updatedAt ?? null
+  };
+}
+
+function normalizeEvidenceRow(e) {
+  if (!e || typeof e !== 'object') return null;
+  return {
+    symbolUid: e.symbol_uid ?? e.symbolUid ?? null,
+    qualifiedName: e.qualified_name ?? e.qualifiedName ?? null,
+    filePath: e.file_path ?? e.filePath ?? null,
+    lineStart: e.line_start ?? e.lineStart ?? null,
+    lineEnd: e.line_end ?? e.lineEnd ?? null,
+    sha: e.sha ?? null,
+    evidenceKind: e.evidence_kind ?? e.evidenceKind ?? null,
+    evidenceWeight: e.evidence_weight ?? e.evidenceWeight ?? null
+  };
+}
+
 router.get('/docs/blocks', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
   const status = req.query.status ?? null;
-  return { status: 200, body: { blocks: await docStore.listBlocks({ tenantId, repoId, status }) } };
+  const blocks = await docStore.listBlocks({ tenantId, repoId, status });
+  return {
+    status: 200,
+    body: {
+      blocks: (blocks ?? [])
+        .map((b) => {
+          const out = normalizeDocBlockRow(b);
+          if (!out) return null;
+          out.content = null; // list view: omit heavy markdown payload; fetch via /docs/block
+          return out;
+        })
+        .filter(Boolean)
+    }
+  };
 });
 
 router.get('/docs/block', async (req) => {
@@ -1307,7 +1407,14 @@ router.get('/docs/block', async (req) => {
   if (typeof blockId !== 'string' || blockId.length === 0) return { status: 400, body: { error: 'blockId is required' } };
   const block = await docStore.getBlock({ tenantId, repoId, blockId });
   if (!block) return { status: 404, body: { error: 'not_found' } };
-  return { status: 200, body: { block, evidence: await docStore.getEvidence({ tenantId, repoId, blockId }) } };
+  const evidence = await docStore.getEvidence({ tenantId, repoId, blockId });
+  return {
+    status: 200,
+    body: {
+      block: normalizeDocBlockRow(block),
+      evidence: (evidence ?? []).map(normalizeEvidenceRow).filter(Boolean)
+    }
+  };
 });
 
 router.get('/pr-runs', async (req) => {
