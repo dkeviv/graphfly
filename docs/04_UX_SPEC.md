@@ -92,7 +92,8 @@ Build custom for:
 ### 2.1 Navigation
 
 **Phase-1 implementation note (this repo):** the current UI is a lightweight single-page app using hash routes:
-- `#/onboarding` — GitHub connect, docs repo selection, project creation (auto index + docs)
+- `#/dashboard` — enterprise landing (org/project context + next actions)
+- `#/onboarding` — Setup (GitHub connect, docs repo selection, project creation; auto index + docs)
 - `#/graph` — search + focus mode explorer, with live indexing banner
 - `#/docs` — doc blocks list + evidence detail, with live agent activity feed
 - `#/coverage` — coverage KPIs + undocumented entry points + unresolved imports; “Document Selected”
@@ -182,6 +183,7 @@ The tables below capture the primary user journeys end-to-end. These are the flo
 
 | Flow ID | Actor | Entry | Steps (happy path) | Success |
 |---|---|---|---|---|
+| UF-DB-00 | Any user | `#/dashboard` | See org + project context → follow “Next action” CTAs | User reaches value quickly without hunting |
 | UF-DB-01 | Any user | `/dashboard` | Click stat cards (Graph/Docs/Last PR/Stale) | Deep-links to relevant view with correct filters |
 | UF-DB-02 | Developer+ | `/dashboard` | Click **Document** on an undocumented entry point | Doc agent run triggered; status visible; PR opened |
 | UF-DB-03 | Developer+ | `/dashboard` | Select multiple entry points → **Document All Selected** | Bulk doc generation runs; PR(s) opened |
