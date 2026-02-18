@@ -25,6 +25,14 @@ export class PgDocStorePool {
     });
   }
 
+  async listBlocksBySymbolUid(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgDocStore({ client, repoFullName: this._repoFullName });
+      return store.listBlocksBySymbolUid(args);
+    });
+  }
+
   async getBlockByKey(args) {
     const { tenantId } = args ?? {};
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
@@ -94,6 +102,14 @@ export class PgDocStorePool {
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
       const store = new PgDocStore({ client, repoFullName: this._repoFullName });
       return store.getPrRun(args);
+    });
+  }
+
+  async listDocFilesByPrRunId(args) {
+    const { tenantId } = args ?? {};
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgDocStore({ client, repoFullName: this._repoFullName });
+      return store.listDocFilesByPrRunId(args);
     });
   }
 }

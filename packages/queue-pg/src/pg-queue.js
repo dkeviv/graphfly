@@ -244,4 +244,43 @@ export class PgQueue {
       updatedAt: r.updated_at
     }));
   }
+
+  async cancel({ tenantId, jobId, reason = 'canceled' } = {}) {
+    assertUuid(tenantId, 'tenantId');
+    assertUuid(jobId, 'jobId');
+    const msg = String(reason ?? 'canceled').slice(0, 1000);
+    const res = await this._c.query(
+      `UPDATE jobs
+       SET status='dead',
+           completed_at=now(),
+           last_error=$4,
+           locked_at=NULL,
+           lock_expires_at=NULL,
+           lock_token=NULL,
+           updated_at=now()
+       WHERE tenant_id=$1 AND id=$2 AND queue_name=$3 AND status IN ('queued','active')`,
+      [tenantId, jobId, this._q, msg]
+    );
+    return { ok: true, updated: (res.rowCount ?? 0) > 0 };
+  }
+
+  async retry({ tenantId, jobId, resetAttempts = true } = {}) {
+    assertUuid(tenantId, 'tenantId');
+    assertUuid(jobId, 'jobId');
+    const res = await this._c.query(
+      `UPDATE jobs
+       SET status='queued',
+           run_at=now(),
+           completed_at=NULL,
+           last_error=NULL,
+           locked_at=NULL,
+           lock_expires_at=NULL,
+           lock_token=NULL,
+           attempts=CASE WHEN $4 THEN 0 ELSE attempts END,
+           updated_at=now()
+       WHERE tenant_id=$1 AND id=$2 AND queue_name=$3 AND status IN ('dead','failed')`,
+      [tenantId, jobId, this._q, Boolean(resetAttempts)]
+    );
+    return { ok: true, updated: (res.rowCount ?? 0) > 0 };
+  }
 }

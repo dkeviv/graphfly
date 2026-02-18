@@ -24,7 +24,12 @@ This guide is the canonical checklist for deploying, operating, and maintaining 
 - PostgreSQL (RLS enforced): orgs, repos, graph, docs, jobs, audit log, webhook dedupe, billing
 
 **Queues (prod)**
-- Postgres-backed queue (`jobs` table) with leasing (Phase‑1: one job at a time per tenant).
+- Postgres-backed queue (`jobs` table) with leasing.
+- Queues: `index`, `graph`, `doc` (index → optional graph enrichment → docs PR).
+- Admin endpoints (JWT + admin role required):
+  - `GET /api/v1/jobs` (list jobs by status)
+  - `POST /api/v1/jobs/:queue/:jobId/retry`
+  - `POST /api/v1/jobs/:queue/:jobId/cancel`
 
 ---
 
@@ -91,6 +96,10 @@ Recommended explicit store modes:
 ### 2.5 Docs output
 - `DOCS_REPO_FULL_NAME` (fallback when org has not set `docsRepoFullName`)
 - `DOCS_REPO_PATH` (local mode only; dev/test)
+
+Docs repo creation (optional onboarding):
+- `POST /api/v1/orgs/docs-repo/create` creates a new GitHub repo (auto-initialized) using the connected user OAuth token.
+- This is a convenience for greenfield orgs; production docs writes still require the Docs App installation scoped to the docs repo.
 
 Invitation links (team onboarding) use:
 - `GRAPHFLY_WEB_URL` (optional) — absolute web origin used to build invite accept URLs (e.g. `https://app.graphfly.example`)
@@ -221,15 +230,20 @@ Enable by running the worker:
 - `npm run worker:doc`
 
 Agent runtime modes:
-- **LLM-backed (remote)**: set `OPENCLAW_GATEWAY_URL` (token optional).
+- **LLM-backed (remote)**: set `OPENCLAW_GATEWAY_URL` + `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`).
 - **Deterministic local loop (offline/tests)**: unset `OPENCLAW_GATEWAY_URL` or set `OPENCLAW_USE_REMOTE=0` (or `false`).
+
+Production requirement:
+- In `GRAPHFLY_MODE=prod`, OpenClaw remote is required by default (fail-fast if missing).
+- Emergency override: `GRAPHFLY_OPENCLAW_REQUIRED=0` to allow deterministic/local mode in prod.
 
 Key env vars:
 - `OPENCLAW_GATEWAY_URL` — remote agent gateway base URL (enables LLM-agentic mode by default when set)
-- `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) — optional bearer token for your gateway
+- `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) — bearer token for your gateway (required in prod when OpenClaw is required)
 - `OPENCLAW_MODEL` — optional model identifier (gateway-defined)
 - `OPENCLAW_AGENT_ID` — optional agent id (for routing/quotas)
 - `OPENCLAW_USE_REMOTE=0|false` — force deterministic local mode even when a gateway URL is configured
+- `GRAPHFLY_OPENCLAW_REQUIRED=0|false` — disable the prod-default “remote required” behavior (not recommended)
 
 Doc agent guardrails (recommended):
 - `GRAPHFLY_DOC_AGENT_LOCK_TTL_MS` (default `1800000`) — per-repo doc generation lock TTL (serializes runs)
@@ -247,6 +261,40 @@ Doc agent guardrails (recommended):
 Manual block regeneration (FR-DOC-07):
 - `POST /docs/regenerate` (admin-only) with `{ tenantId, repoId, blockId }` enqueues a single-target doc job and opens a new PR.
 - The web UI exposes this as **Regenerate (Admin)** on the Doc Block detail view.
+
+### 2.6E Product Documentation Assistant (API)
+
+Graphfly exposes an in-product **Product Documentation Assistant** that:
+- answers questions using the Public Contract Graph + Flow Graphs + docs repo Markdown (no source code bodies by default)
+- proposes documentation edits as **drafts** with a preview diff
+- applies edits only after explicit confirmation (opens a PR in the docs repo only)
+
+Key endpoints:
+- `POST /assistant/query` (or `/api/v1/assistant/query`) — explain + navigate (member+)
+- `POST /assistant/docs/draft` (or `/api/v1/assistant/docs/draft`) — draft docs edits (admin+)
+- `POST /assistant/docs/confirm` (or `/api/v1/assistant/docs/confirm`) — apply a draft (admin+)
+- `GET /assistant/drafts` / `GET /assistant/draft` — inspect drafts (admin+)
+- `POST /assistant/threads` / `GET /assistant/threads` — create/list threads (member+)
+- `GET /assistant/thread?threadId=<uuid>` — fetch a thread + recent messages (member+)
+
+Threaded chat behavior:
+- Pass `threadId` to `POST /assistant/query` to persist the user+assistant messages to that thread.
+
+Draft persistence:
+- Drafts are stored in Postgres table `assistant_drafts` (tenant-scoped via RLS) when `DATABASE_URL` is configured.
+- Threads/messages are stored in `assistant_threads` and `assistant_messages` (tenant-scoped via RLS).
+
+Assistant guardrails (recommended):
+- `GRAPHFLY_ASSISTANT_MAX_TURNS` (default `12` or `14` for draft) — hard cap on loop turns
+- `GRAPHFLY_ASSISTANT_MAX_TOOL_CALLS` (default `1500`/`2500`) — hard cap on tool invocations
+- `GRAPHFLY_ASSISTANT_MAX_TRACE_NODES` / `GRAPHFLY_ASSISTANT_MAX_TRACE_EDGES` — truncation caps for flow traces in answers
+- `GRAPHFLY_ASSISTANT_MAX_SEARCH_RESULTS` — cap on search results per tool call
+- `GRAPHFLY_ASSISTANT_MAX_ATTEMPTS` / `GRAPHFLY_ASSISTANT_RETRY_BASE_MS` — bounded retry/backoff for gateway/network failures
+- `GRAPHFLY_ASSISTANT_DRAFT_TTL_HOURS` (default `24`) — expiry window for confirmable drafts
+- `GRAPHFLY_ASSISTANT_DOCS_LOCK_TTL_MS` — docs-write lock TTL (serializes assistant confirm with doc agent runs)
+
+Cloud sync fence:
+- Assistant confirm uses the same docs writer pathway as the doc agent. In production, enable `GRAPHFLY_CLOUD_SYNC_REQUIRED=1` to fail fast if Docs App credentials are missing (stubbed PR).
 
 ### 2.7 Docs sync fence (recommended)
 To prevent “successful” doc jobs that do not actually sync documentation to GitHub (stubbed PRs), enable:
@@ -377,6 +425,10 @@ For multi-process deployments (separate worker processes), configure workers to 
 - `GRAPHFLY_RT_ENDPOINT` — API base URL (e.g. `http://127.0.0.1:8787`)
 - `GRAPHFLY_RT_TOKEN` — shared secret used as `Authorization: Bearer <token>` for `POST /internal/rt`
 
+For horizontally scaled API deployments (multiple API instances), enable Postgres-backed realtime fanout:
+- `GRAPHFLY_RT_BACKEND=pg`
+- `GRAPHFLY_RT_PG_CHANNEL` (default `graphfly_rt`)
+
 If not configured, realtime still works in single-process mode (API publishes in-process events).
 - job enqueue rate vs worker throughput
 
@@ -385,6 +437,10 @@ Monitor:
 - index job latency (p50/p95)
 - failure rate and retry counts
 - graph size growth (nodes/edges/occurrences)
+
+Lane serialization (recommended):
+- `GRAPHFLY_INDEX_LOCK_TTL_MS` — index run lock TTL (renewed by heartbeat while indexing)
+- `GRAPHFLY_INDEX_LOCK_MAX_WAIT_MS` — max time an index job waits for the per-repo lane lock
 
 ### 6.5 Docs PR health
 Monitor:

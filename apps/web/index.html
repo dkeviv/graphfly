@@ -7,51 +7,39 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div id="app" class="app">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand__name">Graphfly</div>
-          <div class="brand__tag">Code Intelligence Graph</div>
+    <div id="app" class="ws">
+      <header class="ws__top">
+        <div class="ws__top-left">
+          <div class="logo">Graphfly</div>
         </div>
+        <div class="ws__top-center">
+          <select id="projectSelect" class="select select--compact" aria-label="Project"></select>
+          <div id="codeBranchPill" class="pill pill--mono" aria-label="Code branch">Code: —</div>
+          <select id="docsBranchSelect" class="select select--compact" aria-label="Docs branch"></select>
+        </div>
+        <div class="ws__top-right">
+          <select id="modeSelect" class="select select--compact" aria-label="Mode">
+            <option value="default">Default</option>
+            <option value="support_safe">Support-safe</option>
+          </select>
+          <button id="openPrBtn" class="button button--primary" type="button">Open PR</button>
+          <button id="userBtn" class="iconbtn" type="button" aria-label="User">👤</button>
+        </div>
+      </header>
 
-        <nav class="nav">
-          <button class="nav__item" data-route="dashboard">Dashboard</button>
-          <button class="nav__item" data-route="graph">Graph Explorer</button>
-          <button class="nav__item" data-route="docs">Docs</button>
-          <button class="nav__item" data-route="coverage">Coverage</button>
-          <button class="nav__item" data-route="admin">Admin</button>
-          <button class="nav__item" data-route="onboarding">Setup</button>
+      <div class="ws__body">
+        <nav class="rail" aria-label="Primary">
+          <button class="rail__item" type="button" data-nav="chats" aria-label="Chats" title="Chats">💬</button>
+          <button class="rail__item" type="button" data-nav="graph" aria-label="Code graph" title="Code graph">📊</button>
+          <button class="rail__item" type="button" data-nav="docs" aria-label="Documentation" title="Documentation">📝</button>
+          <button class="rail__item" type="button" data-nav="git" aria-label="Git" title="Git">🔀</button>
+          <button class="rail__item" type="button" data-nav="settings" aria-label="Settings" title="Settings">⚙️</button>
+          <button class="rail__item" type="button" data-nav="feedback" aria-label="Feedback" title="Feedback">💡</button>
         </nav>
 
-        <div class="sidebar__footer">
-          <div class="meta">
-            <div class="meta__label">Organization</div>
-            <div id="orgDisplay" class="pill">—</div>
-          </div>
-          <div class="meta meta--spaced">
-            <div class="meta__label">Project</div>
-            <select id="repoSelect" class="select"></select>
-          </div>
-          <div class="meta">
-            <div class="meta__label">Mode</div>
-            <select id="modeSelect" class="select">
-              <option value="default">Default</option>
-              <option value="support_safe">Support-safe</option>
-            </select>
-          </div>
-        </div>
-      </aside>
-
-      <main class="main">
-        <header class="topbar">
-          <div class="topbar__title" id="pageTitle">Onboarding</div>
-          <div class="topbar__right">
-            <span class="pill">No code bodies by default</span>
-          </div>
-        </header>
-
-        <section class="page" id="page"></section>
-      </main>
+        <aside class="panel" id="panel" aria-label="Context panel"></aside>
+        <main class="canvas" id="canvas" aria-label="Canvas"></main>
+      </div>
     </div>
 
     <div id="toasts" class="toasts" aria-live="polite" aria-relevant="additions"></div>

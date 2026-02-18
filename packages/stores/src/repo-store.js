@@ -46,10 +46,10 @@ export class PgRepoStorePool {
     }
   }
 
-  async createRepo({ tenantId, fullName, defaultBranch, githubRepoId }) {
+  async createRepo({ tenantId, fullName, defaultBranch, trackedBranch = null, githubRepoId, docsRepoFullName = null, docsDefaultBranch = null }) {
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
       const store = new PgRepoStore({ client });
-      return store.createRepo({ tenantId, fullName, defaultBranch, githubRepoId });
+      return store.createRepo({ tenantId, fullName, defaultBranch, trackedBranch, githubRepoId, docsRepoFullName, docsDefaultBranch });
     });
   }
 

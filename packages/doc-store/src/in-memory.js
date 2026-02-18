@@ -17,7 +17,7 @@ export class InMemoryDocStore {
     return this._blocks.get(rk)?.get(id) ?? null;
   }
 
-  upsertBlock({ tenantId, repoId, docFile, blockAnchor, blockType, content, status = 'fresh' }) {
+  upsertBlock({ tenantId, repoId, docFile, blockAnchor, blockType, content, status = 'fresh', lastIndexSha = null, lastPrId = null }) {
     const rk = repoKey({ tenantId, repoId });
     if (!this._blocks.has(rk)) this._blocks.set(rk, new Map());
     const id = hashString(`${docFile}::${blockAnchor}`);
@@ -31,6 +31,8 @@ export class InMemoryDocStore {
       status,
       content,
       contentHash: hashString(content),
+      lastIndexSha,
+      lastPrId,
       updatedAt: Date.now()
     };
     this._blocks.get(rk).set(id, block);
@@ -43,6 +45,22 @@ export class InMemoryDocStore {
     const rk = repoKey({ tenantId, repoId });
     const blocks = Array.from(this._blocks.get(rk)?.values() ?? []);
     return status ? blocks.filter((b) => b.status === status) : blocks;
+  }
+
+  listBlocksBySymbolUid({ tenantId, repoId, symbolUid, limit = 200 } = {}) {
+    const rk = repoKey({ tenantId, repoId });
+    const uid = String(symbolUid ?? '').trim();
+    if (!uid) return [];
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 200;
+    const blocks = Array.from(this._blocks.get(rk)?.values() ?? []);
+    const out = [];
+    for (const b of blocks) {
+      const ev = this.getEvidence({ tenantId, repoId, blockId: b.id });
+      if ((ev ?? []).some((e) => String(e?.symbolUid ?? '') === uid)) out.push(b);
+    }
+    return out
+      .sort((a, b) => String(a.docFile ?? '').localeCompare(String(b.docFile ?? '')) || String(a.blockAnchor ?? '').localeCompare(String(b.blockAnchor ?? '')))
+      .slice(0, n);
   }
 
   getBlock({ tenantId, repoId, blockId }) {
@@ -115,5 +133,17 @@ export class InMemoryDocStore {
   getPrRun({ tenantId, repoId, prRunId }) {
     const rk = repoKey({ tenantId, repoId });
     return this._prRuns.get(rk)?.get(prRunId) ?? null;
+  }
+
+  listDocFilesByPrRunId({ tenantId, repoId, prRunId } = {}) {
+    if (!prRunId) return [];
+    const rk = repoKey({ tenantId, repoId });
+    const blocks = Array.from(this._blocks.get(rk)?.values() ?? []);
+    const files = new Set();
+    for (const b of blocks) {
+      if (!b?.docFile) continue;
+      if (String(b.lastPrId ?? '') === String(prRunId)) files.add(String(b.docFile));
+    }
+    return Array.from(files).sort((a, b) => a.localeCompare(b));
   }
 }

@@ -28,19 +28,18 @@ CREATE EXTENSION IF NOT EXISTS "vector";      -- pgvector 0.7+
 -- ═══════════════════════════════════════════════════════════════════════
 -- TENANTS (Organizations)
 -- ═══════════════════════════════════════════════════════════════════════
-CREATE TABLE orgs (
-    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    slug                  TEXT NOT NULL UNIQUE,        -- URL-safe identifier
-    display_name          TEXT NOT NULL,
-    plan                  TEXT NOT NULL DEFAULT 'free'
-                          CHECK (plan IN ('free','pro','enterprise')),
-    github_reader_install_id BIGINT,                   -- GitHub Reader App installation ID (source repos)
-    github_docs_install_id   BIGINT,                   -- GitHub Docs App installation ID (docs repo only)
-    docs_repo_full_name   TEXT,                        -- e.g. "owner/docs-repo"
-    stripe_customer_id    TEXT,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+	CREATE TABLE orgs (
+	    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+	    slug                  TEXT NOT NULL UNIQUE,        -- URL-safe identifier
+	    display_name          TEXT NOT NULL,
+	    plan                  TEXT NOT NULL DEFAULT 'free'
+	                          CHECK (plan IN ('free','pro','enterprise')),
+	    github_reader_install_id BIGINT,                   -- GitHub Reader App installation ID (source repos)
+	    github_docs_install_id   BIGINT,                   -- GitHub Docs App installation ID (docs PR writes)
+	    stripe_customer_id    TEXT,
+	    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+	    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+	);
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- BILLING (Stripe)
@@ -144,16 +143,19 @@ CREATE INDEX idx_org_invites_status ON org_invites(tenant_id, status, expires_at
 -- ═══════════════════════════════════════════════════════════════════════
 -- REPOS
 -- ═══════════════════════════════════════════════════════════════════════
-CREATE TABLE repos (
-    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id           UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    github_repo_id      BIGINT NOT NULL,
-    full_name           TEXT NOT NULL,      -- "owner/repo"
-    default_branch      TEXT NOT NULL DEFAULT 'main',
-    language_hint       TEXT,               -- primary language detected
-    index_status        TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (index_status IN ('pending','indexing','ready','error')),
-    last_indexed_sha    TEXT,
+	CREATE TABLE repos (
+	    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+	    tenant_id           UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+	    github_repo_id      BIGINT NOT NULL,
+	    full_name           TEXT NOT NULL,      -- "owner/repo"
+	    default_branch      TEXT NOT NULL DEFAULT 'main',  -- GitHub repo default branch (metadata)
+	    tracked_branch      TEXT NOT NULL DEFAULT 'main',  -- Branch Graphfly indexes for this project (immutable by default)
+	    docs_repo_full_name TEXT NOT NULL,      -- "owner/docs-repo" (docs PR target for this project)
+	    docs_default_branch TEXT NOT NULL DEFAULT 'main',  -- Docs repo default branch (PR base)
+	    language_hint       TEXT,               -- primary language detected
+	    index_status        TEXT NOT NULL DEFAULT 'pending'
+	                        CHECK (index_status IN ('pending','indexing','ready','error')),
+	    last_indexed_sha    TEXT,
     last_indexed_at     TIMESTAMPTZ,
     graph_node_count    INTEGER DEFAULT 0,
     graph_edge_count    INTEGER DEFAULT 0,
@@ -543,6 +545,32 @@ ALTER TABLE doc_blocks ADD CONSTRAINT fk_last_pr
     FOREIGN KEY (last_pr_id) REFERENCES pr_runs(id) ON DELETE SET NULL;
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- CHATS (Assistant Threads)
+-- Persistent chat threads per (tenant, repo) to support the workspace UI.
+-- Chat storage must not persist source code bodies/snippets by default.
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE chat_threads (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id   UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id     UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    title       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_chat_threads_repo ON chat_threads(tenant_id, repo_id, updated_at DESC);
+
+CREATE TABLE chat_messages (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id   UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    thread_id   UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL CHECK (role IN ('user','assistant','tool')),
+    content     TEXT NOT NULL,
+    metadata    JSONB, -- citations, tool ids, UI flags (no source code bodies by default)
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_chat_messages_thread ON chat_messages(tenant_id, thread_id, created_at ASC);
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- ROW-LEVEL SECURITY (applied to all tenant-scoped tables)
 -- ═══════════════════════════════════════════════════════════════════════
 ALTER TABLE repos ENABLE ROW LEVEL SECURITY;
@@ -551,11 +579,13 @@ ALTER TABLE graph_edges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 
 -- Pattern for each table (substitute table name):
 CREATE POLICY tenant_isolation ON repos
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
--- Replicate for: graph_nodes, graph_edges, doc_blocks, doc_evidence, pr_runs
+-- Replicate for: graph_nodes, graph_edges, doc_blocks, doc_evidence, pr_runs, chat_threads, chat_messages
 ```
 
 ---
@@ -1189,6 +1219,49 @@ Graphfly includes an **agentic enrichment loop** that iteratively explores the a
 - **Retry + backoff classification (loop level):** retryable failures (429/5xx/network timeouts) use bounded exponential backoff; non-retryable failures (invalid tool args/output, budget exceeded, policy violations) stop immediately and emit diagnostics.
 - **Context compaction:** graph-trace tool outputs are compacted and bounded (max nodes/edges per response) to keep token usage predictable and prevent runaway context growth.
 
+---
+
+### 2.7 Product Documentation Assistant (Interactive)
+
+Graphfly includes an in-product **Product Documentation Assistant** that helps users:
+- understand the system using the **Public Contract Graph** (contracts/constraints/allowables) and **Flow Graphs**
+- navigate documentation stored in the **docs repo** (Markdown)
+- propose documentation changes safely, with explicit human confirmation before writes
+
+This assistant is **safe-by-design** and **docs-repo-only**:
+- It MUST NOT fetch, store, or display source code bodies/snippets by default.
+- It MUST NOT write to source repositories.
+- Any proposed docs writes MUST be previewed (diff) and require explicit confirmation.
+
+**Implementation strategy**
+- The assistant uses the same hardened **tool-loop agent gateway** pattern as the doc agent:
+  - tool schema enforcement
+  - hard turn/tool budgets
+  - retry/backoff classification (429/5xx/timeouts retry; policy/budget violations fail fast)
+  - deterministic fallback behavior when no gateway is configured (for dev/test stability)
+- Query-time data sources:
+  - Public Contract Graph node search + contract lookup
+  - Flow entrypoints + bounded flow tracing (contract-first)
+  - Docs repo file reads (sanitized: strip code blocks; hard size caps)
+  - Doc block store (content + evidence) for contract-first doc sections
+
+**Draft/confirm model (writes require approval)**
+- Draft proposals are persisted in `assistant_drafts` scoped to `(tenant_id, repo_id)` with:
+  - proposed file writes (path + content; Markdown validated as “no code bodies/snippets”)
+  - a unified diff preview
+  - citations/evidence pointers (symbol UIDs, flow keys, docs file paths)
+- Confirming a draft:
+  - acquires a docs-write lane lock (`agent_locks` via lock name `docs_generate`)
+  - uses GitHub Docs App credentials to open a PR in the configured docs repo
+  - records PR metadata on the draft record
+
+**Threads/messages model (persistent chat)**
+- Chat threads are persisted in `assistant_threads` scoped to `(tenant_id, repo_id)`.
+- Messages are persisted in `assistant_messages` and are sanitized to strip fenced and indented code blocks by default.
+- `POST /assistant/query` accepts optional `threadId` to:
+  - load bounded context from recent messages
+  - append the user message and assistant response to the thread
+
 ## 3. REST API Specification
 
 ### 3.1 Authentication
@@ -1217,10 +1290,10 @@ GET /api/v1/auth/me
 
 ─── ORGANIZATIONS ─────────────────────────────────────────────────────
 GET /api/v1/orgs/current
-  Response: { id, slug, display_name, plan, github_reader_install_id, github_docs_install_id, docs_repo_full_name }
+  Response: { id, slug, display_name, plan, github_reader_install_id, github_docs_install_id }
 
 PUT /api/v1/orgs/current
-  Body: { docs_repo_full_name?: string, display_name?: string }
+  Body: { display_name?: string }
   Permission: admin+
 
 GET /api/v1/orgs/members
@@ -1269,20 +1342,31 @@ GET /api/v1/github/docs-app-url
   Response: { install_url: string }  // https://github.com/apps/graphfly-docs/installations/new
 
 GET /api/v1/github/reader/callback?installation_id=<id>&setup_action=install
-  Action: Store github_reader_install_id on org, list accessible repos
-  Response: Redirect to /onboarding/repos
+  Action: Store github_reader_install_id on org
+  Response: Redirect to /app/new (project creation)
 
 GET /api/v1/github/docs/callback?installation_id=<id>&setup_action=install
-  Action: Store github_docs_install_id on org (docs repo write), verify docs repo configured
-  Response: Redirect to /onboarding/indexing (or /onboarding/ready if indexing already complete)
+  Action: Store github_docs_install_id on org (docs PR writes)
+  Response: Redirect to /app/new (project creation will verify repo-level docs targets)
+
+GET /api/v1/github/reader/repos
+  Response: { repos: [{ github_repo_id, full_name, default_branch, private }] }
+
+GET /api/v1/github/docs/repos
+  Response: { repos: [{ github_repo_id, full_name, default_branch, private }] }
+
+POST /api/v1/github/docs/repos
+  Body: { owner: string, name: string, visibility: 'private'|'public', default_branch?: string }
+  Action: Create an empty docs repository and return its identity for project configuration
+  Permission: owner+
 
 ─── REPOS ─────────────────────────────────────────────────────────────
 GET /api/v1/repos
   Response: [Repo]
 
 POST /api/v1/repos
-  Body: { github_repo_id: number }
-  Action: Create repo record, enqueue full index job
+  Body: { github_repo_id: number, tracked_branch?: string, docs_repo_full_name: string, docs_default_branch?: string }
+  Action: Create repo record (project) with repo-level docs target, enqueue full index job
   Response: Repo
 
 DELETE /api/v1/repos/:repoId
@@ -1295,6 +1379,58 @@ GET /api/v1/repos/:repoId
 POST /api/v1/repos/:repoId/reindex
   Action: Enqueue full index job (force re-parse all files)
   Permission: admin+
+
+─── ASSISTANT (Product Documentation Assistant) ─────────────────────────
+POST /assistant/query
+POST /api/v1/assistant/query
+  Body: { tenantId, repoId, question: string, threadId?: string, mode?: 'support_safe'|'default' }
+  Response: { ok: true, answerMarkdown: string, citations: Citation[] }
+  Permission: member+
+
+POST /assistant/threads
+POST /api/v1/assistant/threads
+  Body: { tenantId, repoId, title?: string, mode?: 'support_safe'|'default' }
+  Response: { thread }
+  Permission: member+
+
+GET /assistant/threads
+GET /api/v1/assistant/threads
+  Query: ?tenantId=<uuid>&repoId=<uuid>&limit=50
+  Response: { threads: [AssistantThread] }
+  Permission: member+
+
+GET /assistant/thread
+GET /api/v1/assistant/thread
+  Query: ?tenantId=<uuid>&repoId=<uuid>&threadId=<uuid>&limit=50
+  Response: { thread: AssistantThread, messages: [AssistantMessage] }
+  Permission: member+
+
+POST /assistant/docs/draft
+POST /api/v1/assistant/docs/draft
+  Body: { tenantId, repoId, instruction: string, mode?: 'support_safe'|'default' }
+  Response: { ok: true, draftId: string, files: [{ path, content }], diff: string, citations: Citation[] }
+  Permission: admin+
+
+POST /assistant/docs/confirm
+POST /api/v1/assistant/docs/confirm
+  Body: { tenantId, repoId, draftId: string }
+  Action: Acquire docs lane lock and open PR in docs repo only
+  Response: { ok: true, pr: { branchName, prNumber?, prUrl? } }
+  Permission: admin+
+
+GET /assistant/drafts
+GET /api/v1/assistant/drafts
+  Query: ?tenantId=<uuid>&repoId=<uuid>&status=draft&limit=50
+  Response: { drafts: [AssistantDraft] }
+  Permission: admin+
+
+GET /assistant/draft
+GET /api/v1/assistant/draft
+  Query: ?tenantId=<uuid>&repoId=<uuid>&draftId=<uuid>
+  Response: { draft: AssistantDraft }
+  Permission: admin+
+
+Note: assistant message streaming UX is a future phase; Phase-1 supports persistent threads + drafts/confirm.
 
 ─── GRAPH ─────────────────────────────────────────────────────────────
 GET /api/v1/repos/:repoId/graph/nodes
@@ -1355,6 +1491,22 @@ GET /api/v1/repos/:repoId/deps/mismatches
   Response: [DependencyMismatch]
 
 ─── DOCUMENTATION ─────────────────────────────────────────────────────
+GET /api/v1/repos/:repoId/docs/refs
+  Response: { default: { ref: string }, previews: [{ runId, ref, pr_url }] }
+
+GET /api/v1/repos/:repoId/docs/tree
+  Query: ?ref=main
+  Response: { entries: [{ path, type: 'file'|'dir', size?: number }] }
+
+GET /api/v1/repos/:repoId/docs/file
+  Query: ?path=api/auth.md&ref=main
+  Response: { path, ref, content: string }
+
+POST /api/v1/repos/:repoId/docs/open-pr
+  Body: { base_ref: string, title: string, body?: string, files: [{ path: string, content: string }] }
+  Action: Create branch → commit files → open PR in docs repo → persist pr_run
+  Permission: admin+
+
 GET /api/v1/repos/:repoId/docs/blocks
   Query: ?status=stale&file=api/auth.md&type=function&page=1&limit=20
   Response: { blocks: [DocBlock], total: number }
@@ -1450,6 +1602,7 @@ Server sends newline-free JSON frames of the shape:
 Event types:
 - Indexing: `index:start`, `index:progress`, `index:complete`, `index:error`
 - Doc agent: `agent:start`, `agent:turn`, `agent:tool_call`, `agent:tool_result`, `agent:complete`, `agent:error`
+- Assistant chat: `chat:message`, `chat:tool_call`, `chat:tool_result`, `chat:error`
 
 Workers can publish into the hub via `POST /internal/rt` (Bearer token `GRAPHFLY_RT_TOKEN`) for multi-process deployments.
 
@@ -1518,9 +1671,6 @@ async function handlePushWebhook(payload: PushEvent) {
   const repo = payload.repository;
   const branch = payload.ref.replace('refs/heads/', '');
 
-  // Only process pushes to default branch
-  if (branch !== repo.default_branch) return;
-
   // Webhook is from the Reader App installation. Resolve org + repo safely.
   const org = await db.orgs.findByReaderInstallationId(payload.installation.id);
   if (!org) return;
@@ -1528,6 +1678,9 @@ async function handlePushWebhook(payload: PushEvent) {
   const repoRecord = await db.repos.findByTenantAndGithubRepoId(org.id, repo.id);
   if (!repoRecord) return;
   if (!repoRecord.is_active) return;
+
+  // Only process pushes to the project's tracked branch
+  if (branch !== repoRecord.tracked_branch) return;
 
   // Extract changed files (add + modify; handle removes separately)
   const changedFiles = [...new Set(
@@ -1620,7 +1773,7 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 **Goal:** Graph data in PostgreSQL from a manually triggered index
 
 1. Database: PostgreSQL + pgvector schema (all tables above), db-migrate
-2. Redis + BullMQ setup with `index.jobs` queue
+2. Postgres durable queue setup (`jobs` table; queues: `index`, `graph`, `doc`)
 3. API skeleton: Express + Clerk JWT middleware + RLS tenant injection
 4. **Implement the built‑in Code Intelligence Graph builder** (`packages/indexer-engine/`):
    - Modular parsing pipeline with language/manifest adapters (no monolith)
@@ -1639,9 +1792,9 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 10. Implement `POST /webhooks/github` → HMAC validation + push → incremental index jobs (Reader App only)
 11. `GitHubService.cloneRepo()` using Reader installation token (no token-in-URL)
 12. Clerk integration: JWT validation, org creation, request-scoped tenant injection (`SET` + `RESET`), RBAC
-13. Onboarding API: connect source repos, select docs repo, validate Docs App installation
+13. Project creation API: select code repo + tracked branch + docs repo, validate Reader/Docs App installations and repo authorization
 
-**Milestone:** Install Reader App + connect repo → push triggers automatic incremental index; Docs App installed on docs repo → docs PRs open automatically
+**Milestone:** Install Reader App + create project → push to tracked branch triggers automatic incremental index; Docs App installed + docs repo authorized → docs PRs open automatically
 
 ### Phase 3: Documentation Agent (Weeks 6–8)
 14. `DocAgentWorker` with `TurnOutcome` loop (port of Yantra's `loop_core.rs`)
@@ -1672,7 +1825,7 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 28. Stripe billing integration + plan enforcement
 29. Monitoring (Datadog): queue depth, index latency, agent duration, error rates
 30. Secrets management (Doppler): GitHub private key, webhook secret, DB credentials
-31. Webhook replay dedup (`X-GitHub-Delivery` in Redis with 24h TTL)
+31. Webhook replay dedup (`X-GitHub-Delivery` in `webhook_deliveries` with unique constraint; prune/TTL via ops)
 
 ---
 

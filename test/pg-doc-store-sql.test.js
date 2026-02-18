@@ -77,6 +77,25 @@ test('PgDocStore.markBlocksStaleForSymbolUids updates doc_blocks via evidence jo
   assert.equal(count, 2);
 });
 
+test('PgDocStore.listBlocksBySymbolUid queries blocks via evidence join', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
+    if (text.includes('FROM doc_blocks db') && text.includes('JOIN doc_evidence')) {
+      return { rows: [{ id: 'b-1', doc_file: 'a.md', block_anchor: '## A' }] };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+  const ds = new PgDocStore({ client, repoFullName: 'org/repo' });
+
+  const blocks = await ds.listBlocksBySymbolUid({ tenantId: 't-uuid', repoId: 'r-uuid', symbolUid: 'sym:1', limit: 10 });
+  assert.equal(blocks.length, 1);
+
+  const q = client.calls.find((c) => c.text.includes('FROM doc_blocks db') && c.text.includes('JOIN doc_evidence'));
+  assert.ok(q);
+  assert.deepEqual(q.params, ['t-uuid', 'r-uuid', 'sym:1', 10]);
+});
+
 test('PgDocStore.updatePrRun updates allowed fields', async () => {
   const client = makeFakeClient(async (text) => {
     if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
@@ -112,4 +131,18 @@ test('PgDocStore.listPrRuns and getPrRun query pr_runs', async () => {
   assert.equal(list.length, 1);
   const run = await ds.getPrRun({ tenantId: 't-uuid', repoId: 'r-uuid', prRunId: 'pr-1' });
   assert.equal(run.id, 'pr-1');
+});
+
+test('PgDocStore.listDocFilesByPrRunId queries doc_blocks by last_pr_id', async () => {
+  const client = makeFakeClient(async (text) => {
+    if (text.startsWith('INSERT INTO orgs')) return { rows: [] };
+    if (text.includes('INSERT INTO repos')) return { rows: [] };
+    if (text.includes('SELECT DISTINCT doc_file') && text.includes('last_pr_id=$3')) {
+      return { rows: [{ doc_file: 'flows/a.md' }, { doc_file: 'flows/b.md' }] };
+    }
+    throw new Error(`unexpected query: ${text}`);
+  });
+  const ds = new PgDocStore({ client, repoFullName: 'org/repo' });
+  const files = await ds.listDocFilesByPrRunId({ tenantId: 't-uuid', repoId: 'r-uuid', prRunId: 'pr-1' });
+  assert.deepEqual(files, ['flows/a.md', 'flows/b.md']);
 });

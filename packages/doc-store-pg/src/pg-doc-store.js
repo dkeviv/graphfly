@@ -90,6 +90,22 @@ export class PgDocStore {
     return Array.isArray(res.rows) ? res.rows : [];
   }
 
+  async listBlocksBySymbolUid({ tenantId, repoId, symbolUid, limit = 200 } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    if (!isNonEmptyString(symbolUid)) throw new Error('symbolUid required');
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 200;
+    const res = await this._c.query(
+      `SELECT DISTINCT db.*
+       FROM doc_blocks db
+       JOIN doc_evidence de ON de.doc_block_id=db.id
+       WHERE db.tenant_id=$1 AND db.repo_id=$2 AND de.symbol_uid=$3
+       ORDER BY db.doc_file ASC, db.block_anchor ASC
+       LIMIT $4`,
+      [tenantId, repoId, String(symbolUid), n]
+    );
+    return Array.isArray(res.rows) ? res.rows : [];
+  }
+
   async getBlockByKey({ tenantId, repoId, docFile, blockAnchor }) {
     await this._ensureOrgRepo({ tenantId, repoId });
     if (!isNonEmptyString(docFile)) throw new Error('docFile required');
@@ -278,5 +294,18 @@ export class PgDocStore {
       prRunId
     ]);
     return res.rows?.[0] ?? null;
+  }
+
+  async listDocFilesByPrRunId({ tenantId, repoId, prRunId } = {}) {
+    await this._ensureOrgRepo({ tenantId, repoId });
+    if (!isNonEmptyString(prRunId)) return [];
+    const res = await this._c.query(
+      `SELECT DISTINCT doc_file
+       FROM doc_blocks
+       WHERE tenant_id=$1 AND repo_id=$2 AND last_pr_id=$3
+       ORDER BY doc_file ASC`,
+      [tenantId, repoId, prRunId]
+    );
+    return Array.isArray(res.rows) ? res.rows.map((r) => r.doc_file).filter(isNonEmptyString) : [];
   }
 }

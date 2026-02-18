@@ -69,8 +69,9 @@ export function renderDashboardPage({ state, pageEl }) {
     // Best-effort job visibility (admin-only; in non-admin modes it may 401/403).
     try {
       const jobs = await api.listJobs({ limit: 50 });
-      const running = [...(jobs.indexJobs ?? []), ...(jobs.docJobs ?? [])].filter((j) => j.status === 'running').length;
-      const failed = [...(jobs.indexJobs ?? []), ...(jobs.docJobs ?? [])].filter((j) => j.status === 'failed').length;
+      const all = [...(jobs.indexJobs ?? []), ...(jobs.graphJobs ?? []), ...(jobs.docJobs ?? [])];
+      const running = all.filter((j) => j.status === 'active').length;
+      const failed = all.filter((j) => j.status === 'dead' || j.status === 'failed').length;
       kpisEl.appendChild(card('Pipelines', running > 0 ? `Running (${running})` : 'Idle', failed > 0 ? `failed=${failed}` : ''));
     } catch {
       kpisEl.appendChild(card('Pipelines', '—', 'Jobs visible to admins only'));
@@ -89,4 +90,3 @@ export function renderDashboardPage({ state, pageEl }) {
 
   refresh();
 }
-

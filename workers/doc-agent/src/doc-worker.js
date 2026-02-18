@@ -2,6 +2,7 @@ import { runDocPrWithOpenClaw } from './openclaw-doc-run.js';
 import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
 import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
+import { startLockHeartbeat } from '../../../packages/stores/src/lock-heartbeat.js';
 
 export function createDocWorker({ store, docsWriter, docStore, entitlementsStore = null, usageCounters = null, realtime = null, lockStore = null }) {
   const entitlements = entitlementsStore ?? new InMemoryEntitlementsStore();
@@ -20,6 +21,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
       const lockName = 'docs_generate';
       const ttlMs = Number(process.env.GRAPHFLY_DOC_AGENT_LOCK_TTL_MS ?? 30 * 60 * 1000);
       let lockToken = null;
+      let lockHb = null;
       if (lockStore?.tryAcquire) {
         const lease = await lockStore.tryAcquire({
           tenantId,
@@ -29,6 +31,16 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
         });
         if (!lease.acquired) throw new Error('doc_agent_lock_busy');
         lockToken = lease.token;
+        lockHb = startLockHeartbeat({
+          lockStore,
+          tenantId,
+          repoId,
+          lockName,
+          token: lockToken,
+          ttlMs: Number.isFinite(ttlMs) ? Math.trunc(ttlMs) : 30 * 60 * 1000,
+          onLostLock: () => console.warn(`WARN: lost docs lock for tenant=${tenantId} repo=${repoId}`),
+          onError: (e) => console.warn(`WARN: docs lock heartbeat failed: ${String(e?.message ?? e)}`)
+        });
       }
 
       let prRun = null;
@@ -259,6 +271,9 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
         realtime?.publish?.({ tenantId, repoId, type: 'agent:error', payload: { agent: 'doc', sha: triggerSha, error: String(err?.message ?? err) } });
         throw err;
       } finally {
+        try {
+          await lockHb?.stop?.();
+        } catch {}
         if (lockStore?.release && lockToken) {
           await lockStore.release({ tenantId, repoId, lockName, token: lockToken });
         }

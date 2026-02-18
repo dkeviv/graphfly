@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS repos (
     UNIQUE (tenant_id, full_name)
 );
 
+-- Project-scoped config (V0 SaaS): locked tracked branch + docs repo target.
+ALTER TABLE repos ADD COLUMN IF NOT EXISTS tracked_branch TEXT;
+ALTER TABLE repos ADD COLUMN IF NOT EXISTS docs_repo_full_name TEXT;
+ALTER TABLE repos ADD COLUMN IF NOT EXISTS docs_default_branch TEXT;
+
 -- Webhook delivery dedupe (durable replay protection).
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -571,6 +576,69 @@ ALTER TABLE doc_blocks
     FOREIGN KEY (last_pr_id) REFERENCES pr_runs(id) ON DELETE SET NULL;
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- ASSISTANT DRAFTS (Product Documentation Assistant)
+-- Draft/confirm model: assistant proposes docs repo changes that require explicit confirmation.
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS assistant_drafts (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    draft_type      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','applied','expired','rejected','error')),
+    mode            TEXT NOT NULL DEFAULT 'support_safe'
+                    CHECK (mode IN ('support_safe','default')),
+    prompt          TEXT,
+    answer_markdown TEXT,
+    citations       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    files           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    diff            TEXT,
+    pr_branch       TEXT,
+    pr_number       INTEGER,
+    pr_url          TEXT,
+    expires_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ad_repo ON assistant_drafts(tenant_id, repo_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ad_status ON assistant_drafts(tenant_id, repo_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ad_expires ON assistant_drafts(tenant_id, expires_at);
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- ASSISTANT THREADS + MESSAGES (Product Documentation Assistant)
+-- Persistent multi-thread chat per project (repo).
+-- Safety: messages should not contain code bodies/snippets by default (enforced in application layer).
+-- ═══════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS assistant_threads (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    title           TEXT NOT NULL DEFAULT 'New thread',
+    mode            TEXT NOT NULL DEFAULT 'support_safe'
+                    CHECK (mode IN ('support_safe','default')),
+    archived_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_message_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_at_repo ON assistant_threads(tenant_id, repo_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_at_active ON assistant_threads(tenant_id, repo_id, archived_at, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS assistant_messages (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id       UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    repo_id         UUID NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    thread_id       UUID NOT NULL REFERENCES assistant_threads(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL
+                    CHECK (role IN ('user','assistant','system')),
+    content         TEXT NOT NULL,
+    citations       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_am_thread ON assistant_messages(tenant_id, repo_id, thread_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_am_repo ON assistant_messages(tenant_id, repo_id, created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- ROW-LEVEL SECURITY (tenant-scoped tables)
 -- ═══════════════════════════════════════════════════════════════════════
 ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
@@ -598,6 +666,9 @@ ALTER TABLE unresolved_imports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assistant_drafts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assistant_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assistant_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
@@ -628,6 +699,9 @@ ALTER TABLE unresolved_imports FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_blocks FORCE ROW LEVEL SECURITY;
 ALTER TABLE doc_evidence FORCE ROW LEVEL SECURITY;
 ALTER TABLE pr_runs FORCE ROW LEVEL SECURITY;
+ALTER TABLE assistant_drafts FORCE ROW LEVEL SECURITY;
+ALTER TABLE assistant_threads FORCE ROW LEVEL SECURITY;
+ALTER TABLE assistant_messages FORCE ROW LEVEL SECURITY;
 ALTER TABLE jobs FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
 
@@ -746,6 +820,18 @@ CREATE POLICY tenant_isolation_doc_evidence ON doc_evidence
 
 DROP POLICY IF EXISTS tenant_isolation_pr_runs ON pr_runs;
 CREATE POLICY tenant_isolation_pr_runs ON pr_runs
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_assistant_drafts ON assistant_drafts;
+CREATE POLICY tenant_isolation_assistant_drafts ON assistant_drafts
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_assistant_threads ON assistant_threads;
+CREATE POLICY tenant_isolation_assistant_threads ON assistant_threads
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation_assistant_messages ON assistant_messages;
+CREATE POLICY tenant_isolation_assistant_messages ON assistant_messages
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
 ALTER TABLE org_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_secrets FORCE ROW LEVEL SECURITY;

@@ -63,8 +63,8 @@ Graphfly uses two separate GitHub Apps:
 ## 4. Webhook Security
 
 - **HMAC verification**: validate `X-Hub-Signature-256` using constant-time comparison with equal-length buffers.
-- **Replay protection**: deduplicate on `X-GitHub-Delivery` (store in Redis with TTL, e.g. 24 hours).
-- **Branch restriction**: only process push events to the repo default branch.
+- **Replay protection**: deduplicate on `X-GitHub-Delivery` using durable storage (`webhook_deliveries` table, unique constraint).
+- **Branch restriction**: only process push events to the project’s tracked branch.
 - **Strict allowlist**: ignore unexpected event types and missing installation context.
 
 ---
@@ -113,11 +113,20 @@ Graphfly uses two separate GitHub Apps:
 
 ---
 
-## 8. LLM Data Egress (Doc Agent)
+## 8. LLM Data Egress (Doc Agent + Product Documentation Assistant)
 
-- Only send the minimum code context required to update the relevant doc block.
-- Do not send credentials, tokens, or secrets (apply secret redaction to snippets if needed).
-- Log tool usage and outputs at a high level (counts, IDs), not raw code content, unless explicitly enabled for debugging and access-controlled.
+- **Principle:** only send the minimum **contract-first** context required to complete the task.
+- **No source code bodies by default:** agent tools must not return code bodies/snippets. Agents should operate on:
+  - Public Contract Graph fields (signatures/schemas/constraints/allowables)
+  - Flow entities + bounded flow traces (contract-first)
+  - Docs repo Markdown reads (sanitized; code blocks stripped; size capped)
+- **No secrets:** redact credentials/tokens/secrets from all tool outputs before they reach the gateway.
+- **No raw logs:** log tool usage and outputs at a high level (counts, IDs, timings), not raw content, unless explicitly enabled for debugging and access-controlled.
+
+Assistant writes (FR-AST-02) are staged as drafts:
+- Drafts are persisted in `assistant_drafts` and must be validated to reject code fences and code-like bodies.
+- Chat history is persisted in `assistant_threads` / `assistant_messages` but is sanitized to strip fenced and indented code blocks by default.
+- Applying a draft requires explicit user confirmation and writes only to the configured docs repo.
 
 ---
 

@@ -39,6 +39,13 @@ export class GitHubClient {
     this._base = apiBaseUrl;
   }
 
+  _splitFullName(fullName) {
+    const raw = String(fullName ?? '');
+    const [owner, repo] = raw.split('/', 2);
+    if (!owner || !repo) throw new Error('fullName must be in owner/repo form');
+    return { owner, repo };
+  }
+
   async getCurrentUser() {
     const data = await ghRequest({
       fetchImpl: this._fetch,
@@ -96,7 +103,7 @@ export class GitHubClient {
 
   async getRepo({ fullName }) {
     if (!fullName) throw new Error('fullName is required');
-    const [owner, repo] = String(fullName).split('/', 2);
+    const { owner, repo } = this._splitFullName(fullName);
     const data = await ghRequest({
       fetchImpl: this._fetch,
       apiBaseUrl: this._base,
@@ -116,7 +123,7 @@ export class GitHubClient {
   async getBranchHeadSha({ fullName, branch }) {
     if (!fullName) throw new Error('fullName is required');
     if (!branch) throw new Error('branch is required');
-    const [owner, repo] = String(fullName).split('/', 2);
+    const { owner, repo } = this._splitFullName(fullName);
     const ref = await ghRequest({
       fetchImpl: this._fetch,
       apiBaseUrl: this._base,
@@ -126,5 +133,106 @@ export class GitHubClient {
       ok: [200]
     });
     return ref?.object?.sha ?? null;
+  }
+
+  async listBranches({ fullName, perPage = 100 } = {}) {
+    if (!fullName) throw new Error('fullName is required');
+    const { owner, repo } = this._splitFullName(fullName);
+    const n = Number.isFinite(perPage) ? Math.max(1, Math.min(100, Math.trunc(perPage))) : 100;
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'GET',
+      path: `/repos/${owner}/${repo}/branches?per_page=${encodeURIComponent(String(n))}`,
+      ok: [200]
+    });
+    const arr = Array.isArray(data) ? data : [];
+    return arr
+      .map((b) => ({
+        name: b?.name ?? null,
+        sha: b?.commit?.sha ?? null,
+        protected: Boolean(b?.protected)
+      }))
+      .filter((b) => typeof b.name === 'string' && b.name.length > 0);
+  }
+
+  async createUserRepo({ name, private: isPrivate = true, description = null, autoInit = true } = {}) {
+    if (!name) throw new Error('name is required');
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'POST',
+      path: `/user/repos`,
+      ok: [201],
+      body: { name: String(name), private: Boolean(isPrivate), description: description ? String(description) : undefined, auto_init: Boolean(autoInit) }
+    });
+    return {
+      id: data?.id ?? null,
+      fullName: data?.full_name ?? null,
+      defaultBranch: data?.default_branch ?? 'main',
+      cloneUrl: data?.clone_url ?? null,
+      private: Boolean(data?.private)
+    };
+  }
+
+  async createOrgRepo({ org, name, private: isPrivate = true, description = null, autoInit = true } = {}) {
+    if (!org) throw new Error('org is required');
+    if (!name) throw new Error('name is required');
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'POST',
+      path: `/orgs/${encodeURIComponent(String(org))}/repos`,
+      ok: [201],
+      body: { name: String(name), private: Boolean(isPrivate), description: description ? String(description) : undefined, auto_init: Boolean(autoInit) }
+    });
+    return {
+      id: data?.id ?? null,
+      fullName: data?.full_name ?? null,
+      defaultBranch: data?.default_branch ?? 'main',
+      cloneUrl: data?.clone_url ?? null,
+      private: Boolean(data?.private)
+    };
+  }
+
+  async setRepoDefaultBranch({ fullName, defaultBranch } = {}) {
+    if (!fullName) throw new Error('fullName is required');
+    if (!defaultBranch) throw new Error('defaultBranch is required');
+    const { owner, repo } = this._splitFullName(fullName);
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'PATCH',
+      path: `/repos/${owner}/${repo}`,
+      ok: [200],
+      body: { default_branch: String(defaultBranch) }
+    });
+    return {
+      id: data?.id ?? null,
+      fullName: data?.full_name ?? fullName,
+      defaultBranch: data?.default_branch ?? String(defaultBranch),
+      cloneUrl: data?.clone_url ?? null
+    };
+  }
+
+  async createBranchFromSha({ fullName, branch, sha } = {}) {
+    if (!fullName) throw new Error('fullName is required');
+    if (!branch) throw new Error('branch is required');
+    if (!sha) throw new Error('sha is required');
+    const { owner, repo } = this._splitFullName(fullName);
+    const data = await ghRequest({
+      fetchImpl: this._fetch,
+      apiBaseUrl: this._base,
+      token: this._token,
+      method: 'POST',
+      path: `/repos/${owner}/${repo}/git/refs`,
+      ok: [201],
+      body: { ref: `refs/heads/${String(branch)}`, sha: String(sha) }
+    });
+    return { ok: true, ref: data?.ref ?? null, sha: data?.object?.sha ?? null };
   }
 }

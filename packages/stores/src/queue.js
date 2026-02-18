@@ -66,6 +66,22 @@ export class PgQueuePool {
     });
   }
 
+  async cancel({ tenantId, jobId, reason } = {}) {
+    if (!tenantId) throw new Error('tenantId is required');
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const q = new PgQueue({ client, queueName: this._name });
+      return q.cancel({ tenantId, jobId, reason });
+    });
+  }
+
+  async retry({ tenantId, jobId, resetAttempts = true } = {}) {
+    if (!tenantId) throw new Error('tenantId is required');
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const q = new PgQueue({ client, queueName: this._name });
+      return q.retry({ tenantId, jobId, resetAttempts });
+    });
+  }
+
   async getJob({ tenantId, jobId } = {}) {
     if (!tenantId) throw new Error('tenantId is required');
     return withTenantClient({ pool: this._pool, tenantId }, async (client) => {

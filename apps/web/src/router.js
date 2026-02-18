@@ -1,15 +1,21 @@
 export function createRouter({ onRoute }) {
-  const routes = new Set(['dashboard', 'onboarding', 'graph', 'docs', 'coverage', 'admin', 'accept']);
-  function current() {
+  const routes = new Set(['app', 'accept', 'onboarding']);
+  function parse() {
     const hash = window.location.hash.replace('#', '');
-    const route = hash.split('?', 1)[0];
-    return routes.has(route) ? route : 'dashboard';
+    const [routeRaw, queryRaw = ''] = hash.split('?', 2);
+    const route = routes.has(routeRaw) ? routeRaw : 'app';
+    const query = Object.create(null);
+    if (queryRaw) {
+      for (const [k, v] of new URLSearchParams(queryRaw).entries()) query[k] = v;
+    }
+    return { route, query };
   }
   function go(route) {
     window.location.hash = route;
   }
   function refresh() {
-    onRoute(current());
+    const { route, query } = parse();
+    onRoute(route, query);
   }
   function start() {
     window.addEventListener('hashchange', refresh);

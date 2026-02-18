@@ -1,31 +1,67 @@
 import { createRouter } from './router.js';
 import { ApiClient } from './api.js';
 import { createToastHub } from './toast.js';
-import { renderDashboardPage } from './pages/dashboard.js';
 import { renderOnboardingPage } from './pages/onboarding.js';
-import { renderGraphPage } from './pages/graph.js';
-import { renderDocsPage } from './pages/docs.js';
-import { renderCoveragePage } from './pages/coverage.js';
-import { renderAdminPage } from './pages/admin.js';
 import { renderAcceptInvitePage } from './pages/accept.js';
 import { createRealtimeClient } from './realtime.js';
+import { renderGraphPage } from './pages/graph.js';
+import { el, clear } from './render.js';
+import { renderDocsTreePanel } from './workspace/docs-tree.js';
+import { renderDocsViewerCanvas } from './workspace/docs-viewer.js';
+import { renderChatsPanel } from './workspace/chats.js';
+import { renderGitPanel } from './workspace/git-panel.js';
+import { renderGitCanvas } from './workspace/git-canvas.js';
+import { renderFlowsCanvas } from './workspace/flows-canvas.js';
+import { renderSettingsPanel } from './workspace/settings-panel.js';
+import { renderSettingsCanvas } from './workspace/settings-canvas.js';
 
-const pageEl = document.getElementById('page');
-const titleEl = document.getElementById('pageTitle');
+const panelEl = document.getElementById('panel');
+const canvasEl = document.getElementById('canvas');
 const modeSelect = document.getElementById('modeSelect');
-const orgDisplayEl = document.getElementById('orgDisplay');
-const repoSelectEl = document.getElementById('repoSelect');
+const projectSelectEl = document.getElementById('projectSelect');
+const codeBranchPillEl = document.getElementById('codeBranchPill');
+const docsBranchSelectEl = document.getElementById('docsBranchSelect');
+const openPrBtn = document.getElementById('openPrBtn');
+const userBtn = document.getElementById('userBtn');
 const toastsEl = document.getElementById('toasts');
+
+const storedMode = String(localStorage.getItem('graphfly_mode') ?? '').trim();
+if (storedMode === 'default' || storedMode === 'support_safe') modeSelect.value = storedMode;
+
+const PANEL_MODES = new Set(['chats', 'docs', 'git', 'settings', 'feedback']);
+const CANVAS_MODES = new Set(['flows', 'docs', 'git', 'settings', 'graph']);
+
+function normalizePanelMode(v) {
+  const s = String(v ?? '').toLowerCase();
+  return PANEL_MODES.has(s) ? s : 'chats';
+}
+
+function normalizeCanvasMode(v) {
+  const s = String(v ?? '').toLowerCase();
+  return CANVAS_MODES.has(s) ? s : 'flows';
+}
 
 const state = {
   mode: modeSelect.value,
   apiUrl: localStorage.getItem('graphfly_api_url') ?? 'http://127.0.0.1:8787',
   tenantId: localStorage.getItem('graphfly_tenant_id') ?? '00000000-0000-0000-0000-000000000001',
   repoId: localStorage.getItem('graphfly_repo_id') ?? '00000000-0000-0000-0000-000000000002',
+  docsRef: localStorage.getItem('graphfly_docs_ref') ?? 'default',
+  docsDir: localStorage.getItem('graphfly_docs_dir') ?? '',
+  docsPath: localStorage.getItem('graphfly_docs_path') || null,
+  docsDraft: null,
+  threadId: localStorage.getItem('graphfly_thread_id') || null,
+  draftId: localStorage.getItem('graphfly_draft_id') || null,
+  prRunId: localStorage.getItem('graphfly_pr_run_id') || null,
   authToken: localStorage.getItem('graphfly_auth_token') ?? null,
+  panelMode: normalizePanelMode(localStorage.getItem('graphfly_panel_mode')),
+  graphOn: localStorage.getItem('graphfly_canvas_graph') === '1',
+  lastCanvasMode: normalizeCanvasMode(localStorage.getItem('graphfly_last_canvas_mode')),
   shell: { org: null, repos: [] },
   shellLoaded: false,
-  shellLoading: null
+  shellLoading: null,
+  disposePanel: null,
+  disposeCanvas: null
 };
 
 state.toast = createToastHub({ rootEl: toastsEl });
@@ -34,71 +70,161 @@ state.realtime.connect();
 
 modeSelect.addEventListener('change', () => {
   state.mode = modeSelect.value;
+  localStorage.setItem('graphfly_mode', state.mode);
   router.refresh();
 });
 
-repoSelectEl.addEventListener('change', () => {
-  const nextRepoId = repoSelectEl.value;
-  if (!nextRepoId) return;
-  state.repoId = nextRepoId;
-  localStorage.setItem('graphfly_repo_id', nextRepoId);
-  state.realtime?.update?.({ nextRepoId });
+projectSelectEl.addEventListener('change', async () => {
+  const next = projectSelectEl.value;
+  if (!next) return;
+  if (next === '__new__') {
+    router.go('onboarding');
+    return;
+  }
+  state.repoId = next;
+  localStorage.setItem('graphfly_repo_id', next);
+  state.threadId = null;
+  localStorage.removeItem('graphfly_thread_id');
+  state.draftId = null;
+  localStorage.removeItem('graphfly_draft_id');
+  state.prRunId = null;
+  localStorage.removeItem('graphfly_pr_run_id');
+  state.realtime?.update?.({ nextRepoId: next });
+  await refreshShell();
+  router.refresh();
+});
+
+docsBranchSelectEl.addEventListener('change', () => {
+  state.docsRef = docsBranchSelectEl.value || 'default';
+  localStorage.setItem('graphfly_docs_ref', state.docsRef);
+  const cur = currentHashQuery();
+  if ((cur.nav ?? null) === 'docs' && currentHashRoute() === 'app') {
+    goAppWithQuery({ ref: state.docsRef });
+    return;
+  }
+  router.refresh();
+});
+
+openPrBtn.addEventListener('click', () => {
+  const draft = state.docsDraft;
+  if (!draft || !draft.dirty || !draft.path) {
+    state.toast?.toast?.({ kind: 'warn', title: 'Nothing to publish', message: 'Edit a docs file first, then click Open PR.' });
+    return;
+  }
+  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
+  openPrBtn.setAttribute('disabled', '');
+  (async () => {
+    try {
+      const title = `docs: update ${String(draft.path).split('/').slice(-1)[0]}`.slice(0, 120);
+      const out = await api.docsOpenPr({
+        title,
+        body: `Manual edit from Graphfly.\n\nFile: ${draft.path}\n`,
+        files: [{ path: draft.path, content: draft.after }]
+      });
+      const pr = out?.pr ?? null;
+      state.toast?.toast?.({
+        kind: 'ok',
+        title: 'PR opened',
+        message: pr?.prUrl ? pr.prUrl : `Branch: ${pr?.branchName ?? '—'}`
+      });
+      draft.before = draft.after;
+      draft.dirty = false;
+      draft.diff = null;
+      if (pr?.branchName) {
+        state.docsRef = String(pr.branchName);
+        localStorage.setItem('graphfly_docs_ref', state.docsRef);
+        if (currentHashRoute() === 'app') {
+          goAppWithQuery({ nav: 'docs', ref: state.docsRef, thread: null, draft: null, run: null });
+          return;
+        }
+      }
+      router.refresh();
+    } catch (e) {
+      state.toast?.toast?.({ kind: 'error', title: 'Open PR failed', message: String(e?.message ?? e) });
+    } finally {
+      openPrBtn.removeAttribute('disabled');
+    }
+  })();
+});
+
+userBtn.addEventListener('click', () => {
+  state.panelMode = 'settings';
+  localStorage.setItem('graphfly_panel_mode', state.panelMode);
+  state.lastCanvasMode = baseCanvasModeForPanel();
+  localStorage.setItem('graphfly_last_canvas_mode', state.lastCanvasMode);
   router.refresh();
 });
 
 async function refreshShell() {
   if (state.shellLoading) return state.shellLoading;
   state.shellLoading = (async () => {
-  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
+    const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
 
-  try {
-    const org = await api.getCurrentOrg();
-    const repos = (await api.listRepos())?.repos ?? [];
-    state.shell.org = org ?? null;
-    state.shell.repos = repos;
-  } catch (e) {
-    // Best-effort; shell can still render in local/dev.
-    state.shell.org = null;
-    state.shell.repos = [];
-  }
-  state.shellLoaded = true;
-
-  const orgName = state.shell.org?.displayName ?? state.shell.org?.slug ?? state.tenantId;
-  orgDisplayEl.textContent = String(orgName ?? '—');
-
-  repoSelectEl.innerHTML = '';
-  const repos = state.shell.repos ?? [];
-  if (!Array.isArray(repos) || repos.length === 0) {
-    repoSelectEl.setAttribute('disabled', '');
-    repoSelectEl.appendChild(new Option('No projects yet', ''));
-  } else {
-    repoSelectEl.removeAttribute('disabled');
-    for (const r of repos) {
-      repoSelectEl.appendChild(new Option(String(r.fullName ?? r.id), String(r.id)));
+    try {
+      const org = await api.getCurrentOrg();
+      const repos = (await api.listRepos())?.repos ?? [];
+      state.shell.org = org ?? null;
+      state.shell.repos = repos;
+    } catch (e) {
+      // Best-effort; shell can still render in local/dev.
+      state.shell.org = null;
+      state.shell.repos = [];
     }
-    const existing = repos.some((r) => r.id === state.repoId);
-    if (!existing) {
-      state.repoId = String(repos[0].id);
-      localStorage.setItem('graphfly_repo_id', state.repoId);
-      state.realtime?.update?.({ nextRepoId: state.repoId });
-    }
-    repoSelectEl.value = state.repoId;
-  }
+    state.shellLoaded = true;
 
-  const hasProject = repos.length > 0;
-  const hasDocsRepo = Boolean(state.shell.org?.docsRepoFullName);
-  const navGate = [
-    { route: 'graph', enabled: hasProject },
-    { route: 'docs', enabled: hasProject && hasDocsRepo },
-    { route: 'coverage', enabled: hasProject },
-    { route: 'admin', enabled: true }
-  ];
-  for (const it of navGate) {
-    const btn = document.querySelector(`[data-route="${it.route}"]`);
-    if (!btn) continue;
-    if (it.enabled) btn.removeAttribute('disabled');
-    else btn.setAttribute('disabled', '');
-  }
+    const repos = state.shell.repos ?? [];
+    projectSelectEl.innerHTML = '';
+    if (!Array.isArray(repos) || repos.length === 0) {
+      projectSelectEl.setAttribute('disabled', '');
+      projectSelectEl.appendChild(new Option('No projects yet', ''));
+    } else {
+      projectSelectEl.removeAttribute('disabled');
+      for (const r of repos) {
+        projectSelectEl.appendChild(new Option(String(r.fullName ?? r.id), String(r.id)));
+      }
+      projectSelectEl.appendChild(new Option('New project…', '__new__'));
+      const existing = repos.some((r) => String(r.id) === String(state.repoId));
+      if (!existing) {
+        state.repoId = String(repos[0].id);
+        localStorage.setItem('graphfly_repo_id', state.repoId);
+        state.realtime?.update?.({ nextRepoId: state.repoId });
+      }
+      projectSelectEl.value = state.repoId;
+    }
+
+    const selectedRepo = Array.isArray(repos) ? repos.find((r) => String(r.id) === String(state.repoId)) : null;
+    const trackedBranch = selectedRepo?.trackedBranch ?? selectedRepo?.defaultBranch ?? null;
+    codeBranchPillEl.textContent = trackedBranch ? `Code: ${trackedBranch} (locked)` : 'Code: —';
+
+    docsBranchSelectEl.innerHTML = '';
+    if (!selectedRepo?.docsRepoFullName) {
+      docsBranchSelectEl.setAttribute('disabled', '');
+      docsBranchSelectEl.appendChild(new Option('Docs: —', 'default'));
+    } else {
+      docsBranchSelectEl.removeAttribute('disabled');
+      let defaultRef = selectedRepo?.docsDefaultBranch ?? 'main';
+      let previews = [];
+      try {
+        const refs = await api.docsRefs({ repoId: state.repoId });
+        defaultRef = refs?.default?.ref ?? defaultRef;
+        previews = Array.isArray(refs?.previews) ? refs.previews : [];
+      } catch {
+        // ignore
+      }
+      docsBranchSelectEl.appendChild(new Option(`Docs: ${defaultRef}`, 'default'));
+      for (const p of previews) {
+        const b = p?.ref ?? null;
+        if (!b) continue;
+        docsBranchSelectEl.appendChild(new Option(`Preview: ${b}`, String(b)));
+      }
+      docsBranchSelectEl.value = state.docsRef || 'default';
+      // If the stored ref is no longer available, fall back to default.
+      if (![...docsBranchSelectEl.options].some((o) => o.value === docsBranchSelectEl.value)) {
+        state.docsRef = 'default';
+        localStorage.setItem('graphfly_docs_ref', 'default');
+        docsBranchSelectEl.value = 'default';
+      }
+    }
   })();
   try {
     return await state.shellLoading;
@@ -108,59 +234,352 @@ async function refreshShell() {
 }
 
 const router = createRouter({
-  onRoute: (route) => {
-    const ctx = { state, pageEl };
-    refreshShell();
-
-    for (const btn of document.querySelectorAll('[data-route]')) {
-      btn.classList.toggle('nav__item--active', btn.dataset.route === route);
-      btn.setAttribute('aria-current', btn.dataset.route === route ? 'page' : 'false');
-    }
-
-    if (state.shellLoaded && route !== 'onboarding' && route !== 'accept' && (state.shell?.repos?.length ?? 0) === 0) {
-      titleEl.textContent = 'Setup';
-      renderOnboardingPage(ctx);
-      state.toast?.toast?.({ kind: 'warn', title: 'Setup required', message: 'Create your first Project to unlock the app.' });
-      return;
-    }
-
-    if (route === 'graph') {
-      titleEl.textContent = 'Graph Explorer';
-      renderGraphPage(ctx);
-      return;
-    }
-    if (route === 'docs') {
-      titleEl.textContent = 'Docs';
-      renderDocsPage(ctx);
-      return;
-    }
-    if (route === 'coverage') {
-      titleEl.textContent = 'Coverage';
-      renderCoveragePage(ctx);
-      return;
-    }
-    if (route === 'admin') {
-      titleEl.textContent = 'Admin';
-      renderAdminPage(ctx);
-      return;
-    }
+  onRoute: (route, query = null) => {
+    const ctx = { state };
+    applyDeepLinkQuery(query);
+    refreshShell().then(() => {
+      if (route === 'app') renderWorkspace();
+    });
     if (route === 'accept') {
-      titleEl.textContent = 'Accept Invite';
-      renderAcceptInvitePage(ctx);
+      clear(panelEl);
+      clear(canvasEl);
+      renderAcceptInvitePage({ ...ctx, pageEl: canvasEl });
       return;
     }
     if (route === 'onboarding') {
-      titleEl.textContent = 'Setup';
-      renderOnboardingPage(ctx);
+      clear(panelEl);
+      clear(canvasEl);
+      renderOnboardingPage({ ...ctx, pageEl: canvasEl });
       return;
     }
-    titleEl.textContent = 'Dashboard';
-    renderDashboardPage(ctx);
+    renderWorkspace();
   }
 });
 
-for (const btn of document.querySelectorAll('[data-route]')) {
-  btn.addEventListener('click', () => router.go(btn.dataset.route));
+function setRailActive() {
+  for (const btn of document.querySelectorAll('.rail__item[data-nav]')) {
+    const nav = btn.dataset.nav;
+    const active = nav === 'graph' ? state.graphOn : nav === state.panelMode;
+    btn.classList.toggle('rail__item--active', Boolean(active));
+    btn.setAttribute('aria-current', active ? 'page' : 'false');
+  }
+}
+
+function baseCanvasModeForPanel() {
+  if (state.panelMode === 'docs') return 'docs';
+  if (state.panelMode === 'git') return 'git';
+  if (state.panelMode === 'settings') return 'settings';
+  return 'flows';
+}
+
+function desiredCanvasMode() {
+  if (state.graphOn) return 'graph';
+  if (state.panelMode === 'feedback') return state.lastCanvasMode;
+  return baseCanvasModeForPanel();
+}
+
+function renderPanel() {
+  if (typeof state.disposePanel === 'function') state.disposePanel();
+  state.disposePanel = null;
+  clear(panelEl);
+
+  if (!state.shellLoaded) {
+    panelEl.appendChild(el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Loading…']), el('div', { class: 'small' }, ['Fetching projects…'])]));
+    return;
+  }
+
+  const repos = state.shell?.repos ?? [];
+  if ((repos?.length ?? 0) === 0) {
+    panelEl.appendChild(
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card__title' }, ['Setup required']),
+        el('div', { class: 'small' }, ['Create your first project to start indexing and generating docs.']),
+        el('button', { class: 'button button--primary', onclick: () => router.go('onboarding') }, ['Create project'])
+      ])
+    );
+    return;
+  }
+
+  if (state.panelMode === 'chats') {
+    state.disposePanel =
+      renderChatsPanel({
+        state,
+        rootEl: panelEl,
+        onNavigate: (evt) => {
+          if ((evt?.kind ?? null) === 'docs_from_citation' && currentHashRoute() === 'app') {
+            goAppWithQuery({ nav: 'docs', path: state.docsPath ?? null, ref: state.docsRef ?? 'default', thread: null, draft: null, run: null });
+            return;
+          }
+          if ((evt?.kind ?? null) === 'docs_from_draft' && currentHashRoute() === 'app') {
+            goAppWithQuery({ nav: 'docs', path: state.docsPath ?? null, ref: state.docsRef ?? 'default', thread: null, draft: null, run: null });
+            return;
+          }
+          if ((evt?.kind ?? null) === 'chat_thread' && currentHashRoute() === 'app') {
+            goAppWithQuery({ nav: 'chats', thread: state.threadId ?? null, draft: state.draftId ?? null, run: null });
+            return;
+          }
+          router.refresh();
+        }
+      }) ?? null;
+    return;
+  }
+
+  if (state.panelMode === 'docs') {
+    state.disposePanel =
+      renderDocsTreePanel({
+        state,
+        rootEl: panelEl,
+        onNavigate: (evt) => {
+          if (evt?.kind === 'onboarding') {
+            router.go('onboarding');
+            return;
+          }
+          if (currentHashRoute() === 'app') {
+            const patch =
+              evt?.kind === 'docs_file'
+                ? { nav: 'docs', dir: state.docsDir ?? '', path: state.docsPath ?? '', ref: state.docsRef ?? 'default', thread: null, draft: null, run: null }
+                : evt?.kind === 'docs_dir'
+                  ? { nav: 'docs', dir: state.docsDir ?? '', ref: state.docsRef ?? 'default', thread: null, draft: null, run: null }
+                  : null;
+            if (patch) {
+              goAppWithQuery(patch);
+              return;
+            }
+          }
+          router.refresh();
+        }
+      }) ?? null;
+    return;
+  }
+
+  if (state.panelMode === 'git') {
+    state.disposePanel =
+      renderGitPanel({
+        state,
+        rootEl: panelEl,
+        onNavigate: (evt) => {
+          if ((evt?.kind ?? null) === 'git_run' && currentHashRoute() === 'app') {
+            goAppWithQuery({ nav: 'git', run: state.prRunId ?? null, thread: null, draft: null });
+            return;
+          }
+          router.refresh();
+        }
+      }) ?? null;
+    return;
+  }
+
+  if (state.panelMode === 'settings') {
+    state.disposePanel =
+      renderSettingsPanel({
+        state,
+        rootEl: panelEl,
+        onNavigate: () => router.refresh()
+      }) ?? null;
+    return;
+  }
+
+  if (state.panelMode === 'feedback') {
+    const messageInput = el('textarea', { class: 'input', rows: '6', placeholder: 'What can we improve?' });
+    panelEl.appendChild(
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card__title' }, ['Feedback']),
+        messageInput,
+        el('div', { class: 'row' }, [
+          el(
+            'button',
+            {
+              class: 'button button--primary',
+              onclick: () =>
+                state.toast?.toast?.({ kind: 'ok', title: 'Thanks', message: 'Feedback capture is not wired yet.' })
+            },
+            ['Send']
+          )
+        ])
+      ])
+    );
+  }
+}
+
+function renderCanvas() {
+  if (typeof state.disposeCanvas === 'function') state.disposeCanvas();
+  state.disposeCanvas = null;
+  clear(canvasEl);
+
+  const canvasMode = desiredCanvasMode();
+  if (canvasMode === 'graph') {
+    state.disposeCanvas = renderGraphPage({ state, pageEl: canvasEl }) ?? null;
+    return;
+  }
+  if (canvasMode === 'docs') {
+    state.disposeCanvas =
+      renderDocsViewerCanvas({
+        state,
+        rootEl: canvasEl,
+        onNavigate: () => router.refresh()
+      }) ?? null;
+    return;
+  }
+  if (canvasMode === 'git') {
+    state.disposeCanvas =
+      renderGitCanvas({
+        state,
+        rootEl: canvasEl,
+        onNavigate: (evt) => {
+          if ((evt?.kind ?? null) === 'docs_from_git' && currentHashRoute() === 'app') {
+            goAppWithQuery({ nav: 'docs', ref: state.docsRef ?? 'default', path: state.docsPath ?? null, thread: null, draft: null, run: null });
+            return;
+          }
+          router.refresh();
+        }
+      }) ?? null;
+    return;
+  }
+  if (canvasMode === 'settings') {
+    state.disposeCanvas =
+      renderSettingsCanvas({
+        state,
+        rootEl: canvasEl,
+        onNavigate: () => router.refresh()
+      }) ?? null;
+    return;
+  }
+
+  // Default canvas: flows
+  state.disposeCanvas =
+    renderFlowsCanvas({
+      state,
+      rootEl: canvasEl,
+      onNavigate: (evt) => {
+        if ((evt?.kind ?? null) === 'docs_from_flow' && currentHashRoute() === 'app') {
+          goAppWithQuery({ nav: 'docs', path: state.docsPath ?? null, ref: state.docsRef ?? 'default', thread: null, draft: null, run: null });
+          return;
+        }
+        router.refresh();
+      }
+    }) ?? null;
+}
+
+function renderWorkspace() {
+  setRailActive();
+  renderPanel();
+  renderCanvas();
+}
+
+for (const btn of document.querySelectorAll('.rail__item[data-nav]')) {
+  btn.addEventListener('click', () => {
+    const nav = btn.dataset.nav;
+    if (nav === 'graph') {
+      state.graphOn = !state.graphOn;
+      localStorage.setItem('graphfly_canvas_graph', state.graphOn ? '1' : '0');
+      router.refresh();
+      return;
+    }
+    state.panelMode = normalizePanelMode(nav);
+    localStorage.setItem('graphfly_panel_mode', state.panelMode);
+    if (state.panelMode !== 'feedback') {
+      state.lastCanvasMode = baseCanvasModeForPanel();
+      localStorage.setItem('graphfly_last_canvas_mode', state.lastCanvasMode);
+    }
+    if (currentHashRoute() === 'app') {
+      const patch =
+        state.panelMode === 'docs'
+          ? { nav: 'docs', dir: state.docsDir ?? '', path: state.docsPath ?? null, ref: state.docsRef ?? 'default', thread: null, draft: null, run: null }
+          : state.panelMode === 'chats'
+            ? { nav: 'chats', thread: state.threadId ?? null, draft: state.draftId ?? null, dir: null, path: null, ref: null, run: null }
+            : state.panelMode === 'git'
+              ? { nav: 'git', run: state.prRunId ?? null, dir: null, path: null, ref: null, thread: null, draft: null }
+              : { nav: state.panelMode, dir: null, path: null, ref: null, thread: null, draft: null, run: null };
+      goAppWithQuery(patch);
+      return;
+    }
+    router.refresh();
+  });
 }
 
 router.start();
+
+function currentHashRoute() {
+  const raw = window.location.hash.replace('#', '');
+  const route = raw.split('?', 1)[0] || 'app';
+  return route;
+}
+
+function currentHashQuery() {
+  const raw = window.location.hash.replace('#', '');
+  const queryRaw = raw.includes('?') ? raw.split('?', 2)[1] ?? '' : '';
+  const out = Object.create(null);
+  if (!queryRaw) return out;
+  for (const [k, v] of new URLSearchParams(queryRaw).entries()) out[k] = v;
+  return out;
+}
+
+function goAppWithQuery(patch) {
+  const cur = currentHashQuery();
+  const next = { ...cur };
+  for (const [k, v] of Object.entries(patch ?? {})) {
+    if (v === null) delete next[k];
+    else next[k] = String(v);
+  }
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(next)) {
+    if (!v) continue;
+    sp.set(k, v);
+  }
+  const qs = sp.toString();
+  router.go(qs ? `app?${qs}` : 'app');
+}
+
+function applyDeepLinkQuery(query) {
+  const q = query && typeof query === 'object' ? query : null;
+  if (!q) return;
+
+  const nav = q.nav ?? null;
+  if (nav && PANEL_MODES.has(String(nav))) {
+    state.panelMode = normalizePanelMode(nav);
+    localStorage.setItem('graphfly_panel_mode', state.panelMode);
+  }
+
+  const thread = q.thread ?? null;
+  if (thread != null) {
+    const tid = String(thread);
+    state.threadId = tid ? tid : null;
+    if (state.threadId) localStorage.setItem('graphfly_thread_id', state.threadId);
+    else localStorage.removeItem('graphfly_thread_id');
+  }
+
+  const run = q.run ?? null;
+  if (run != null) {
+    const rid = String(run);
+    state.prRunId = rid ? rid : null;
+    if (state.prRunId) localStorage.setItem('graphfly_pr_run_id', state.prRunId);
+    else localStorage.removeItem('graphfly_pr_run_id');
+  }
+
+  const draft = q.draft ?? null;
+  if (draft != null) {
+    const did = String(draft);
+    state.draftId = did ? did : null;
+    if (state.draftId) localStorage.setItem('graphfly_draft_id', state.draftId);
+    else localStorage.removeItem('graphfly_draft_id');
+  }
+
+  const ref = q.ref ?? null;
+  if (ref && typeof ref === 'string') {
+    state.docsRef = ref;
+    localStorage.setItem('graphfly_docs_ref', ref);
+  }
+
+  const dir = q.dir ?? null;
+  if (dir != null) {
+    state.docsDir = String(dir);
+    localStorage.setItem('graphfly_docs_dir', state.docsDir);
+  }
+
+  const path = q.path ?? null;
+  if (path != null) {
+    const p = String(path);
+    state.docsPath = p || null;
+    if (p) localStorage.setItem('graphfly_docs_path', p);
+    else localStorage.removeItem('graphfly_docs_path');
+  }
+}

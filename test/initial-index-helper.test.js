@@ -34,7 +34,7 @@ test('enqueueInitialFullIndexOnRepoCreate enqueues index.run with Reader App tok
     repo: { id: 'r1', fullName: 'acme/widgets', defaultBranch: 'main' },
     org: { githubReaderInstallId: 123, docsRepoFullName: 'docs-org/docs' },
     indexQueue,
-    defaultBranch: 'main',
+    branch: 'main',
     resolveGitHubReaderToken: async () => 'rtok',
     githubApiBaseUrl: () => 'https://example-ghe.local/api/v3',
     GitHubClientImpl: FakeGitHubClient
@@ -62,4 +62,3 @@ test('enqueueInitialFullIndexOnRepoCreate errors when docs repo is missing', asy
     (e) => String(e?.code ?? e?.message) === 'docs_repo_not_configured'
   );
 });
-

@@ -6,6 +6,11 @@ export function renderOnboardingPage({ state, pageEl }) {
   clear(pageEl);
   const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
   let refreshTimer = null;
+  let latestOrg = null;
+  let latestOverview = null;
+  let docsVerified = false;
+  let selectedSourceRepo = null;
+  let selectedSourceBranches = [];
 
   const steps = [
     { k: '1', h: 'Connect GitHub', s: 'OAuth sign-in. GitHub Apps handle read/write access.', ok: false },
@@ -25,9 +30,21 @@ export function renderOnboardingPage({ state, pageEl }) {
   const docsRepoInput = el('input', { class: 'input', id: 'docsRepoInput', placeholder: 'org/docs (GitHub full name)' });
   const orgNameInput = el('input', { class: 'input', id: 'orgNameInput', placeholder: 'Display name (optional)' });
   const docsStatusEl = el('div', { class: 'small' }, ['Docs repo: not set']);
+  const docsVerifyBadgeEl = el('span', { class: 'badge badge--warn' }, ['unverified']);
+  const docsCreateFullNameInput = el('input', { class: 'input', placeholder: 'owner/new-docs-repo' });
+  const docsCreateVisibilitySelect = el('select', { class: 'select select--compact', 'aria-label': 'Visibility' }, [
+    el('option', { value: 'private' }, ['private']),
+    el('option', { value: 'public' }, ['public'])
+  ]);
+  const docsCreateDefaultBranchInput = el('input', { class: 'input', placeholder: 'default branch (optional)' });
+  const docsCreateStatusEl = el('div', { class: 'small' }, ['']);
 
   const reposListEl = el('ul', { class: 'list' });
-  const repoHintEl = el('div', { class: 'small' }, ['Pick a source repo to create a Project. The first index runs automatically.']);
+  const projectPickerHintEl = el('div', { class: 'small' }, ['Select a repo, choose a tracked branch (locked), then create the project.']);
+  const selectedRepoEl = el('div', { class: 'list__item' }, [el('div', { class: 'small' }, ['No repo selected yet.'])]);
+  const trackedBranchSelect = el('select', { class: 'select select--compact', disabled: '' });
+  const branchesStatusEl = el('div', { class: 'small k' }, ['']);
+  const createProjectBtn = el('button', { class: 'button button--primary', disabled: '' }, ['Create Project']);
   const localRepoRootInput = el('input', { class: 'input', id: 'localRepoRootInput', placeholder: 'Local repo path (dev only): /abs/path/to/repo' });
   const localCreateBtn = el('button', { class: 'button' }, ['Create Local Project']);
 
@@ -77,7 +94,7 @@ export function renderOnboardingPage({ state, pageEl }) {
         el('div', { class: 'divider' }),
         docsRepoInput,
         orgNameInput,
-        docsStatusEl,
+        el('div', { class: 'row' }, [docsStatusEl, el('div', { class: 'row__spacer' }, []), docsVerifyBadgeEl]),
         el('div', { class: 'row' }, [
           el('button', {
             class: 'button button--primary',
@@ -97,20 +114,48 @@ export function renderOnboardingPage({ state, pageEl }) {
               onclick: async () => {
                 try {
                   const out = await api.verifyDocsRepo({ docsRepoFullName: docsRepoInput.value.trim() || null });
-                  setBanner({ kind: out?.ok ? 'ok' : 'warn', text: out?.ok ? 'Docs repo verified.' : 'Docs repo verification returned no result.' });
+                  docsVerified = Boolean(out?.ok);
+                  if (docsVerified) localStorage.setItem('graphfly_docs_verified', docsRepoInput.value.trim());
+                  else localStorage.removeItem('graphfly_docs_verified');
+                  setBanner({ kind: docsVerified ? 'ok' : 'warn', text: docsVerified ? 'Docs repo verified.' : 'Docs repo verification returned no result.' });
+                  updateCreateProjectGate();
                 } catch (e) {
+                  docsVerified = false;
+                  localStorage.removeItem('graphfly_docs_verified');
                   setBanner({ kind: 'error', text: `Docs repo verify failed: ${String(e?.message ?? e)}` });
+                  updateCreateProjectGate();
                 }
               }
             }, ['Verify'])
+          ]),
+          el('details', { class: 'details' }, [
+            el('summary', {}, ['Create new docs repo']),
+            el('div', { class: 'details__body' }, [
+              el('div', { class: 'small' }, ['Create a separate docs repo in GitHub, then install the Docs App on it and verify.']),
+              docsCreateFullNameInput,
+              el('div', { class: 'row' }, [docsCreateVisibilitySelect, docsCreateDefaultBranchInput]),
+              docsCreateStatusEl,
+              el('div', { class: 'row' }, [
+                el('button', { class: 'button button--primary', type: 'button', id: 'docsCreateBtn' }, ['Create repo'])
+              ])
+            ])
           ])
         ]),
         el('div', { class: 'card' }, [
           el('div', { class: 'card__title' }, ['3) Projects']),
-          repoHintEl,
+          projectPickerHintEl,
           el('div', { class: 'row' }, [repoSearchInput]),
           el('div', { class: 'small' }, ['Available source repos (read-only):']),
           githubReposEl,
+          el('div', { class: 'divider' }, []),
+          el('div', { class: 'card__title' }, ['Selected']),
+          selectedRepoEl,
+          branchesStatusEl,
+          el('div', { class: 'row' }, [
+            trackedBranchSelect,
+            el('div', { class: 'row__spacer' }, []),
+            createProjectBtn
+          ]),
           el('div', { class: 'small' }, ['Existing projects:']),
           reposListEl,
           el('details', { class: 'details' }, [
@@ -149,6 +194,71 @@ export function renderOnboardingPage({ state, pageEl }) {
     const k = String(kind ?? 'info');
     bannerEl.className = k === 'ok' ? 'banner banner--ok' : k === 'warn' ? 'banner banner--warn' : k === 'error' ? 'banner banner--error' : 'banner';
     bannerEl.textContent = String(text ?? '');
+  }
+
+  function updateDocsVerifyBadge() {
+    docsVerifyBadgeEl.className = docsVerified ? 'badge badge--ok' : 'badge badge--warn';
+    docsVerifyBadgeEl.textContent = docsVerified ? 'verified' : 'unverified';
+  }
+
+  function canCreateProject() {
+    if (!selectedSourceRepo?.fullName) return false;
+    if (!docsRepoInput.value.trim()) return false;
+    const docsMode = latestOverview?.docs?.writerMode ?? 'github';
+    const cloudSyncRequired = Boolean(latestOverview?.docs?.cloudSyncRequired);
+    const runtimeMode = String(latestOverview?.runtime?.mode ?? 'dev').toLowerCase();
+    if (docsMode === 'local') return true;
+    if (runtimeMode === 'prod' || cloudSyncRequired) return docsVerified && Boolean(latestOrg?.githubDocsInstallId);
+    return docsVerified || Boolean(latestOrg?.githubDocsInstallId);
+  }
+
+  function updateCreateProjectGate() {
+    updateDocsVerifyBadge();
+    if (!selectedSourceRepo) {
+      createProjectBtn.setAttribute('disabled', '');
+      return;
+    }
+    if (canCreateProject()) createProjectBtn.removeAttribute('disabled');
+    else createProjectBtn.setAttribute('disabled', '');
+  }
+
+  async function selectSourceRepo(repo) {
+    selectedSourceRepo = repo ?? null;
+    selectedSourceBranches = [];
+    trackedBranchSelect.innerHTML = '';
+    branchesStatusEl.textContent = '';
+    if (!selectedSourceRepo?.fullName) {
+      selectedRepoEl.innerHTML = '';
+      selectedRepoEl.appendChild(el('div', { class: 'small' }, ['No repo selected yet.']));
+      updateCreateProjectGate();
+      return;
+    }
+    selectedRepoEl.innerHTML = '';
+    selectedRepoEl.appendChild(el('div', { class: 'h' }, [selectedSourceRepo.fullName]));
+    selectedRepoEl.appendChild(el('div', { class: 'small k' }, [`default=${selectedSourceRepo.defaultBranch ?? 'main'} • id=${selectedSourceRepo.id ?? '—'}`]));
+    branchesStatusEl.textContent = 'Loading branches…';
+    trackedBranchSelect.setAttribute('disabled', '');
+    try {
+      const out = await api.githubListBranches({ fullName: selectedSourceRepo.fullName });
+      const branches = Array.isArray(out?.branches) ? out.branches : [];
+      selectedSourceBranches = branches;
+      trackedBranchSelect.innerHTML = '';
+      const names = branches.map((b) => b?.name).filter((s) => typeof s === 'string' && s.length > 0);
+      const uniq = Array.from(new Set(names));
+      const preferred = selectedSourceRepo.defaultBranch ?? (uniq[0] ?? 'main');
+      for (const n of uniq.slice(0, 100)) trackedBranchSelect.appendChild(new Option(n, n));
+      trackedBranchSelect.value = preferred;
+      branchesStatusEl.textContent = uniq.length ? `Branches: ${uniq.length}` : 'No branches returned.';
+      trackedBranchSelect.removeAttribute('disabled');
+      updateCreateProjectGate();
+    } catch (e) {
+      trackedBranchSelect.innerHTML = '';
+      trackedBranchSelect.appendChild(new Option(selectedSourceRepo.defaultBranch ?? 'main', selectedSourceRepo.defaultBranch ?? 'main'));
+      trackedBranchSelect.value = selectedSourceRepo.defaultBranch ?? 'main';
+      branchesStatusEl.textContent = `Failed to load branches (defaulting): ${String(e?.message ?? e)}`;
+      trackedBranchSelect.removeAttribute('disabled');
+      updateCreateProjectGate();
+    }
   }
 
   githubConnectBtn.onclick = async () => {
@@ -243,9 +353,17 @@ export function renderOnboardingPage({ state, pageEl }) {
 
       const orgRes = await api.getCurrentOrg();
       const org = orgRes ?? {};
+      latestOrg = org;
+      try {
+        latestOverview = await api.adminOverview();
+      } catch {
+        latestOverview = null;
+      }
       docsRepoInput.value = org.docsRepoFullName ?? '';
       orgNameInput.value = org.displayName ?? '';
       docsStatusEl.textContent = org.docsRepoFullName ? `Docs repo: ${org.docsRepoFullName}` : 'Docs repo: not set';
+      docsVerified = localStorage.getItem('graphfly_docs_verified') === docsRepoInput.value.trim();
+      updateDocsVerifyBadge();
 
       const reposRes = await api.listRepos();
       const list = reposRes.repos ?? [];
@@ -328,38 +446,8 @@ export function renderOnboardingPage({ state, pageEl }) {
                 ]),
                 el('button', {
                   class: 'button',
-                  ...(hasDocsRepo ? {} : { disabled: '' }),
-                  onclick: async (ev) => {
-                    if (!hasDocsRepo) {
-                      setBanner({ kind: 'warn', text: 'Set a docs repo first (step 2).' });
-                      return;
-                    }
-                    try {
-                      const btn = ev?.currentTarget;
-                      try {
-                        if (btn?.setAttribute) btn.setAttribute('disabled', '');
-                      } catch {}
-                      const created = await api.createRepo({ fullName: r.fullName, defaultBranch: r.defaultBranch, githubRepoId: r.id });
-                      const repo = created?.repo ?? null;
-                      if (repo?.id) {
-                        state.repoId = repo.id;
-                        localStorage.setItem('graphfly_repo_id', repo.id);
-                        state.realtime?.update?.({ nextRepoId: repo.id });
-                        setBanner({ kind: 'ok', text: 'Project created. Indexing started…' });
-                        window.location.hash = 'graph';
-                        return;
-                      }
-                      await refresh();
-                    } catch (e) {
-                      setBanner({ kind: 'error', text: `Create project failed: ${String(e?.message ?? e)}` });
-                    } finally {
-                      const btn = ev?.currentTarget;
-                      try {
-                        if (btn?.removeAttribute) btn.removeAttribute('disabled');
-                      } catch {}
-                    }
-                  }
-                }, ['Create Project'])
+                  onclick: async () => selectSourceRepo(r)
+                }, ['Select'])
               ])
             ])
           );
@@ -370,8 +458,12 @@ export function renderOnboardingPage({ state, pageEl }) {
         docsCandidatesEl.appendChild(el('li', { class: 'list__item' }, ['Connect GitHub first to see repo options.']));
       }
 
-      steps[0].ok = Boolean(state.authToken) || githubConnected;
-      steps[1].ok = hasDocsRepo;
+      const docsMode = latestOverview?.docs?.writerMode ?? 'github';
+      const runtimeMode = String(latestOverview?.runtime?.mode ?? 'dev').toLowerCase();
+      const cloudSyncRequired = Boolean(latestOverview?.docs?.cloudSyncRequired);
+
+      steps[0].ok = Boolean(state.authToken) || githubConnected || Boolean(org.githubReaderInstallId);
+      steps[1].ok = hasDocsRepo && (docsMode === 'local' ? true : docsVerified) && (docsMode === 'local' ? true : Boolean(org.githubDocsInstallId) || (!cloudSyncRequired && runtimeMode !== 'prod'));
       steps[2].ok = hasRepo;
 
       for (let i = 0; i < steps.length; i++) {
@@ -389,6 +481,8 @@ export function renderOnboardingPage({ state, pageEl }) {
             ? 'Next: create your first Project.'
             : 'Next: connect GitHub, set a docs repo, then create a Project.'
       });
+
+      updateCreateProjectGate();
     } catch (e) {
       setBanner({ kind: 'error', text: `Failed to load: ${String(e?.message ?? e)}` });
     }
@@ -400,6 +494,97 @@ export function renderOnboardingPage({ state, pageEl }) {
   }
 
   repoSearchInput.addEventListener('input', scheduleRefresh);
+  docsRepoInput.addEventListener('input', () => {
+    docsVerified = false;
+    localStorage.removeItem('graphfly_docs_verified');
+    updateDocsVerifyBadge();
+    updateCreateProjectGate();
+  });
+  trackedBranchSelect.addEventListener('change', () => updateCreateProjectGate());
+
+  createProjectBtn.addEventListener('click', async () => {
+    if (!selectedSourceRepo?.fullName) return;
+    if (!canCreateProject()) {
+      setBanner({ kind: 'warn', text: 'Complete docs repo setup (and verify if required) before creating a project.' });
+      return;
+    }
+    createProjectBtn.setAttribute('disabled', '');
+    try {
+      const created = await api.createRepo({
+        fullName: selectedSourceRepo.fullName,
+        defaultBranch: selectedSourceRepo.defaultBranch,
+        trackedBranch: trackedBranchSelect.value || selectedSourceRepo.defaultBranch,
+        githubRepoId: selectedSourceRepo.id,
+        docsRepoFullName: docsRepoInput.value.trim() || null
+      });
+      const repo = created?.repo ?? null;
+      if (repo?.id) {
+        state.repoId = repo.id;
+        localStorage.setItem('graphfly_repo_id', repo.id);
+        state.realtime?.update?.({ nextRepoId: repo.id });
+        setBanner({ kind: 'ok', text: 'Project created. Indexing started…' });
+        window.location.hash = 'app';
+        return;
+      }
+      await refresh();
+    } catch (e) {
+      setBanner({ kind: 'error', text: `Create project failed: ${String(e?.message ?? e)}` });
+    } finally {
+      updateCreateProjectGate();
+    }
+  });
+
+  pageEl.querySelector('#docsCreateBtn')?.addEventListener('click', async () => {
+    const btn = pageEl.querySelector('#docsCreateBtn');
+    if (!btn) return;
+    const fullName = docsCreateFullNameInput.value.trim();
+    const visibility = docsCreateVisibilitySelect.value ?? 'private';
+    const defaultBranch = docsCreateDefaultBranchInput.value.trim() || null;
+    if (!fullName) {
+      docsCreateStatusEl.textContent = 'Enter owner/repo to create.';
+      return;
+    }
+    btn.setAttribute('disabled', '');
+    docsCreateStatusEl.textContent = 'Creating docs repo…';
+    try {
+      const out = await api.createDocsRepo({ fullName, visibility, defaultBranch });
+      const repo = out?.repo ?? null;
+      const created = repo?.fullName ?? fullName;
+      docsRepoInput.value = created;
+      docsVerified = false;
+      localStorage.removeItem('graphfly_docs_verified');
+      docsCreateStatusEl.textContent = `Created: ${created}`;
+      await refresh();
+    } catch (e) {
+      const msg = String(e?.data?.message ?? e?.data?.error ?? e?.message ?? e);
+      const createUrl = e?.data?.createUrl ?? null;
+      docsCreateStatusEl.innerHTML = '';
+      docsCreateStatusEl.appendChild(el('div', { class: 'small' }, [`Create failed: ${msg}`]));
+      if (createUrl) {
+        docsCreateStatusEl.appendChild(
+          el(
+            'button',
+            {
+              class: 'button',
+              type: 'button',
+              onclick: () => {
+                try {
+                  window.open(String(createUrl), '_blank', 'noopener');
+                } catch {
+                  // ignore
+                }
+              }
+            },
+            ['Open GitHub create page']
+          )
+        );
+      }
+      setBanner({ kind: 'error', text: `Docs repo create failed: ${msg}` });
+    } finally {
+      btn.removeAttribute('disabled');
+      updateCreateProjectGate();
+    }
+  });
 
   localCreateBtn.onclick = async () => {
     const repoRoot = localRepoRootInput.value.trim();
@@ -414,7 +599,7 @@ export function renderOnboardingPage({ state, pageEl }) {
       }
       const base = repoRoot.replaceAll('\\', '/').split('/').filter(Boolean).pop() ?? 'repo';
       const fullName = `local/${base}`;
-      const created = await api.createRepo({ fullName, defaultBranch: 'main', githubRepoId: null, repoRoot });
+      const created = await api.createRepo({ fullName, defaultBranch: 'main', githubRepoId: null, repoRoot, docsRepoFullName: docsRepoInput.value.trim() || null });
       const repo = created?.repo ?? null;
       if (repo?.id) {
         state.repoId = repo.id;

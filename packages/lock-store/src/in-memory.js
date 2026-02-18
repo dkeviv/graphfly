@@ -27,5 +27,15 @@ export class InMemoryLockStore {
     this._locks.delete(k);
     return { released: true };
   }
-}
 
+  async renew({ tenantId, repoId, lockName, token, ttlMs = 10 * 60 * 1000 }) {
+    const k = `${tenantId}::${repoId}::${lockName}`;
+    const cur = this._locks.get(k);
+    const t = nowMs();
+    if (!cur) return { ok: true, updated: false };
+    if (cur.token !== token) return { ok: true, updated: false };
+    if (cur.expiresAtMs <= t) return { ok: true, updated: false };
+    cur.expiresAtMs = t + ttlMs;
+    return { ok: true, updated: true, expiresAtMs: cur.expiresAtMs };
+  }
+}

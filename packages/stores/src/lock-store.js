@@ -21,6 +21,13 @@ export class PgLockStorePool {
       return store.release({ tenantId, repoId, lockName, token });
     });
   }
+
+  async renew({ tenantId, repoId, lockName, token, ttlMs }) {
+    return withTenantClient({ pool: this._pool, tenantId }, async (client) => {
+      const store = new PgLockStore({ client });
+      return store.renew({ tenantId, repoId, lockName, token, ttlMs });
+    });
+  }
 }
 
 export async function createLockStoreFromEnv() {
@@ -31,4 +38,3 @@ export async function createLockStoreFromEnv() {
   const pool = await getPgPoolFromEnv({ connectionString, max: Number(process.env.PG_POOL_MAX ?? 10) });
   return new PgLockStorePool({ pool });
 }
-

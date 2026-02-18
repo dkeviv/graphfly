@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { createGraphStoreFromEnv } from '../../../packages/stores/src/graph-store.js';
 import { createDocStoreFromEnv } from '../../../packages/stores/src/doc-store.js';
+import { createAssistantStoreFromEnv } from '../../../packages/stores/src/assistant-store.js';
 import { ingestNdjson } from '../../../packages/ndjson/src/ingest.js';
 import { blastRadius } from '../../../packages/cig/src/query.js';
 import { semanticSearch, textSearch } from '../../../packages/cig/src/search.js';
@@ -25,6 +26,8 @@ import { createDocWorker } from '../../../workers/doc-agent/src/doc-worker.js';
 import { OrgRoles } from '../../../packages/org-members/src/store.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
+import { GitHubDocsReader } from '../../../packages/github-service/src/docs-reader.js';
+import { LocalDocsReader } from '../../../packages/github-service/src/local-docs-reader.js';
 import { createStripeClient, createCheckoutSession, createCustomerPortalSession, createCustomer } from '../../../packages/stripe-service/src/stripe.js';
 import { createUsageCountersFromEnv } from '../../../packages/stores/src/usage-counters.js';
 import { getPgPoolFromEnv } from '../../../packages/stores/src/pg-pool.js';
@@ -40,6 +43,7 @@ import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-
 import { GitHubClient } from '../../../packages/github-client/src/client.js';
 import { enqueueInitialFullIndexOnRepoCreate } from './lib/initial-index.js';
 import { enqueueLocalFullIndexOnRepoCreate } from './lib/local-index.js';
+import { shouldProcessPushForTrackedBranch } from './lib/tracked-branch.js';
 import { InMemoryOAuthStateStore, buildGitHubAuthorizeUrl, exchangeCodeForToken } from '../../../packages/github-oauth/src/oauth.js';
 import { createWebhookDeliveryDedupeFromEnv } from '../../../packages/stores/src/webhook-delivery-dedupe.js';
 import { createOrgMemberStoreFromEnv } from '../../../packages/stores/src/org-member-store.js';
@@ -48,7 +52,12 @@ import { createLogger, createMetrics } from '../../../packages/observability/src
 import { encryptString, decryptString, getSecretKeyringInfo } from '../../../packages/secrets/src/crypto.js';
 import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
 import { InMemoryRealtimeHub } from '../../../packages/realtime/src/hub.js';
+import { PgRealtimeHub } from '../../../packages/realtime/src/pg-hub.js';
 import { acceptWebSocketUpgrade, createWsConnection } from './ws.js';
+import { registerAssistantRoutes } from './routes/assistant.js';
+import { unifiedDiffText } from '../../../packages/assistant-agent/src/diff.js';
+import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/validate.js';
+import { redactSecrets } from '../../../packages/security/src/redact.js';
 
 const DEFAULT_TENANT_ID = process.env.TENANT_ID ?? '00000000-0000-0000-0000-000000000001';
 const DEFAULT_REPO_ID = process.env.REPO_ID ?? '00000000-0000-0000-0000-000000000002';
@@ -70,6 +79,14 @@ function assertProdConfig(env = process.env) {
   const astEngine = String(env.GRAPHFLY_AST_ENGINE ?? '').toLowerCase();
   if (astEngine === 'none' || astEngine === 'off') missing.push('GRAPHFLY_AST_ENGINE!=off');
   if (String(env.GRAPHFLY_ALLOW_LOCAL_REPO_ROOT ?? '').trim() === '1') missing.push('GRAPHFLY_ALLOW_LOCAL_REPO_ROOT must not be enabled in prod');
+  const openclawReqRaw = String(env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
+  const openclawRequired = !(openclawReqRaw === '0' || openclawReqRaw === 'false');
+  if (openclawRequired) {
+    if (!env.OPENCLAW_GATEWAY_URL) missing.push('OPENCLAW_GATEWAY_URL');
+    if (!(env.OPENCLAW_GATEWAY_TOKEN || env.OPENCLAW_TOKEN)) missing.push('OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_TOKEN)');
+    const envRemote = String(env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
+    if (envRemote === '0' || envRemote === 'false') missing.push('OPENCLAW_USE_REMOTE must not disable remote in prod');
+  }
   const forcedPgStores = [
     'GRAPHFLY_GRAPH_STORE',
     'GRAPHFLY_DOC_STORE',
@@ -96,6 +113,7 @@ const metrics = createMetrics({ service: 'graphfly-api' });
 const repoFullName = process.env.SOURCE_REPO_FULL_NAME ?? 'local/source';
 const store = await createGraphStoreFromEnv({ repoFullName });
 const docStore = await createDocStoreFromEnv({ repoFullName });
+const assistantStore = await createAssistantStoreFromEnv({ repoFullName });
 const githubDedupe = new DeliveryDedupe();
 const githubSecret = process.env.GITHUB_WEBHOOK_SECRET ?? '';
 const entitlements = await createEntitlementsStoreFromEnv();
@@ -109,7 +127,18 @@ const orgInvites = await createOrgInviteStoreFromEnv();
 const repos = await createRepoStoreFromEnv();
 const secrets = await createSecretsStoreFromEnv();
 const oauthStates = new InMemoryOAuthStateStore();
-const realtimeHub = new InMemoryRealtimeHub();
+let realtimeHub = new InMemoryRealtimeHub();
+try {
+  const rtBackend = String(process.env.GRAPHFLY_RT_BACKEND ?? '').trim().toLowerCase();
+  const wantsPg = rtBackend === 'pg' || (String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod' && rtBackend !== 'memory');
+  if (wantsPg && billingPool) {
+    realtimeHub = new PgRealtimeHub({ pool: billingPool, channel: process.env.GRAPHFLY_RT_PG_CHANNEL ?? 'graphfly_rt' });
+    await realtimeHub.start();
+  }
+} catch {
+  // Fail safe: realtime falls back to in-memory. In production, rely on infra checks for PG mode.
+  realtimeHub = new InMemoryRealtimeHub();
+}
 const realtime = { publish: (evt) => realtimeHub.publish(evt) };
 const webhookDedupe = await createWebhookDeliveryDedupeFromEnv();
 const githubApiBaseUrl = () => String(process.env.GITHUB_API_BASE_URL ?? 'https://api.github.com');
@@ -193,16 +222,30 @@ const docsWriterFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
   const docsInstallId = org?.githubDocsInstallId ?? null;
   const appId = process.env.GITHUB_APP_ID ?? '';
   const privateKeyPem = privateKeyPemFromEnv();
+	  return docsRepoPath
+	    ? new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath })
+	    : new GitHubDocsWriter({
+	        configuredDocsRepoFullName,
+	        appId: appId || null,
+	        privateKeyPem,
+	        installationId: docsInstallId
+	      });
+};
+const docsReaderFactory = async ({ tenantId, configuredDocsRepoFullName }) => {
+  const org = tenantId ? await Promise.resolve(orgs.getOrg?.({ tenantId })) : null;
+  const docsInstallId = org?.githubDocsInstallId ?? null;
+  const appId = process.env.GITHUB_APP_ID ?? '';
+  const privateKeyPem = privateKeyPemFromEnv();
   return docsRepoPath
-    ? new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath })
-    : new GitHubDocsWriter({
+    ? new LocalDocsReader({ configuredDocsRepoFullName, docsRepoPath })
+    : new GitHubDocsReader({
         configuredDocsRepoFullName,
         appId: appId || null,
         privateKeyPem,
         installationId: docsInstallId
       });
 };
-const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime });
+const indexerWorker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime, lockStore });
 const docWorker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters: usage, realtime, lockStore });
 
 async function maybeDrainOnce() {
@@ -225,17 +268,22 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
   onPush: async (push) => {
     let tenantId = DEFAULT_TENANT_ID;
     let repoId = DEFAULT_REPO_ID;
+    let foundRepo = null;
     try {
-      const found = push.githubRepoId
+      foundRepo = push.githubRepoId
         ? await Promise.resolve(repos.findRepoByGitHubRepoId?.({ githubRepoId: push.githubRepoId }))
         : await Promise.resolve(repos.findRepoByFullName?.({ fullName: push.fullName }));
-      if (found?.tenantId && found?.id) {
-        tenantId = found.tenantId;
-        repoId = found.id;
+      if (foundRepo?.tenantId && foundRepo?.id) {
+        tenantId = foundRepo.tenantId;
+        repoId = foundRepo.id;
       }
     } catch {
       // If ambiguous or store not configured, fall back to defaults.
     }
+
+    // V0 SaaS: only process pushes for the project's tracked branch.
+    const trackedBranch = foundRepo?.trackedBranch ?? foundRepo?.defaultBranch ?? null;
+    if (!shouldProcessPushForTrackedBranch({ trackedBranch, ref: push?.ref ?? '' })) return;
 
     const plan = await Promise.resolve(entitlements.getPlan(tenantId));
     const limits = limitsForPlan(plan);
@@ -247,7 +295,7 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
 
     const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
     const orgDocsRepo = org?.docsRepoFullName ?? null;
-    const effectiveDocsRepoFullName = orgDocsRepo ?? docsRepoFullName;
+    const effectiveDocsRepoFullName = foundRepo?.docsRepoFullName ?? orgDocsRepo ?? docsRepoFullName;
 
     const cloneAuth = await gitCloneAuthForOrg({ tenantId, org });
     const cloneSource = typeof push.cloneUrl === 'string' && push.cloneUrl.length > 0 ? push.cloneUrl : null;
@@ -282,6 +330,25 @@ const handleGitHubWebhook = makeGitHubWebhookHandler({
 const router = createJsonRouter();
 router.use(makeAuthMiddleware({ orgMemberStore: orgMembers }));
 router.use(makeRateLimitMiddleware({ entitlementsStore: entitlements }));
+
+registerAssistantRoutes({
+  router,
+  store,
+  docStore,
+  assistantStore,
+  orgStore: orgs,
+  repoStore: repos,
+  docsRepoFullNameFallback: docsRepoFullName,
+  docsWriterFactory,
+  docsReaderFactory,
+  lockStore,
+  realtime,
+  auditEvent,
+  requireRole,
+  tenantIdFromCtx,
+  DEFAULT_TENANT_ID,
+  DEFAULT_REPO_ID
+});
 
 const handleStripeWebhook = makeStripeWebhookHandler({
   signingSecret: stripeSecret,
@@ -475,6 +542,30 @@ router.get('/api/v1/integrations/github/repos', async (req) => {
   return { status: 200, body: { repos: list, source: 'user_token' } };
 });
 
+router.get('/api/v1/integrations/github/branches', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const org = (await orgs.getOrg?.({ tenantId })) ?? null;
+  const fullName = req.query.fullName ?? req.query.full_name ?? null;
+  if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
+
+  let token = null;
+  try {
+    token = await resolveGitHubReaderToken({ tenantId, org });
+  } catch {
+    token = null;
+  }
+  if (!token) {
+    token = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
+  }
+  if (!token) return { status: 401, body: { error: 'github_not_connected' } };
+
+  const gh = new GitHubClient({ token, apiBaseUrl: githubApiBaseUrl() });
+  const branches = await gh.listBranches({ fullName, perPage: 100 });
+  return { status: 200, body: { fullName, branches } };
+});
+
 router.get('/api/v1/orgs/current', async (req) => {
   const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const org = (await orgs.getOrg?.({ tenantId })) ?? (await orgs.ensureOrg?.({ tenantId, name: 'default' }));
@@ -651,10 +742,360 @@ router.post('/api/v1/orgs/docs-repo/verify', async (req) => {
   }
 });
 
+router.post('/api/v1/orgs/docs-repo/create', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const fullName = req.body?.fullName ?? req.body?.full_name ?? null;
+  const visibility = req.body?.visibility ?? 'private';
+  const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? null;
+
+  if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
+  const [owner, repo] = String(fullName).split('/', 2);
+  if (!owner || !repo) return { status: 400, body: { error: 'fullName must be owner/repo' } };
+  const isPrivate = String(visibility ?? '').toLowerCase() !== 'public';
+
+  const userToken = (await secrets.getSecret({ tenantId, key: 'github.user_token' })) ?? null;
+  if (!userToken) return { status: 401, body: { error: 'github_not_connected' } };
+  const gh = new GitHubClient({ token: userToken, apiBaseUrl: githubApiBaseUrl() });
+
+  try {
+    const me = await gh.getCurrentUser();
+    const ownerLogin = me?.login ?? null;
+
+    let created = null;
+    if (ownerLogin && String(ownerLogin).toLowerCase() === String(owner).toLowerCase()) {
+      created = await gh.createUserRepo({ name: repo, private: isPrivate, description: 'Graphfly documentation', autoInit: true });
+    } else {
+      created = await gh.createOrgRepo({ org: owner, name: repo, private: isPrivate, description: 'Graphfly documentation', autoInit: true });
+    }
+
+    const desiredBranch = typeof defaultBranch === 'string' && defaultBranch.trim().length > 0 ? defaultBranch.trim() : null;
+    if (desiredBranch && created?.fullName && desiredBranch !== created.defaultBranch) {
+      const sha = await gh.getBranchHeadSha({ fullName: created.fullName, branch: created.defaultBranch });
+      if (sha) {
+        await gh.createBranchFromSha({ fullName: created.fullName, branch: desiredBranch, sha });
+        await gh.setRepoDefaultBranch({ fullName: created.fullName, defaultBranch: desiredBranch });
+        created.defaultBranch = desiredBranch;
+      }
+    }
+
+    await orgs.upsertOrg({ tenantId, patch: { docsRepoFullName: created?.fullName ?? fullName } });
+    await auditEvent({
+      tenantId,
+      actorUserId: req.auth?.userId ?? null,
+      action: 'docs_repo.create',
+      targetType: 'repo',
+      targetId: created?.fullName ?? fullName,
+      metadata: { visibility: isPrivate ? 'private' : 'public', defaultBranch: created?.defaultBranch ?? null }
+    });
+
+    return { status: 200, body: { ok: true, repo: created } };
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    const createUrl = `https://github.com/new?name=${encodeURIComponent(repo)}&owner=${encodeURIComponent(owner)}`;
+    return { status: 400, body: { error: 'docs_repo_create_failed', message: msg, createUrl } };
+  }
+});
+
 router.get('/api/v1/repos', async (req) => {
   const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
   const out = await repos.listRepos({ tenantId });
   return { status: 200, body: { repos: out } };
+});
+
+function safeDocsDirPath(v) {
+  const s = String(v ?? '').replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/^\/+/, '').trim();
+  if (!s) return '';
+  if (s.includes('\0')) throw new Error('invalid_path');
+  if (s.split('/').some((seg) => seg === '..')) throw new Error('invalid_path');
+  return s;
+}
+
+function safeDocsFilePath(v) {
+  const s = String(v ?? '').replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/^\/+/, '').trim();
+  if (!s) throw new Error('path_required');
+  if (s.includes('\0')) throw new Error('invalid_path');
+  if (s.split('/').some((seg) => seg === '..')) throw new Error('invalid_path');
+  if (!s.endsWith('.md')) throw new Error('path_must_end_with_md');
+  return s;
+}
+
+async function resolveRepoDocsTarget({ tenantId, repoId }) {
+  const repo = repoId ? await Promise.resolve(repos.getRepo?.({ tenantId, repoId })) : null;
+  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+  const effectiveDocsRepoFullName = repo?.docsRepoFullName ?? org?.docsRepoFullName ?? docsRepoFullName ?? null;
+  return { repo, org, docsRepoFullName: effectiveDocsRepoFullName };
+}
+
+async function resolveDocsDefaultRef({ tenantId, repoId, repo, docsRepoFullName }) {
+  const configured = repo?.docsDefaultBranch ?? null;
+  if (configured) return String(configured);
+  const reader = typeof docsReaderFactory === 'function' ? await docsReaderFactory({ tenantId, configuredDocsRepoFullName: docsRepoFullName }) : null;
+  try {
+    const def = reader?.getDefaultBranch ? await reader.getDefaultBranch({ targetRepoFullName: docsRepoFullName }) : null;
+    return String(def ?? 'main');
+  } catch {
+    return 'main';
+  }
+}
+
+router.get('/api/v1/repos/:repoId/docs/refs', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'viewer');
+  if (forbid) return forbid;
+  const repoId = req.params.repoId ?? null;
+  if (!repoId) return { status: 400, body: { error: 'repoId_required' } };
+
+  const { repo, docsRepoFullName } = await resolveRepoDocsTarget({ tenantId, repoId });
+  if (!docsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+
+  const defaultRef = await resolveDocsDefaultRef({ tenantId, repoId, repo, docsRepoFullName });
+
+  let runs = [];
+  try {
+    runs = (await docStore.listPrRuns({ tenantId, repoId, status: 'success', limit: 50 })) ?? [];
+  } catch {
+    runs = [];
+  }
+  const previews = [];
+  const seen = new Set();
+  for (const r of runs) {
+    const ref = r?.docsBranch ?? r?.docs_branch ?? null;
+    if (!ref || seen.has(ref)) continue;
+    seen.add(ref);
+    previews.push({ runId: r?.id ?? null, ref, prUrl: r?.docsPrUrl ?? r?.docs_pr_url ?? null });
+  }
+
+  return { status: 200, body: { default: { ref: defaultRef }, previews } };
+});
+
+router.get('/api/v1/repos/:repoId/docs/tree', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'viewer');
+  if (forbid) return forbid;
+  const repoId = req.params.repoId ?? null;
+  if (!repoId) return { status: 400, body: { error: 'repoId_required' } };
+
+  const { repo, docsRepoFullName } = await resolveRepoDocsTarget({ tenantId, repoId });
+  if (!docsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+
+  const rawRef = req.query.ref ?? null;
+  const defaultRef = await resolveDocsDefaultRef({ tenantId, repoId, repo, docsRepoFullName });
+  const ref = !rawRef || rawRef === 'default' ? defaultRef : String(rawRef);
+  const dir = safeDocsDirPath(req.query.dir ?? '');
+
+  const reader = typeof docsReaderFactory === 'function' ? await docsReaderFactory({ tenantId, configuredDocsRepoFullName: docsRepoFullName }) : null;
+  if (!reader?.listDir) return { status: 501, body: { error: 'docs_reader_not_configured' } };
+  let out = null;
+  try {
+    out = await reader.listDir({ targetRepoFullName: docsRepoFullName, dirPath: dir, ref, maxEntries: 500 });
+  } catch (e) {
+    const st = Number(e?.status ?? 0);
+    if (st === 404) return { status: 404, body: { error: 'not_found' } };
+    return { status: st >= 400 && st < 600 ? st : 400, body: { error: 'docs_read_failed', message: String(e?.message ?? e) } };
+  }
+  if (!out?.ok) {
+    const err = String(out?.error ?? 'docs_read_failed');
+    if (err === 'not_found' || err === 'not_a_directory') return { status: 404, body: { error: 'not_found' } };
+    return { status: 400, body: { error: err } };
+  }
+  const entries = (out.entries ?? []).map((e) => ({
+    path: e?.path ?? null,
+    name: e?.name ?? null,
+    type: e?.type === 'dir' ? 'dir' : 'file',
+    size: e?.size ?? null
+  }));
+  entries.sort((a, b) => {
+    const ta = a.type === 'dir' ? 0 : 1;
+    const tb = b.type === 'dir' ? 0 : 1;
+    if (ta !== tb) return ta - tb;
+    return String(a.name ?? a.path ?? '').localeCompare(String(b.name ?? b.path ?? ''));
+  });
+  return { status: 200, body: { entries } };
+});
+
+router.get('/api/v1/repos/:repoId/docs/file', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'viewer');
+  if (forbid) return forbid;
+  const repoId = req.params.repoId ?? null;
+  if (!repoId) return { status: 400, body: { error: 'repoId_required' } };
+
+  const { repo, docsRepoFullName } = await resolveRepoDocsTarget({ tenantId, repoId });
+  if (!docsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+
+  let filePath = null;
+  try {
+    filePath = safeDocsFilePath(req.query.path ?? '');
+  } catch (e) {
+    return { status: 400, body: { error: String(e?.message ?? e) } };
+  }
+
+  const rawRef = req.query.ref ?? null;
+  const defaultRef = await resolveDocsDefaultRef({ tenantId, repoId, repo, docsRepoFullName });
+  const ref = !rawRef || rawRef === 'default' ? defaultRef : String(rawRef);
+
+  const reader = typeof docsReaderFactory === 'function' ? await docsReaderFactory({ tenantId, configuredDocsRepoFullName: docsRepoFullName }) : null;
+  if (!reader?.readFile) return { status: 501, body: { error: 'docs_reader_not_configured' } };
+  let out = null;
+  try {
+    out = await reader.readFile({ targetRepoFullName: docsRepoFullName, filePath, ref, maxBytes: 400_000 });
+  } catch (e) {
+    const st = Number(e?.status ?? 0);
+    if (st === 404) return { status: 404, body: { error: 'not_found' } };
+    return { status: st >= 400 && st < 600 ? st : 400, body: { error: 'docs_read_failed', message: String(e?.message ?? e) } };
+  }
+  if (!out?.ok) {
+    const err = String(out?.error ?? 'docs_read_failed');
+    if (err === 'not_found') return { status: 404, body: { error: 'not_found' } };
+    return { status: 400, body: { error: err, sha: out?.sha ?? null } };
+  }
+  return { status: 200, body: { path: out.path ?? filePath, ref, content: out.content ?? '' } };
+});
+
+router.post('/api/v1/repos/:repoId/docs/diff', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'viewer');
+  if (forbid) return forbid;
+  const repoId = req.params.repoId ?? null;
+  if (!repoId) return { status: 400, body: { error: 'repoId_required' } };
+  let filePath = null;
+  try {
+    filePath = safeDocsFilePath(req.body?.path ?? '');
+  } catch (e) {
+    return { status: 400, body: { error: String(e?.message ?? e) } };
+  }
+  const beforeText = String(req.body?.before ?? '');
+  const afterText = String(req.body?.after ?? '');
+  if (beforeText.length > 400_000 || afterText.length > 400_000) return { status: 400, body: { error: 'file_too_large' } };
+  const diff = unifiedDiffText({ beforeText, afterText, fileLabel: filePath });
+  return { status: 200, body: { diff: diff.slice(0, 400_000) } };
+});
+
+router.post('/api/v1/repos/:repoId/docs/open-pr', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const repoId = req.params.repoId ?? null;
+  if (!repoId) return { status: 400, body: { error: 'repoId_required' } };
+
+  const { repo, org, docsRepoFullName } = await resolveRepoDocsTarget({ tenantId, repoId });
+  if (!docsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+
+  const titleRaw = req.body?.title ?? 'docs: update';
+  const title = String(titleRaw ?? '').trim().slice(0, 120) || 'docs: update';
+  const body = String(req.body?.body ?? '').slice(0, 20_000);
+
+  const incoming = Array.isArray(req.body?.files) ? req.body.files : [];
+  if (incoming.length === 0) return { status: 400, body: { error: 'files_required' } };
+  if (incoming.length > 25) return { status: 400, body: { error: 'too_many_files' } };
+
+  function extractDocBlockSectionBody({ markdown, blockAnchor }) {
+    const anchor = String(blockAnchor ?? '').trim();
+    if (!anchor) return null;
+    const lines = String(markdown ?? '').replaceAll('\r\n', '\n').split('\n');
+    let start = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === anchor) {
+        start = i;
+        break;
+      }
+    }
+    if (start === -1) return null;
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^\s{0,3}##\s+/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return lines.slice(start + 1, end).join('\n').trimEnd();
+  }
+
+  let blocksByFile = new Map();
+  try {
+    const blocks = docStore?.listBlocks ? await docStore.listBlocks({ tenantId, repoId }) : [];
+    blocksByFile = new Map();
+    for (const b of blocks ?? []) {
+      const docFile = b?.doc_file ?? b?.docFile ?? null;
+      const blockAnchor = b?.block_anchor ?? b?.blockAnchor ?? null;
+      if (!docFile || !blockAnchor) continue;
+      if (!blocksByFile.has(docFile)) blocksByFile.set(docFile, []);
+      blocksByFile.get(docFile).push({ blockAnchor });
+    }
+  } catch {
+    blocksByFile = new Map();
+  }
+
+  const files = [];
+  for (const f of incoming) {
+    const p = safeDocsFilePath(f?.path ?? '');
+    const contentRaw = String(f?.content ?? '');
+    const content = redactSecrets(contentRaw);
+    const blocks = blocksByFile.get(p) ?? [];
+    for (const b of blocks) {
+      const bodyText = extractDocBlockSectionBody({ markdown: content, blockAnchor: b.blockAnchor });
+      if (bodyText == null) continue;
+      const v = validateDocBlockMarkdown(bodyText);
+      if (!v.ok) return { status: 400, body: { error: 'invalid_markdown', reason: v.reason, path: p, blockAnchor: b.blockAnchor } };
+    }
+    if (content.length > 400_000) return { status: 400, body: { error: 'file_too_large', path: p } };
+    files.push({ path: p, content });
+  }
+
+  const prRun = docStore?.createPrRun ? await docStore.createPrRun({ tenantId, repoId, triggerSha: 'manual', status: 'running' }) : null;
+  const id8 = String(prRun?.id ?? crypto.randomUUID()).replaceAll(/[^a-z0-9]/gi, '').slice(0, 8) || 'manual';
+  const branchName = `docs/manual-${id8}-${Date.now()}`;
+
+  try {
+    const writer = typeof docsWriterFactory === 'function' ? await docsWriterFactory({ tenantId, configuredDocsRepoFullName: docsRepoFullName }) : docsWriterFactory;
+    const pr = await writer.openPullRequest({ targetRepoFullName: docsRepoFullName, title, body, branchName, files });
+
+    const requireCloudSync = process.env.GRAPHFLY_CLOUD_SYNC_REQUIRED === '1' || process.env.GRAPHFLY_MODE === 'prod';
+    if (pr?.stub) {
+      const msg = 'docs_cloud_sync_disabled: docs PR was stubbed (no docs write credentials).';
+      if (requireCloudSync) throw new Error(msg);
+    }
+
+    if (prRun && docStore?.updatePrRun) {
+      await docStore.updatePrRun({
+        tenantId,
+        repoId,
+        prRunId: prRun.id,
+        patch: {
+          status: pr?.empty ? 'skipped' : 'success',
+          docsBranch: pr?.branchName ?? branchName,
+          docsPrNumber: pr?.prNumber ?? null,
+          docsPrUrl: pr?.prUrl ?? null,
+          completedAt: new Date().toISOString()
+        }
+      });
+    }
+
+    await auditEvent?.({
+      tenantId,
+      actorUserId: req.auth?.userId ?? null,
+      action: 'docs.open_pr',
+      targetType: 'repo',
+      targetId: repoId,
+      metadata: { docsRepoFullName, files: files.length, prUrl: pr?.prUrl ?? null }
+    });
+
+    return { status: 200, body: { ok: true, prRunId: prRun?.id ?? null, pr } };
+  } catch (e) {
+    if (prRun && docStore?.updatePrRun) {
+      await docStore.updatePrRun({
+        tenantId,
+        repoId,
+        prRunId: prRun.id,
+        patch: { status: 'failure', errorMessage: String(e?.message ?? e), completedAt: new Date().toISOString() }
+      });
+    }
+    const msg = String(e?.message ?? e);
+    const code = msg.includes('docs_cloud_sync_disabled') ? 501 : 500;
+    return { status: code, body: { error: 'docs_open_pr_failed', message: msg } };
+  }
 });
 
 router.post('/api/v1/repos', async (req) => {
@@ -664,6 +1105,9 @@ router.post('/api/v1/repos', async (req) => {
   const fullName = req.body?.fullName ?? req.body?.full_name;
   const githubRepoId = req.body?.githubRepoId ?? req.body?.github_repo_id ?? null;
   const defaultBranch = req.body?.defaultBranch ?? req.body?.default_branch ?? 'main';
+  const trackedBranchRaw = req.body?.trackedBranch ?? req.body?.tracked_branch ?? null;
+  const docsRepoFullNameRaw = req.body?.docsRepoFullName ?? req.body?.docs_repo_full_name ?? null;
+  const docsDefaultBranchRaw = req.body?.docsDefaultBranch ?? req.body?.docs_default_branch ?? null;
   const repoRoot = req.body?.repoRoot ?? req.body?.repo_root ?? null;
   if (typeof fullName !== 'string' || fullName.length === 0) return { status: 400, body: { error: 'fullName is required' } };
 
@@ -674,18 +1118,34 @@ router.post('/api/v1/repos', async (req) => {
     if (!allowLocal) return { status: 400, body: { error: 'local_repo_root_disabled' } };
   }
 
-  const repo = await repos.createRepo({ tenantId, fullName, defaultBranch, githubRepoId });
+  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+  const orgDocsRepo = org?.docsRepoFullName ?? null;
+  const docsRepoFullNameForProject = docsRepoFullNameRaw ? String(docsRepoFullNameRaw).trim() : orgDocsRepo ?? docsRepoFullName ?? null;
+  if (!docsRepoFullNameForProject) return { status: 400, body: { error: 'docs_repo_not_configured' } };
+  if (String(docsRepoFullNameForProject) === String(fullName)) return { status: 400, body: { error: 'docs_repo_must_be_separate' } };
+
+  const trackedBranch = trackedBranchRaw ? String(trackedBranchRaw).trim() : String(defaultBranch ?? 'main').trim();
+  const docsDefaultBranch = docsDefaultBranchRaw ? String(docsDefaultBranchRaw).trim() : null;
+
+  const repo = await repos.createRepo({
+    tenantId,
+    fullName,
+    defaultBranch,
+    trackedBranch,
+    githubRepoId,
+    docsRepoFullName: docsRepoFullNameForProject,
+    docsDefaultBranch
+  });
   await auditEvent({
     tenantId,
     actorUserId: req.auth?.userId ?? null,
     action: 'repo.create',
     targetType: 'repo',
     targetId: repo?.id ?? null,
-    metadata: { fullName, githubRepoId }
+    metadata: { fullName, githubRepoId, trackedBranch, docsRepoFullName: docsRepoFullNameForProject }
   });
   // FR-CIG-01: Full index on connection (initial project creation).
   // Production path: use the GitHub Reader App installation token (read-only).
-  const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
   let indexJob = null;
   try {
     if (!prod && allowLocal && typeof repoRoot === 'string' && repoRoot.trim().length > 0) {
@@ -695,7 +1155,7 @@ router.post('/api/v1/repos', async (req) => {
         org,
         indexQueue,
         repoRoot: repoRoot.trim(),
-        docsRepoFullNameFallback: docsRepoFullName,
+        docsRepoFullName: docsRepoFullNameForProject,
         docsRepoPath
       });
     } else {
@@ -704,8 +1164,8 @@ router.post('/api/v1/repos', async (req) => {
         repo,
         org,
         indexQueue,
-        defaultBranch,
-        docsRepoFullNameFallback: docsRepoFullName,
+        branch: trackedBranch,
+        docsRepoFullName: docsRepoFullNameForProject,
         resolveGitHubReaderToken,
         githubApiBaseUrl
       });
@@ -757,7 +1217,8 @@ router.get('/api/v1/jobs', async (req) => {
   const limit = Number(req.query.limit ?? 50);
   const indexJobs = typeof indexQueue?.listJobs === 'function' ? await indexQueue.listJobs({ tenantId, status, limit }) : [];
   const docJobs = typeof docQueue?.listJobs === 'function' ? await docQueue.listJobs({ tenantId, status, limit }) : [];
-  return { status: 200, body: { indexJobs, docJobs } };
+  const graphJobs = typeof graphQueue?.listJobs === 'function' ? await graphQueue.listJobs({ tenantId, status, limit }) : [];
+  return { status: 200, body: { indexJobs, docJobs, graphJobs } };
 });
 
 router.get('/api/v1/jobs/:queue/:jobId', async (req) => {
@@ -766,11 +1227,55 @@ router.get('/api/v1/jobs/:queue/:jobId', async (req) => {
   if (forbid) return forbid;
   const q = req.params.queue;
   const jobId = req.params.jobId;
-  const queue = q === 'index' ? indexQueue : q === 'doc' ? docQueue : null;
+  const queue = q === 'index' ? indexQueue : q === 'doc' ? docQueue : q === 'graph' ? graphQueue : null;
   if (!queue || typeof queue?.getJob !== 'function') return { status: 404, body: { error: 'not_found' } };
   const job = await queue.getJob({ tenantId, jobId });
   if (!job) return { status: 404, body: { error: 'not_found' } };
   return { status: 200, body: { job } };
+});
+
+router.post('/api/v1/jobs/:queue/:jobId/retry', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const q = req.params.queue;
+  const jobId = req.params.jobId;
+  const queue = q === 'index' ? indexQueue : q === 'doc' ? docQueue : q === 'graph' ? graphQueue : null;
+  if (!queue || typeof queue?.retry !== 'function') return { status: 501, body: { error: 'not_supported' } };
+  const resetAttempts = req.body?.resetAttempts ?? true;
+  const out = await queue.retry({ tenantId, jobId, resetAttempts: Boolean(resetAttempts) });
+  if (!out?.updated) return { status: 404, body: { error: 'not_found_or_not_retryable' } };
+  await auditEvent?.({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'job.retry',
+    targetType: 'job',
+    targetId: jobId,
+    metadata: { queue: q, resetAttempts: Boolean(resetAttempts) }
+  });
+  return { status: 200, body: out };
+});
+
+router.post('/api/v1/jobs/:queue/:jobId/cancel', async (req) => {
+  const tenantId = tenantIdFromCtx(req, DEFAULT_TENANT_ID);
+  const forbid = requireRole(req, 'admin');
+  if (forbid) return forbid;
+  const q = req.params.queue;
+  const jobId = req.params.jobId;
+  const queue = q === 'index' ? indexQueue : q === 'doc' ? docQueue : q === 'graph' ? graphQueue : null;
+  if (!queue || typeof queue?.cancel !== 'function') return { status: 501, body: { error: 'not_supported' } };
+  const reason = req.body?.reason ?? 'canceled_by_admin';
+  const out = await queue.cancel({ tenantId, jobId, reason });
+  if (!out?.updated) return { status: 404, body: { error: 'not_found_or_not_cancelable' } };
+  await auditEvent?.({
+    tenantId,
+    actorUserId: req.auth?.userId ?? null,
+    action: 'job.cancel',
+    targetType: 'job',
+    targetId: jobId,
+    metadata: { queue: q, reason: String(reason ?? '') }
+  });
+  return { status: 200, body: out };
 });
 
 router.get('/api/v1/audit', async (req) => {
@@ -807,6 +1312,8 @@ router.get('/api/v1/admin/overview', async (req) => {
   const hasIndexerCmd = Boolean(String(process.env.GRAPHFLY_INDEXER_CMD ?? '').trim());
   const metricsToken = String(process.env.GRAPHFLY_METRICS_TOKEN ?? '');
   const metricsPublic = String(process.env.GRAPHFLY_METRICS_PUBLIC ?? '') === '1';
+  const runtimeMode = String(process.env.GRAPHFLY_MODE ?? 'dev');
+  const cloudSyncRequired = String(process.env.GRAPHFLY_CLOUD_SYNC_REQUIRED ?? '') === '1';
 
   return {
     status: 200,
@@ -816,6 +1323,8 @@ router.get('/api/v1/admin/overview', async (req) => {
       reposCount,
       queue: { mode: queueMode },
       indexer: { mode: indexerMode, configured: hasIndexerCmd },
+      runtime: { mode: runtimeMode },
+      docs: { writerMode: docsRepoPath ? 'local' : 'github', cloudSyncRequired },
       secrets: secretsInfo,
       observability: {
         metricsEnabled: true,
@@ -1285,8 +1794,9 @@ router.post('/coverage/document', async (req) => {
   const repoId = req.body?.repoId ?? DEFAULT_REPO_ID;
   const symbolUids = Array.isArray(req.body?.symbolUids) ? req.body.symbolUids.filter((s) => typeof s === 'string' && s.length > 0) : [];
   if (symbolUids.length === 0) return { status: 400, body: { error: 'symbolUids is required' } };
+  const repo = await Promise.resolve(repos.getRepo?.({ tenantId, repoId }));
   const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
-  const effectiveDocsRepoFullName = org?.docsRepoFullName ?? docsRepoFullName;
+  const effectiveDocsRepoFullName = repo?.docsRepoFullName ?? org?.docsRepoFullName ?? docsRepoFullName;
   if (!effectiveDocsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
   docQueue.add('doc.generate', { tenantId, repoId, sha: 'manual', changedFiles: [], docsRepoFullName: effectiveDocsRepoFullName, symbolUids });
   await maybeDrainOnce();
@@ -1328,8 +1838,9 @@ router.post('/docs/regenerate', async (req) => {
     if (k) entrypointKeys = [k];
   }
 
+  const repo = await Promise.resolve(repos.getRepo?.({ tenantId, repoId }));
   const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
-  const effectiveDocsRepoFullName = org?.docsRepoFullName ?? docsRepoFullName;
+  const effectiveDocsRepoFullName = repo?.docsRepoFullName ?? org?.docsRepoFullName ?? docsRepoFullName;
   if (!effectiveDocsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
 
   if (!entrypointKeys && symbolUids.length === 0) {
@@ -1400,6 +1911,34 @@ router.get('/docs/blocks', async (req) => {
   };
 });
 
+router.get('/docs/blocks/by-symbol', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const symbolUid = req.query.symbolUid ?? null;
+  const limit = Number(req.query.limit ?? 200);
+  if (typeof symbolUid !== 'string' || symbolUid.length === 0) return { status: 400, body: { error: 'symbolUid is required' } };
+  if (typeof docStore?.listBlocksBySymbolUid !== 'function') return { status: 501, body: { error: 'not_supported' } };
+  const blocks = await docStore.listBlocksBySymbolUid({
+    tenantId,
+    repoId,
+    symbolUid,
+    limit: Number.isFinite(limit) ? Math.trunc(limit) : 200
+  });
+  return {
+    status: 200,
+    body: {
+      blocks: (blocks ?? [])
+        .map((b) => {
+          const out = normalizeDocBlockRow(b);
+          if (!out) return null;
+          out.content = null;
+          return out;
+        })
+        .filter(Boolean)
+    }
+  };
+});
+
 router.get('/docs/block', async (req) => {
   const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
   const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
@@ -1433,6 +1972,16 @@ router.get('/pr-run', async (req) => {
   const prRun = await docStore.getPrRun({ tenantId, repoId, prRunId });
   if (!prRun) return { status: 404, body: { error: 'not_found' } };
   return { status: 200, body: { prRun } };
+});
+
+router.get('/pr-run/files', async (req) => {
+  const tenantId = req.query.tenantId ?? DEFAULT_TENANT_ID;
+  const repoId = req.query.repoId ?? DEFAULT_REPO_ID;
+  const prRunId = req.query.prRunId;
+  if (typeof prRunId !== 'string' || prRunId.length === 0) return { status: 400, body: { error: 'prRunId is required' } };
+  if (!docStore?.listDocFilesByPrRunId) return { status: 501, body: { error: 'not_supported' } };
+  const files = await docStore.listDocFilesByPrRunId({ tenantId, repoId, prRunId });
+  return { status: 200, body: { files: Array.isArray(files) ? files : [] } };
 });
 
 router.get('/deps/mismatches', async (req) => {

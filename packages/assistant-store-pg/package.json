@@ -1,0 +1,6 @@
+{
+  "name": "@graphfly/assistant-store-pg",
+  "private": true,
+  "type": "module"
+}
+

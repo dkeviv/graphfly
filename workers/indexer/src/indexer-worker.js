@@ -9,8 +9,13 @@ import { cloneAtSha } from '../../../packages/git/src/clone.js';
 import { runIndexerNdjson } from '../../../packages/indexer-cli/src/indexer-cli.js';
 import { runBuiltinIndexerNdjson } from '../../../packages/indexer-engine/src/indexer.js';
 import { recomputeDependencyMismatches } from '../../../packages/stores/src/graph-store.js';
+import { startLockHeartbeat } from '../../../packages/stores/src/lock-heartbeat.js';
 
-export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null, realtime = null }) {
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null, realtime = null, lockStore = null }) {
   return {
     async handle(job) {
       const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [], docsRepoFullName = null } = job.payload ?? {};
@@ -20,34 +25,73 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
       let reparsedFiles = Array.isArray(changedFiles) ? changedFiles : [];
       const modeLabel = Array.isArray(changedFiles) && changedFiles.length > 0 ? 'incremental' : 'full';
 
-      realtime?.publish?.({ tenantId, repoId, type: 'index:start', payload: { sha, mode: modeLabel } });
-
-      // Removed files must prune graph state (delete file-scoped nodes/edges/occurrences).
-      if (Array.isArray(removedFiles) && removedFiles.length > 0 && typeof store.deleteGraphForFilePaths === 'function') {
-        await Promise.resolve(store.deleteGraphForFilePaths({ tenantId, repoId, filePaths: removedFiles }));
-      }
-
-      // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
-      if (Array.isArray(changedFiles) && changedFiles.length > 0) {
-        const impact = await computeImpact({ store, tenantId, repoId, changedFiles, removedFiles, depth: 2 });
-        reparsedFiles = impact.reparsedFiles;
-        await store.addIndexDiagnostic({
+      // Execution lane: serialize index runs per (tenantId, repoId) to avoid concurrent graph writes.
+      const lockName = 'index_run';
+      const ttlMs = Number(process.env.GRAPHFLY_INDEX_LOCK_TTL_MS ?? 30 * 60 * 1000);
+      const maxWaitMs = Number(process.env.GRAPHFLY_INDEX_LOCK_MAX_WAIT_MS ?? 2 * 60 * 60 * 1000);
+      let lockToken = null;
+      let lockHb = null;
+      if (lockStore?.tryAcquire) {
+        const started = Date.now();
+        let attempt = 0;
+        // Wait for the lane lock rather than failing/retrying the job to avoid burning queue attempts during long indexes.
+        while (true) {
+          attempt++;
+          const lease = await lockStore.tryAcquire({
+            tenantId,
+            repoId,
+            lockName,
+            ttlMs: Number.isFinite(ttlMs) ? Math.trunc(ttlMs) : 30 * 60 * 1000
+          });
+          if (lease.acquired) {
+            lockToken = lease.token;
+            break;
+          }
+          if (Date.now() - started > maxWaitMs) throw new Error('index_lane_lock_wait_timeout');
+          const backoff = Math.min(5000, 200 + attempt * 200);
+          await sleep(backoff);
+        }
+        lockHb = startLockHeartbeat({
+          lockStore,
           tenantId,
           repoId,
-          diagnostic: {
-            sha,
-            mode: 'incremental',
-            changed_files: impact.changedFiles,
-            impacted_files: impact.impactedFiles,
-            reparsed_files: impact.reparsedFiles,
-            impacted_symbol_uids: impact.impactedSymbolUids
-          }
+          lockName,
+          token: lockToken,
+          ttlMs: Number.isFinite(ttlMs) ? Math.trunc(ttlMs) : 30 * 60 * 1000,
+          onLostLock: () => console.warn(`WARN: lost index lock for tenant=${tenantId} repo=${repoId}`),
+          onError: (e) => console.warn(`WARN: index lock heartbeat failed: ${String(e?.message ?? e)}`)
         });
-
-        if (docStore?.markBlocksStaleForSymbolUids) {
-          await Promise.resolve(docStore.markBlocksStaleForSymbolUids({ tenantId, repoId, symbolUids: impact.impactedSymbolUids }));
-        }
       }
+
+      try {
+        realtime?.publish?.({ tenantId, repoId, type: 'index:start', payload: { sha, mode: modeLabel } });
+
+        // Removed files must prune graph state (delete file-scoped nodes/edges/occurrences).
+        if (Array.isArray(removedFiles) && removedFiles.length > 0 && typeof store.deleteGraphForFilePaths === 'function') {
+          await Promise.resolve(store.deleteGraphForFilePaths({ tenantId, repoId, filePaths: removedFiles }));
+        }
+
+        // Incremental correctness diagnostics: compute re-parse scope from previous graph state.
+        if (Array.isArray(changedFiles) && changedFiles.length > 0) {
+          const impact = await computeImpact({ store, tenantId, repoId, changedFiles, removedFiles, depth: 2 });
+          reparsedFiles = impact.reparsedFiles;
+          await store.addIndexDiagnostic({
+            tenantId,
+            repoId,
+            diagnostic: {
+              sha,
+              mode: 'incremental',
+              changed_files: impact.changedFiles,
+              impacted_files: impact.impactedFiles,
+              reparsed_files: impact.reparsedFiles,
+              impacted_symbol_uids: impact.impactedSymbolUids
+            }
+          });
+
+          if (docStore?.markBlocksStaleForSymbolUids) {
+            await Promise.resolve(docStore.markBlocksStaleForSymbolUids({ tenantId, repoId, symbolUids: impact.impactedSymbolUids }));
+          }
+        }
 
       let effectiveRepoRoot = repoRoot;
       let clonedDir = null;
@@ -172,14 +216,22 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
         graphQueue.add('graph.enrich', { tenantId, repoId, sha, changedFiles });
       }
       docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName });
-      try {
-        const nodes = await store.listNodes({ tenantId, repoId });
-        const edges = await store.listEdges({ tenantId, repoId });
-        realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel, nodes: nodes.length, edges: edges.length } });
-      } catch {
-        realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel } });
+        try {
+          const nodes = await store.listNodes({ tenantId, repoId });
+          const edges = await store.listEdges({ tenantId, repoId });
+          realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel, nodes: nodes.length, edges: edges.length } });
+        } catch {
+          realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel } });
+        }
+        return { ok: true };
+      } finally {
+        try {
+          await lockHb?.stop?.();
+        } catch {}
+        if (lockStore?.release && lockToken) {
+          await lockStore.release({ tenantId, repoId, lockName, token: lockToken });
+        }
       }
-      return { ok: true };
     }
   };
 }

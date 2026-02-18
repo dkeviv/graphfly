@@ -4,6 +4,7 @@ import { el, clear } from '../render.js';
 export function renderDocsPage({ state, pageEl }) {
   clear(pageEl);
   const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
+  let unsubscribe = null;
 
   const listEl = el('ul', { class: 'list' });
   let detailEl = el('div', { class: 'card' }, [
@@ -19,33 +20,37 @@ export function renderDocsPage({ state, pageEl }) {
   ]);
 
   const recent = [];
-  state.realtime?.subscribe?.((evt) => {
-    const t = String(evt?.type ?? '');
-    if (!t.startsWith('agent:')) return;
-    recent.unshift({ ts: new Date().toISOString(), type: t, payload: evt?.payload ?? null });
-    if (recent.length > 30) recent.length = 30;
-    activityStatusEl.textContent = `Last: ${t}`;
-    activityListEl.innerHTML = '';
-    for (const item of recent) {
-      const type = String(item.type ?? '');
-      const p = item.payload ?? {};
-      const label =
-        type === 'agent:tool_call'
-          ? `tool_call ${String(p?.name ?? '')}`
-          : type === 'agent:tool_result'
-            ? `tool_result ${String(p?.name ?? '')}`
-            : type;
-      const meta = [];
-      if (p?.summary) meta.push(String(p.summary));
-      if (p?.error) meta.push(String(p.error));
-      activityListEl.appendChild(
-        el('li', { class: 'list__item' }, [
-          el('div', { class: 'h' }, [label]),
-          el('div', { class: 'small k' }, [meta.join(' • ') || item.ts])
-        ])
-      );
-    }
-  });
+  try {
+    unsubscribe = state.realtime?.subscribe?.((evt) => {
+      const t = String(evt?.type ?? '');
+      if (!t.startsWith('agent:')) return;
+      recent.unshift({ ts: new Date().toISOString(), type: t, payload: evt?.payload ?? null });
+      if (recent.length > 30) recent.length = 30;
+      activityStatusEl.textContent = `Last: ${t}`;
+      activityListEl.innerHTML = '';
+      for (const item of recent) {
+        const type = String(item.type ?? '');
+        const p = item.payload ?? {};
+        const label =
+          type === 'agent:tool_call'
+            ? `tool_call ${String(p?.name ?? '')}`
+            : type === 'agent:tool_result'
+              ? `tool_result ${String(p?.name ?? '')}`
+              : type;
+        const meta = [];
+        if (p?.summary) meta.push(String(p.summary));
+        if (p?.error) meta.push(String(p.error));
+        activityListEl.appendChild(
+          el('li', { class: 'list__item' }, [
+            el('div', { class: 'h' }, [label]),
+            el('div', { class: 'small k' }, [meta.join(' • ') || item.ts])
+          ])
+        );
+      }
+    });
+  } catch {
+    // ignore
+  }
 
   async function load() {
     listEl.innerHTML = '';
@@ -147,4 +152,12 @@ export function renderDocsPage({ state, pageEl }) {
   );
 
   load();
+
+  return () => {
+    try {
+      unsubscribe?.();
+    } catch {
+      // ignore
+    }
+  };
 }

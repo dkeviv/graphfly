@@ -5,7 +5,8 @@ export async function enqueueInitialFullIndexOnRepoCreate({
   repo,
   org,
   indexQueue,
-  defaultBranch,
+  branch = null,
+  docsRepoFullName = null,
   docsRepoFullNameFallback = null,
   resolveGitHubReaderToken,
   githubApiBaseUrl,
@@ -17,7 +18,7 @@ export async function enqueueInitialFullIndexOnRepoCreate({
   if (!indexQueue?.add) throw new Error('indexQueue.add is required');
   if (typeof resolveGitHubReaderToken !== 'function') throw new Error('resolveGitHubReaderToken is required');
 
-  const configuredDocsRepoFullName = org?.docsRepoFullName ?? docsRepoFullNameFallback ?? null;
+  const configuredDocsRepoFullName = docsRepoFullName ?? repo?.docsRepoFullName ?? org?.docsRepoFullName ?? docsRepoFullNameFallback ?? null;
   if (!configuredDocsRepoFullName) {
     const err = new Error('docs_repo_not_configured');
     err.code = 'docs_repo_not_configured';
@@ -33,12 +34,12 @@ export async function enqueueInitialFullIndexOnRepoCreate({
 
   const gh = new GitHubClientImpl({ token: readerToken, apiBaseUrl: githubApiBaseUrl?.() ?? 'https://api.github.com' });
   const info = await gh.getRepo({ fullName: repo.fullName });
-  const branch = info.defaultBranch ?? defaultBranch ?? repo.defaultBranch ?? 'main';
-  const sha = await gh.getBranchHeadSha({ fullName: repo.fullName, branch });
+  const effectiveBranch = branch ?? repo?.trackedBranch ?? info.defaultBranch ?? repo.defaultBranch ?? 'main';
+  const sha = await gh.getBranchHeadSha({ fullName: repo.fullName, branch: effectiveBranch });
   if (!sha) {
     const err = new Error('github_head_sha_unavailable');
     err.code = 'github_head_sha_unavailable';
-    err.metadata = { fullName: repo.fullName, branch };
+    err.metadata = { fullName: repo.fullName, branch: effectiveBranch };
     throw err;
   }
 

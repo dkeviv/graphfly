@@ -848,6 +848,10 @@ export async function runDocPrWithOpenClaw({
       : envRemote === '0' || envRemote === 'false'
         ? false
         : Boolean(configuredGatewayUrl);
+  const openclawReqRaw = String(process.env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
+  const openclawRequired = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod' && !(openclawReqRaw === '0' || openclawReqRaw === 'false');
+  if (openclawRequired && !useRemote) throw new Error('openclaw_remote_required');
+  if (openclawRequired && !String(token ?? '').trim()) throw new Error('openclaw_token_required');
   const baseRequestJson =
     openclaw?.requestJson ??
     (useRemote

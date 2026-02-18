@@ -13,7 +13,7 @@ export class PgRepoStore {
   async listRepos({ tenantId }) {
     assertUuid(tenantId, 'tenantId');
     const res = await this._c.query(
-      `SELECT id, tenant_id, full_name, default_branch, github_repo_id
+      `SELECT id, tenant_id, full_name, default_branch, tracked_branch, github_repo_id, docs_repo_full_name, docs_default_branch
        FROM repos
        WHERE tenant_id=$1
        ORDER BY created_at DESC`,
@@ -24,7 +24,10 @@ export class PgRepoStore {
       tenantId: r.tenant_id,
       fullName: r.full_name,
       defaultBranch: r.default_branch,
-      githubRepoId: r.github_repo_id ?? null
+      trackedBranch: r.tracked_branch ?? null,
+      githubRepoId: r.github_repo_id ?? null,
+      docsRepoFullName: r.docs_repo_full_name ?? null,
+      docsDefaultBranch: r.docs_default_branch ?? null
     }));
   }
 
@@ -32,7 +35,7 @@ export class PgRepoStore {
     assertUuid(tenantId, 'tenantId');
     assertUuid(repoId, 'repoId');
     const res = await this._c.query(
-      `SELECT id, tenant_id, full_name, default_branch, github_repo_id
+      `SELECT id, tenant_id, full_name, default_branch, tracked_branch, github_repo_id, docs_repo_full_name, docs_default_branch
        FROM repos
        WHERE tenant_id=$1 AND id=$2
        LIMIT 1`,
@@ -45,14 +48,17 @@ export class PgRepoStore {
       tenantId: r.tenant_id,
       fullName: r.full_name,
       defaultBranch: r.default_branch,
-      githubRepoId: r.github_repo_id ?? null
+      trackedBranch: r.tracked_branch ?? null,
+      githubRepoId: r.github_repo_id ?? null,
+      docsRepoFullName: r.docs_repo_full_name ?? null,
+      docsDefaultBranch: r.docs_default_branch ?? null
     };
   }
 
   async findRepoByFullName({ fullName }) {
     if (typeof fullName !== 'string' || fullName.length === 0) throw new Error('fullName is required');
     const res = await this._c.query(
-      `SELECT id, tenant_id, full_name, default_branch, github_repo_id
+      `SELECT id, tenant_id, full_name, default_branch, tracked_branch, github_repo_id, docs_repo_full_name, docs_default_branch
        FROM repos
        WHERE full_name=$1
        ORDER BY created_at DESC
@@ -68,7 +74,10 @@ export class PgRepoStore {
       tenantId: r.tenant_id,
       fullName: r.full_name,
       defaultBranch: r.default_branch,
-      githubRepoId: r.github_repo_id ?? null
+      trackedBranch: r.tracked_branch ?? null,
+      githubRepoId: r.github_repo_id ?? null,
+      docsRepoFullName: r.docs_repo_full_name ?? null,
+      docsDefaultBranch: r.docs_default_branch ?? null
     };
   }
 
@@ -76,7 +85,7 @@ export class PgRepoStore {
     const id = Number(githubRepoId);
     if (!Number.isFinite(id)) throw new Error('githubRepoId must be a number');
     const res = await this._c.query(
-      `SELECT id, tenant_id, full_name, default_branch, github_repo_id
+      `SELECT id, tenant_id, full_name, default_branch, tracked_branch, github_repo_id, docs_repo_full_name, docs_default_branch
        FROM repos
        WHERE github_repo_id=$1
        ORDER BY created_at DESC
@@ -92,20 +101,39 @@ export class PgRepoStore {
       tenantId: r.tenant_id,
       fullName: r.full_name,
       defaultBranch: r.default_branch,
-      githubRepoId: r.github_repo_id ?? null
+      trackedBranch: r.tracked_branch ?? null,
+      githubRepoId: r.github_repo_id ?? null,
+      docsRepoFullName: r.docs_repo_full_name ?? null,
+      docsDefaultBranch: r.docs_default_branch ?? null
     };
   }
 
-  async createRepo({ tenantId, fullName, defaultBranch = 'main', githubRepoId = null }) {
+  async createRepo({
+    tenantId,
+    fullName,
+    defaultBranch = 'main',
+    trackedBranch = null,
+    githubRepoId = null,
+    docsRepoFullName = null,
+    docsDefaultBranch = null
+  }) {
     assertUuid(tenantId, 'tenantId');
     if (typeof fullName !== 'string' || fullName.length === 0) throw new Error('fullName is required');
+    const tb = trackedBranch ? String(trackedBranch) : null;
+    const dr = docsRepoFullName ? String(docsRepoFullName) : null;
+    const db = docsDefaultBranch ? String(docsDefaultBranch) : null;
     const res = await this._c.query(
-      `INSERT INTO repos (tenant_id, full_name, default_branch, github_repo_id)
-       VALUES ($1,$2,$3,$4)
+      `INSERT INTO repos (tenant_id, full_name, default_branch, tracked_branch, github_repo_id, docs_repo_full_name, docs_default_branch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (tenant_id, full_name)
-       DO UPDATE SET default_branch=EXCLUDED.default_branch, github_repo_id=EXCLUDED.github_repo_id
+       DO UPDATE SET
+         default_branch=EXCLUDED.default_branch,
+         github_repo_id=EXCLUDED.github_repo_id,
+         tracked_branch=COALESCE(repos.tracked_branch, EXCLUDED.tracked_branch),
+         docs_repo_full_name=COALESCE(repos.docs_repo_full_name, EXCLUDED.docs_repo_full_name),
+         docs_default_branch=COALESCE(repos.docs_default_branch, EXCLUDED.docs_default_branch)
        RETURNING id`,
-      [tenantId, fullName, defaultBranch ?? 'main', githubRepoId]
+      [tenantId, fullName, defaultBranch ?? 'main', tb, githubRepoId, dr, db]
     );
     const id = res.rows?.[0]?.id ?? null;
     return this.getRepo({ tenantId, repoId: id });

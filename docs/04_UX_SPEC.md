@@ -81,747 +81,338 @@ Build custom for:
 - PR timeline
 
 **Enterprise UX note (Phase-1 UI in this repo):**
-- Onboarding is presented as a **single guided stepper** with progressive disclosure.
+- Onboarding is presented as a **single guided project-creation flow** with progressive disclosure.
 - “Advanced / dev-only” controls (PAT connect, local repo path, API URL) are tucked behind collapsible panels.
-- Primary CTAs are visually distinct and the UI gates actions (docs repo must be set before project creation).
+- Primary CTAs are visually distinct and the UI gates actions (indexing/docs writes require verified GitHub App access).
 
 ---
 
 ## 2. Application Structure
 
-### 2.1 Navigation
+### 2.1 Workspace Layout (V0-inspired)
 
-**Phase-1 implementation note (this repo):** the current UI is a lightweight single-page app using hash routes:
-- `#/dashboard` — enterprise landing (org/project context + next actions)
-- `#/onboarding` — Setup (GitHub connect, docs repo selection, project creation; auto index + docs)
-- `#/graph` — search + focus mode explorer, with live indexing banner
-- `#/docs` — doc blocks list + evidence detail, with live agent activity feed
-- `#/coverage` — coverage KPIs + undocumented entry points + unresolved imports; “Document Selected”
-- `#/admin` — admin overview, jobs/audit, team invites, secrets rotation, metrics preview
-- `#/accept?...` — accept an invitation link (OAuth sign-in if needed)
+Graphfly’s SaaS UI is a single **workspace** optimized for “chat + canvas” workflows (inspired by Vercel v0):
+- A fixed **icon rail** (sidebar)
+- A **context panel** (Column 2)
+- A **canvas** (Column 3)
+
+Column 2 and Column 3 are independently scrollable.
 
 ```
-Left Sidebar (240px fixed, collapsible on mobile):
-
-  ┌─────────────────────────────────┐
-  │  ◈ Graphfly                     │
-  │  ─────────────────────────────  │
-  │                                 │
-  │  [owner ▼]  ← org switcher      │
-  │                                 │
-  │  owner/my-api  ▼  ← repo       │
-  │                                 │
-  │  ● Dashboard                    │
-  │    Graph Explorer               │
-  │    Documentation                │
-  │    PR Timeline                  │
-  │    Coverage                     │
-  │                                 │
-  │  ─────────────────────────────  │
-  │  SETTINGS                       │
-  │    Repositories                 │
-  │    Docs Repo                    │
-  │    Team                         │
-  │    Billing                      │
-  │                                 │
-  │  ─────────────────────────────  │
-  │  [+ Add Repository]             │
-  └─────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│ [Logo] [Project ▾] [Code: main (locked)] [Docs: main ▾]      [Open PR] [👤]│
+├──────────┬──────────────────────────────┬─────────────────────────────────┤
+│ SIDEBAR  │ Column 2 (Context Panel)     │ Column 3 (Canvas / Viewer)      │
+│          │ (scrollable)                 │ (scrollable)                    │
+│ 💬 Chats │ Chat threads + agent         │ Flows canvas (default)           │
+│ 📊 Graph │ (unchanged; see below)       │ Graph viewer (when toggled)      │
+│ 📝 Docs  │ Docs repo file tree          │ Doc viewer/editor + block overlays│
+│ 🔀 Git   │ PR runs / commits / status   │ Diff / PR preview                │
+│ ⚙️ Settings│ Billing + integrations     │ Preview / confirmation            │
+│ 💡 Feedback│ Feedback form              │ (keeps last canvas)               │
+└──────────┴──────────────────────────────┴─────────────────────────────────┘
 ```
 
-**Repo Switcher**: Dropdown showing all connected repos in the org. Shows index status badge (dot: gray=pending, yellow=indexing, green=ready, red=error).
+Top bar rules:
+- **Project dropdown** is the primary navigation. Creating a new project triggers repo + branch selection.
+- **Code branch** is selected at project creation and **cannot be changed** for an existing project (create a new project instead).
+- **Docs branch** is selectable for viewing/previewing docs (`default` vs Graphfly-created preview branches from PR runs).
+- **Open PR** is the single publishing action for docs changes (manual edits and assistant-drafted edits).
 
-**Org Switcher**: Dropdown for users who belong to multiple orgs.
+### 2.2 Navigation Modes
 
-### 2.2 Page Routes
+Sidebar items control the context panel (Column 2). The canvas (Column 3) follows the selected mode.
 
-```
-/                         → Redirect to /dashboard (if logged in) or landing
-/sign-in                  → Clerk-hosted auth
-/onboarding               → Redirect to /onboarding/connect
-/onboarding/connect       → Step 1: Connect GitHub
-/onboarding/repos         → Step 2: Select repos
-/onboarding/docs          → Step 3: Set docs repo
-/onboarding/indexing      → Step 4: Live indexing progress
-/onboarding/ready         → Step 5: First docs PR
-/dashboard                → Home dashboard (default repo)
-/repos/:repoId/graph      → Interactive graph explorer
-/repos/:repoId/docs       → Documentation browser
-/repos/:repoId/docs/blocks/:blockId  → Doc block detail
-/repos/:repoId/pr-runs    → PR timeline
-/repos/:repoId/coverage   → Coverage dashboard
-/settings/repos           → Manage connected repos
-/settings/docs-repo       → Configure docs repo
-/settings/team            → Manage members
-/settings/billing         → Plan + usage
-```
+**Chats**
+- Column 2: chat list (multiple threads per project) + conversation + input.
+- Column 3: flows canvas by default (entrypoints, derived flows, architecture diagrams).
 
-### 2.3 User Flows (Tables)
+**Docs**
+- Column 2: docs repo **file tree** (folders/files) + search.
+- Column 3: doc viewer/editor for selected file.
+  - Renders sanitized Markdown.
+  - Overlays doc-block-managed sections (type/status + evidence).
+  - Selecting a doc block opens an evidence inspector (contracts + locations only; no source code bodies by default).
 
-The tables below capture the primary user journeys end-to-end. These are the flows the product must make effortless.
+**Git**
+- Column 2: PR runs list + status + links.
+- Column 3: PR preview / diff viewer (selected PR run or branch).
 
-#### Authentication, Org, Repo
+**Settings**
+- Column 2: settings forms (billing, team, integrations, repos).
+- Column 3: contextual preview/confirmation and “danger zone” confirmations.
 
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-AUTH-01 | Any user | `/` | Redirect to `/sign-in` → authenticate (GitHub/Google/email) | User lands on onboarding (first-time) or `/dashboard` |
-| UF-ORG-01 | Multi-org user | Left sidebar org switcher | Select org → tenant context switches | All views reflect selected org |
-| UF-REPO-01 | Any user | Repo switcher | Select repo → navigate to last repo-scoped page | Repo-scoped pages show selected repo data |
+**Feedback**
+- Column 2: short feedback form (category, message, optional screenshot).
+- Column 3: keeps the last canvas state (so users can reference what they’re reporting).
 
-#### Onboarding (Time-to-Value)
+**Graph (special behavior)**
+- Graph is a **canvas mode toggle**:
+  - Selecting **Graph** switches Column 3 to the graph viewer.
+  - Column 2 does **not** change (it stays on the last non-graph mode by default).
+- Graph node detail (within the graph viewer) includes:
+  - callers / callees, dependencies / dependents
+  - linked doc blocks (open in docs viewer/editor)
+  - flow trace controls (depth-limited)
 
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-ONB-01 | Admin+ | `/onboarding/connect` | Install **Reader App** (read-only) → return → app detects `github_reader_install_id` | Advance to repo selection |
-| UF-ONB-02 | Admin+ | `/onboarding/repos` | Select source repos → connect → full index jobs enqueued automatically | Advance to docs repo setup |
-| UF-ONB-03 | Owner/Admin | `/onboarding/docs` | Select/create docs repo → install **Docs App** (write to docs repo only) → `github_docs_install_id` detected | “Start Indexing” enabled |
-| UF-ONB-04 | Admin+ | `/onboarding/indexing` | Watch live index progress + live graph preview | `index:complete` → advance |
-| UF-ONB-05 | Admin+ | `/onboarding/ready` | Watch agent activity → first docs PR created in docs repo | User can open PR or go to Graph Explorer |
-| UF-ONB-LOCAL-01 (dev) | Admin+ | `#/onboarding` | Set docs repo → enter local git repo path → **Create Local Project** (guarded by `GRAPHFLY_ALLOW_LOCAL_REPO_ROOT=1`) | Local index + docs write pipeline runs end-to-end |
+### 2.3 Projects, Repos, and Branches
 
-#### Dashboard & Day-to-Day Usage
+Definitions:
+- **Project**: 1 connected **code repo** (GitHub) + 1 connected **docs repo** (GitHub) + a fixed tracked code branch.
+- **Tracked code branch**: selected at project creation; webhooks/indexing only apply to this branch.
+- **Docs branches**: view/edit context. Users can switch between:
+  - default branch (merged docs)
+  - preview branches created by Graphfly PR runs (unmerged docs)
 
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-DB-00 | Any user | `#/dashboard` | See org + project context → follow “Next action” CTAs | User reaches value quickly without hunting |
-| UF-DB-01 | Any user | `/dashboard` | Click stat cards (Graph/Docs/Last PR/Stale) | Deep-links to relevant view with correct filters |
-| UF-DB-02 | Developer+ | `/dashboard` | Click **Document** on an undocumented entry point | Doc agent run triggered; status visible; PR opened |
-| UF-DB-03 | Developer+ | `/dashboard` | Select multiple entry points → **Document All Selected** | Bulk doc generation runs; PR(s) opened |
+Constraints:
+- Each project tracks exactly one code repo + branch.
+- Each project targets exactly one docs repo (writes are hard-failed if the target repo does not match).
+- Changing code repo or tracked branch requires creating a new project (existing projects remain immutable).
 
-#### Graph Explorer (Focus Mode, Lazy Loaded)
+### 2.4 Routes (SaaS target)
 
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-GRAPH-01 | Any user | `/repos/:repoId/graph` | Search (text/semantic) → select result | Focus subgraph rendered around selected node |
-| UF-GRAPH-02 | Any user | `/repos/:repoId/graph` | Click node → fetch/merge neighborhood on demand | Subgraph expands without rendering full repo graph |
-| UF-GRAPH-03 | Any user | `/repos/:repoId/graph` | Click **Show Blast Radius** | Affected nodes highlighted; user can exit mode |
-| UF-GRAPH-04 | Any user | `/repos/:repoId/graph` | Click **Trace Flow** on entrypoint | Call path displayed to configured depth |
-| UF-GRAPH-05 | Any user | `/repos/:repoId/graph` | Double-click node / **View in GitHub** | Browser opens exact file+line in GitHub |
+The SaaS app centers on a workspace route with deep links to selections:
+- `/app/:projectId` — workspace shell
+- `/app/:projectId?mode=chat&thread=:threadId`
+- `/app/:projectId?mode=docs&path=:path&ref=:docsRef`
+- `/app/:projectId?mode=git&run=:prRunId`
+- `/app/:projectId?canvas=graph&focus=:symbolUid`
 
-#### Documentation (Evidence-backed)
+**Phase-1 implementation note (this repo):** the current UI is a lightweight single-page app using hash routes (`#/dashboard`, `#/graph`, `#/docs`, `#/coverage`, `#/admin`). This is not the target SaaS layout; it exists to exercise APIs and worker pipelines.
 
-**Phase-1 implementation note (this repo):**
-- Doc block detail renders a read-only Markdown preview and an Evidence list that inlines contract metadata (e.g., signature) plus file+line locations (no source code bodies/snippets).
-- Regeneration is exposed as **Regenerate (Admin)** in the doc block detail view (admin-only in Phase‑1).
+### 2.5 User Flows (Tables)
 
 | Flow ID | Actor | Entry | Steps (happy path) | Success |
 |---|---|---|---|---|
-| UF-DOCS-01 | Any user | `/repos/:repoId/docs` | Filter by status/file/type → open a block | User reaches doc block detail |
-| UF-DOCS-02 | Any user | `/repos/:repoId/docs/blocks/:blockId` | Read doc content + verify evidence (contracts + locations) | User can validate claims quickly |
-| UF-DOCS-03 | Admin+ | Doc block detail | Click **Edit** → change markdown → save | Manual edit PR opened in docs repo |
-| UF-DOCS-04 | Developer+ | Doc block detail | Click **Regenerate** | Agent updates block; PR opened; status updates |
-| UF-DOCS-05 | Admin+ | Doc block detail | Click **+ Update Evidence** → add/remove nodes | Evidence links updated for future surgical updates |
-| UF-DOCS-06 (future) | Admin+ | Doc block detail | Click **Lock** | Block pinned (agent cannot modify until unlocked) |
-
-#### PR Timeline
-
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-PR-01 | Any user | `/repos/:repoId/pr-runs` | Select a run → view details → open PR | User reviews/merges docs PR on GitHub |
-| UF-PR-02 | Any user | PR run detail | Click “See updated/created blocks” | User jumps to affected doc blocks |
-
-#### Coverage
-
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-COV-01 | Any user | `/repos/:repoId/coverage` | Inspect coverage + undocumented entry points | Clear prioritized doc targets |
-| UF-COV-02 | Developer+ | Coverage | Select nodes → **Document Selected** | Doc generation runs; PR opened |
-
-#### Settings
-
-| Flow ID | Actor | Entry | Steps (happy path) | Success |
-|---|---|---|---|---|
-| UF-SET-REPO-01 | Admin+ | `/settings/repos` | Connect repo | Repo appears; initial index queued |
-| UF-SET-REPO-02 | Admin+ | `/settings/repos` | Click **Reindex** | Full index job queued; progress streamed |
-| UF-SET-REPO-03 | Admin+ | `/settings/repos` | Click **Disconnect** | Repo stops updating; data retention policy applies |
-| UF-SET-DOCS-01 | Admin+ | `/settings/docs-repo` | Change docs repo → install Docs App on new repo | Future PRs target new docs repo only |
-| UF-SET-TEAM-01 | Owner/Admin | `/settings/team` | Invite member (role) → manage invitations | Team membership updated |
-| UF-SET-BILL-01 | Owner | `/settings/billing` | Upgrade plan → Stripe Checkout | Subscription active; entitlements increased |
-| UF-SET-BILL-02 | Owner | `/settings/billing` | Open Stripe Customer Portal | Payment/invoices managed self-serve |
-
-#### Failure/Recovery
+| UF-AUTH-01 | Any user | `/` | Sign in with GitHub → create first project | User lands in workspace with a selected project |
+| UF-PROJ-01 | Admin+ | Project dropdown | Create new project → select code repo + branch → select docs repo | New project created; indexing starts automatically |
+| UF-PROJ-02 | Any user | Project dropdown | Switch project | Workspace updates to selected project context |
+| UF-CHAT-01 | Any user | Chats | Create thread → ask question → assistant responds with evidence links | User gets a grounded answer without source code bodies |
+| UF-GRAPH-01 | Any user | Graph | Toggle graph canvas → search/select node | Focus subgraph rendered around selected node |
+| UF-DOCS-01 | Any user | Docs | Browse file tree → select file | File rendered in viewer with block overlays |
+| UF-DOCS-02 | Any user | Doc viewer | Click block overlay → view evidence (contracts + locations) | User can verify claims quickly |
+| UF-DOCS-03 | Admin+ | Doc viewer | Edit Markdown → preview diff → click **Open PR** | PR opened in docs repo; preview branch available |
+| UF-GIT-01 | Any user | Git | Select PR run → view details | User can open PR on GitHub and review diffs |
+| UF-SET-01 | Owner/Admin | Settings | Update billing/team/integrations | Settings persisted; permissions enforced |
+| UF-FB-01 | Any user | Feedback | Submit feedback | Feedback recorded with project context |
 
 | Flow ID | Actor | Entry | Steps (failure path) | Recovery |
 |---|---|---|---|---|
-| UF-FAIL-INDEX-01 | Any user | Any repo page | Index fails → banner/toast shows error | View error details → retry indexing |
-| UF-FAIL-AGENT-01 | Any user | Docs/PR timeline | Agent run fails → status=error | Retry regeneration; view run logs summary |
+| UF-FAIL-INDEX-01 | Any user | Workspace | Index fails → banner shows error + run id | Retry indexing; open run logs summary |
+| UF-FAIL-DOCS-01 | Any user | Docs | PR creation fails → error state in Git panel | Retry PR; view failure reason; admin runbook link |
 
 ---
 
-## 3. Onboarding Flow
+## 3. Onboarding & First Project
 
-### 3.1 Step 1: Sign In (`/sign-in`)
+Graphfly’s onboarding is optimized for a fast “first value” loop:
+1. Sign in
+2. Create a project (code repo + tracked branch + docs repo)
+3. Indexing runs → initial docs PR opens automatically
+
+### 3.1 Sign In (`/sign-in`)
 
 **Purpose:** Authenticate the user. GitHub OAuth is the primary path.
 
 ```
-Layout: Centered, 400px wide, vertically centered, white background
+Layout: Centered, 400px wide, vertically centered
 
 ┌───────────────────────────────────────────────────┐
-│                                                   │
-│              ◈ Graphfly                           │
-│                                                   │
-│     Your code. Documented. Always.                │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐  │
-│  │                                             │  │
-│  │  [▼ Continue with GitHub]  ← primary CTA   │  │
-│  │                                             │  │
-│  │  [   Continue with Google  ]  ← secondary  │  │
-│  │                                             │  │
-│  │  ─────────── or ───────────                 │  │
-│  │                                             │  │
-│  │  Email address                              │  │
-│  │  [____________________________]             │  │
-│  │                                             │  │
-│  │  [  Continue with email  ]                  │  │
-│  │                                             │  │
-│  └─────────────────────────────────────────────┘  │
-│                                                   │
-│  By signing up you agree to our Terms of Service  │
-│                                                   │
+│                      Graphfly                      │
+│                                                    │
+│     Your code. Documented. Always.                 │
+│                                                    │
+│  [ Continue with GitHub ]   ← primary CTA          │
+│  [ Continue with Google ]   ← secondary            │
+│                                                    │
+│  ─────────── or ───────────                        │
+│  Email address                                     │
+│  [____________________________]                    │
+│  [ Continue with email ]                           │
 └───────────────────────────────────────────────────┘
 ```
 
 **Design notes:**
-- GitHub button uses GitHub logo + indigo background (developers prefer GitHub SSO)
-- No password field visible until email is submitted (progressive disclosure)
-- No "sign up" vs "sign in" distinction — Clerk handles both
+- No “sign up” vs “sign in” distinction (provider handles both).
+- Sign-in is the only full-page auth surface; onboarding happens inside the workspace.
 
 ---
 
-### 3.2 Step 2: Connect GitHub (`/onboarding/connect`)
+### 3.2 Create First Project (`/app/new`)
 
-**Purpose:** Install the GitHub **Reader App** (read-only) used to index source code repositories.
+**Appears:** Immediately after sign-in if the user has no projects yet, or via **Project ▾ → New project**.
+
+**Purpose:** Create a project by selecting:
+- **Code repo** + **tracked code branch** (locked after creation)
+- **Docs repo** (Graphfly writes PRs to this repo only)
+
+Project creation is a single guided flow (inspired by v0), and gates indexing until access is verified.
 
 ```
-Layout: Centered 480px card, step progress dots at top
+Create your first project
 
-	        ● ─ ○ ─ ○ ─ ○    Steps 1–4
-        ↑
-        Active
-
-┌──────────────────────────────────────────────────────┐
-│                                                      │
-│  Connect your GitHub repositories                    │
-│                                                      │
-│  Graphfly uses a read-only GitHub App to analyze     │
-│  your source code repositories.                       │
-│  Here's exactly what access we request:             │
-│                                                      │
-│  ✓ Read source files (to build the Code Intelligence Graph) │
-│  ✓ Receive push events (to keep docs current)        │
-│  ✗ No write access to your source code repos        │
-│  ✗ We never execute your code                       │
-│                                                      │
-│  ─────────────────────────────────────────────────  │
-│                                                      │
-│  [  Install Reader App  →  ]   ← opens new tab      │
-│                                                      │
-│  Waiting for installation...  ● (animated dot)       │
-│  (auto-detects when you return from GitHub)          │
-│                                                      │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ Step 1 — Connect GitHub Apps                                │
+│                                                            │
+│ Reader App (read-only; index code)   [Install / Verify →]   │
+│ Docs App   (write docs PRs only)     [Install / Verify →]   │
+│                                                            │
+│ Step 2 — Code repo                                          │
+│ [ owner/my-api                                      ▼ ]     │
+│ Tracked branch (locked):  main                              │
+│                                                            │
+│ Step 3 — Docs repo                                          │
+│ [ owner/my-api-docs                                 ▼ ]     │
+│ or:  [+ Create new docs repo]                               │
+│                                                            │
+│                                    [Create project →]       │
+└────────────────────────────────────────────────────────────┘
 ```
 
 **Behavior:**
-- Button opens Reader App install in a new tab
-- Page polls `/api/v1/orgs/current` every 2s for `github_reader_install_id !== null`
-- When detected: auto-advances to Step 3 without user action
-- Shows a subtle "Still waiting..." after 30s with a "Try again" link
+- If GitHub Apps are already installed, “Install / Verify” becomes “Verified ✓”.
+- Repo lists are limited to repos accessible under the relevant GitHub App installation.
+- Creating a project immediately enqueues initial indexing. No further user action is required.
+- Changing the code repo or tracked branch requires creating a new project (projects are immutable by default).
 
 ---
 
-### 3.3 Step 3: Select Repos (`/onboarding/repos`)
+### 3.3 Indexing + First Docs PR
 
-**Purpose:** Choose which repos to connect.
+**Purpose:** Show real-time progress and deliver initial documentation automatically.
 
-```
-       ● ─ ● ─ ○ ─ ○
+**Happy path:**
+1. Index starts immediately (real-time banner + live counters).
+2. When the graph is ready, the doc agent runs and opens the initial docs PR in the project’s docs repo.
+3. The **Docs branch selector** gains a preview branch (unmerged PR branch) for in-app review.
 
-┌──────────────────────────────────────────────────────┐
-│                                                      │
-│  Select repositories to document                    │
-│                                                      │
-│  [🔍  Filter by name...]                             │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  ☑  owner/my-api         TypeScript  1,240 ⬤  │  │
-│  │  ☑  owner/frontend       React         890 ⬤  │  │
-│  │  ☐  owner/scripts        Python          42    │  │
-│  │  ☐  owner/infra          HCL            200    │  │
-│  │  ☐  owner/data-pipeline  Python       3,100    │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                      │
-│  ● = large repo (>500 files, estimated 5min index)  │
-│                                                      │
-│  2 repos selected                                    │
-│                                                      │
-│  [← Back]          [Connect 2 repos →]              │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
-
-**Design notes:**
-- Pre-select all repos (opt-out, not opt-in — shows more value immediately)
-- Show language icon (colored dot based on primary language)
-- Show file count as a proxy for "how long will indexing take"
-- Repos with >1,000 files show a subtle size indicator
-- Filter input with instant fuzzy search
+**Failure path:**
+- Indexing failure shows an error banner with the run id and a “Retry indexing” action.
+- Docs PR failure shows an error state in **Git** (with retry and a runbook link).
 
 ---
 
-### 3.4 Step 4: Set Docs Repo (`/onboarding/docs`)
+## 4. Chats (Agent) (`/app/:projectId?mode=chat`)
 
-**Purpose:** Choose where Graphfly opens PRs, then install the **Docs App** (write access to docs repo only).
+**Purpose:** Primary interaction surface for the **Documentation Assistant**.
+
+- **Column 2:** chat threads (multiple per project), conversation, input.
+- **Column 3:** flows canvas by default (derived flows, architecture diagrams, entrypoint traces).
 
 ```
-       ● ─ ● ─ ● ─ ○
-
-┌──────────────────────────────────────────────────────┐
-│                                                      │
-│  Set up your documentation repository               │
-│                                                      │
-│  Graphfly opens PRs here with updated .md files.    │
-│  We use a separate GitHub App with write access     │
-│  to this docs repo only (never your source repos).  │
-│                                                      │
-│  Use an existing repository:                         │
-│  [owner/docs-repo                              ▼]   │
-│                                                      │
-│  ─────────────────── or ───────────────────────────  │
-│                                                      │
-│  [+ Create "owner/graphfly-docs"]                   │
-│     Empty private repo, set up automatically        │
-│                                                      │
-│  ─────────────────────────────────────────────────  │
-│                                                      │
-│  Step required: authorize write access to docs repo   │
-│  [  Install Docs App  →  ]                           │
-│                                                      │
-│  ─────────────────────────────────────────────────  │
-│                                                      │
-│  Example PR Graphfly will open:                     │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Branch:  docs/update-a3f8c2d1                │  │
-│  │  Title:   docs: update api/auth.md             │  │
-│  │  +12 -3   Changes to 2 files                  │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                      │
-│  [← Back]          [Start Indexing →]               │
-│                                                      │
-└──────────────────────────────────────────────────────┘
+┌──────────┬──────────────────────────────┬─────────────────────────────────┐
+│ SIDEBAR  │ Column 2: Agent              │ Column 3: Canvas                 │
+│ 💬 Chats │ [Threads] [Search]           │ [Flow diagram / architecture]    │
+│ 📊 Graph │ User: "What does billing do?"│ (scroll/zoom; shareable links)   │
+│ 📝 Docs  │ AI:  grounded answer + refs  │                                  │
+│ 🔀 Git   │ Tools: contracts.get(...)    │                                  │
+│ ⚙️ Set   │                              │                                  │
+│ 💡 Fb    │ [ Ask a question… ]          │                                  │
+└──────────┴──────────────────────────────┴─────────────────────────────────┘
 ```
 
-**Behavior:**
-- “Start Indexing” is disabled until the Docs App installation is detected (`github_docs_install_id !== null`).
-- On successful Docs App install, the UI confirms “Write access granted to docs repo” and enables “Start Indexing”.
+**Assistant UX rules:**
+- Responses cite evidence (symbol UIDs, flow entrypoints, doc paths, PR run ids).
+- The assistant must not fetch or display source code bodies/snippets by default.
+- Tool calls/results are visible (collapsible) so developers can audit what informed the response.
 
 ---
 
-### 3.5 Step 5: Live Indexing (`/onboarding/indexing`)
+## 5. Code Graph (Canvas Toggle) (`/app/:projectId?canvas=graph`)
 
-**Purpose:** Show that indexing is working. Make the wait feel productive.
+**Purpose:** Explore the Code Intelligence Graph without leaving the workspace.
 
-```
-       ● ─ ● ─ ● ─ ●
-
-┌──────────────────────────────────────────────────────────────────────┐
-│                                                                      │
-│  Building your Code Intelligence Graph...                            │
-│                                                                      │
-│  Left 50% — Progress:              Right 50% — Live Graph Preview:  │
-│  ┌──────────────────────────────┐  ┌──────────────────────────────┐  │
-│  │                              │  │                              │  │
-│  │  ████████████░░░░░  64%      │  │  [Cytoscape canvas]          │  │
-│  │  src/services/payment.ts     │  │                              │  │
-│  │                              │  │  Nodes appear in real-time   │  │
-│  │  ─────────────────────────   │  │  as files are parsed.        │  │
-│  │                              │  │                              │  │
-│  │  ✓ src/auth/login.ts         │  │  ● Function (indigo)         │  │
-│  │    → 3 functions, 1 class    │  │  ■ Class (emerald)           │  │
-│  │  ✓ src/models/User.ts        │  │  ⬡ Module (gray)             │  │
-│  │    → 1 class, 8 methods      │  │                              │  │
-│  │  ✓ src/db/connection.ts      │  │                              │  │
-│  │    → 2 functions             │  │                              │  │
-│  │  ↻ src/services/payment.ts   │  │                              │  │
-│  │    Parsing...                │  │                              │  │
-│  │                              │  │                              │  │
-│  │  342 nodes · 891 edges       │  │                              │  │
-│  └──────────────────────────────┘  └──────────────────────────────┘  │
-│                                                                      │
-│  owner/my-api  ·  owner/frontend                                    │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-**Behavior:**
-- WebSocket `index:progress` events update progress bar + log + counters
-- Graph canvas updates in real-time (nodes fade in as they arrive)
-- Auto-advances to Step 6 when `index:complete` fires
-- If indexing fails: shows error message with "Retry" button
-
----
-
-### 3.6 Step 6: First Docs PR (`/onboarding/ready`)
-
-**Purpose:** Show the first tangible value — a real documentation PR.
-
-```
-┌──────────────────────────────────────────────────────┐
-│                                                      │
-│  ✓ Graph ready                                       │
-│    729 nodes · 1,847 edges indexed                  │
-│                                                      │
-│  ─────────────────────────────────────────────────  │
-│                                                      │
-│  Creating your first documentation...               │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  ↻  Reading loginUser function...              │  │
-│  │  ↻  Analyzing 3 call targets...                │  │
-│  │  ↻  Writing api/auth.md...                     │  │
-│  │  ↻  Writing models/user.md...                  │  │
-│  │  ↻  Opening PR in owner/docs-repo...           │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  ✓ First documentation PR created!            │  │
-│  │                                               │  │
-│  │  PR #1  ·  docs/update-initial                │  │
-│  │  "docs: initial documentation"                │  │
-│  │  12 blocks created across 4 files             │  │
-│  │                                               │  │
-│  │  [  View PR on GitHub ↗  ]                    │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                      │
-│  [  Explore your graph  →  ]                        │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
-
----
-
-## 4. Dashboard (`/dashboard`)
-
-**Purpose:** At-a-glance health of documentation across all connected repos.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  ◈ Graphfly       [owner/my-api ▼]                          [+ Add Repo]    │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐  │
-│  │  Code Intelligence Graph │  │ Documentation │  │   Last PR     │  │   Stale     │  │
-│  │               │  │               │  │               │  │             │  │
-│  │  729 nodes    │  │     73%       │  │   2 hours ago │  │  8 blocks   │  │
-│  │  1,847 edges  │  │  documented   │  │   PR #14      │  │  need update│  │
-│  └───────────────┘  └───────────────┘  └───────────────┘  └─────────────┘  │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────┐  ┌─────────────┐  │
-│  │  Recent Documentation PRs               [View all]  │  │  Quick      │  │
-│  │  ────────────────────────────────────────────────── │  │  Actions    │  │
-│  │                                                     │  │  ─────────  │  │
-│  │  ● PR #14  ·  2h ago  ·  3 updated  ·  ✓ success   │  │             │  │
-│  │    auth: add refresh token endpoint                 │  │ [Reindex]   │  │
-│  │                                                     │  │             │  │
-│  │  ● PR #13  ·  6h ago  ·  1 created  ·  ✓ success   │  │ [Coverage]  │  │
-│  │    models: add UserPreferences                      │  │             │  │
-│  │                                                     │  │ [Explore    │  │
-│  │  ● PR #12  ·  1d ago  ·  12 created ·  ✓ success   │  │  Graph]     │  │
-│  │    Initial documentation                            │  │             │  │
-│  └─────────────────────────────────────────────────────┘  └─────────────┘  │
-│                                                                             │
-│  Top Undocumented Entry Points                     [Document All Selected]  │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  Function              File                  Callers  Priority   Action     │
-│  handlePayment()       src/billing.ts             12  ▲ HIGH    [Document]  │
-│  processWebhook()      src/events.ts               8  ▲ HIGH    [Document]  │
-│  syncInventory()       src/sync.ts                 5  ● MED     [Document]  │
-│  createSubscription()  src/subscriptions.ts        4  ● MED     [Document]  │
-│  sendNotification()    src/notifications.ts        3  ▼ LOW     [Document]  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-**Interactions:**
-- Stats cards are clickable: Graph → /graph, Documentation → /docs, Last PR → /pr-runs, Stale → /docs?status=stale
-- PR timeline entries click through to full PR run detail
-- "Document" button on undocumented entries triggers single-node doc agent job
-- "Document All Selected" bulk-triggers doc agent for checked entries
-- Repo switcher in top nav (same row as Graphfly logo)
-
----
-
-## 5. Graph Explorer (`/repos/:repoId/graph`)
-
-**Purpose:** Understand the structure of the codebase and relationships between components.
+**Graph is special behavior:** selecting **Graph** switches **Column 3** into the graph viewer; **Column 2 stays in its last non-graph mode**.
 
 **Default mode: Focus + lazy loading (enterprise-scale safe).**
-- The canvas does **not** attempt to render the full repo graph by default.
+- The canvas does **not** render the full repo graph by default.
 - Initial view is a focused subgraph (search result, entrypoint flow, or selected node neighborhood).
-- Nodes/edges are fetched on-demand (e.g., `GET /graph/neighborhood/:nodeId`) as the user drills in.
-- A “Full graph” option can exist for small repos only (with a confirmation + hard cap), but Focus mode is the product default.
+- Nodes/edges are fetched on-demand (e.g., neighborhood expansion) as the user drills in.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  [🔍  Search nodes...  ]  [Scope ▼]  [Type ▼]  [Layout ▼]  [+]  [−]  [⊡]   │
-├─────────────────────────────────────────────────┬───────────────────────────┤
-│                                                 │  Node Detail              │
-│                                                 │  ─────────────────────── │
-│  ●  loginUser                                   │                           │
-│  ↓                                              │  loginUser                │
-│  ●  findByEmail ─────────────── ●  getUserById  │  Function · TypeScript    │
-│  ↓                                              │  src/auth/login.ts:12–45  │
-│  ●  bcrypt.compare                              │                           │
-│  ↓                                              │  Signature (contract):    │
-│  ●  signJWT                                     │  loginUser(               │
-│  ↓                                              │    email: string,         │
-│  ●  setHttpCookie                               │    password: string       │
-│                                                 │  ) → Promise<AuthResult>  │
-│                                                 │                           │
-│  (Graph canvas — Cytoscape.js with dagre        │  [Callers]  [Callees]     │
-│   layout, zoom+pan, click to select)            │  [Deps]  [Dependents]     │
-│                                                 │                           │
-│                                                 │  ─────────────────────── │
-│                                                 │  Documentation            │
-│                                                 │                           │
-│  Node Legend:                                   │  ## POST /auth/login      │
-│  ● Function (indigo)                            │  Authenticates a user...  │
-│  ■ Class (emerald)                              │  [View]  [Edit]           │
-│  ⬡ Module (gray)                               │                           │
-│  ◆ Package (amber)                              │  ─────────────────────── │
-│                                                 │  [View in GitHub ↗]       │
-│                                                 │  [Show Blast Radius]      │
-│                                                 │  [Trace Flow]             │
-└─────────────────────────────────────────────────┴───────────────────────────┘
-```
+**Core interactions:**
+- Search (text + semantic) → focus neighborhood
+- Click node → open node detail drawer (contract + relationships + linked docs)
+- “Show blast radius” → highlight impacted nodes
+- “Trace flow” → derive a flow graph for an entrypoint
 
-**Toolbar controls:**
-- **Search**: Instant text search; toggle button for semantic mode
-- **Scope**: Focus (default) | Neighborhood | Flow Trace | Full graph (if eligible)
-- **Type filter**: Multi-select: Function | Class | Module | Package
-- **Layout**: Dagre (hierarchical, default) | Force | Radial
-- **Zoom**: + / - buttons, plus scroll-to-zoom on canvas
-- **Fit**: ⊡ button fits all nodes in view
-
-**Canvas interactions:**
-- Click node → populate right panel (API: `GET /graph/nodes/:nodeId`)
-- Click node in Focus mode → fetch/merge its neighborhood into the current subgraph (lazy load)
-- Hover node → tooltip: name, type, file:line
-- Double-click node → open file at line in GitHub (new tab)
-- Right-click node → context menu: View Code, Show Blast Radius, Document This Node, Copy Node ID
-- Click edge → highlight both endpoints
-- Click empty area → deselect, clear right panel
-
-**Blast Radius mode:**
-- Toggle "Show Blast Radius" button → selected node's affected nodes highlighted with amber ring
-- Affected nodes show a count badge: "42 affected"
-- "Exit Blast Radius" button clears the highlight
-
-**Right panel tabs:**
-- **Callers**: List of nodes that call this node (with file:line)
-- **Callees**: List of nodes this node calls
-- **Dependencies**: Import relationships
-- **Dependents**: Who imports this node
-- All tabs are clickable (navigating to that node in the graph)
+**No code bodies:** node detail shows contracts + locations. “Open in GitHub” is explicit.
 
 ---
 
-## 6. Documentation Browser (`/repos/:repoId/docs`)
+## 6. Documentation (Docs Repo File Tree + Viewer/Editor) (`/app/:projectId?mode=docs&path=:path&ref=:docsRef`)
 
-**Purpose:** Browse all documentation blocks, filter by status, file, or type.
+**Purpose:** Browse documentation from the project’s **docs repo** and edit safely.
+
+- **Column 2:** docs repo **file tree** (folders/files) + search.
+- **Column 3:** viewer/editor for the selected file.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Documentation · owner/my-api                                               │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  [🔍 Search docs...]  [Status: All ▼]  [File ▼]  [Type ▼]                 │
-│                                                                             │
-│  api/auth.md                                                       3 blocks │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  ● current  ## POST /auth/login              api_endpoint  2h ago   │   │
-│  │  ● current  ## POST /auth/refresh            api_endpoint  2h ago   │   │
-│  │  ⚠ stale   ## POST /auth/logout             api_endpoint  4d ago   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  api/users.md                                                      2 blocks │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  ● current  ## GET /users/:id                api_endpoint  1d ago   │   │
-│  │  ● current  ## PUT /users/:id                api_endpoint  1d ago   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  models/user.md                                                    1 block  │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  ● current  ## User                         class        6h ago    │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────┬──────────────────────────────┬─────────────────────────────────┐
+│ SIDEBAR  │ Column 2: Docs tree          │ Column 3: Doc viewer/editor      │
+│ 📝 Docs  │ docs/                        │ api/auth.md                       │
+│          │  api/                        │ ───────────────────────────────  │
+│          │   auth.md   ← selected       │ ## POST /auth/login   [fresh]     │
+│          │   users.md                   │ (rendered markdown)               │
+│          │  runbooks/                   │ ## POST /auth/logout  [stale]     │
+│          │   oncall.md                  │ (block overlay + evidence icon)   │
+│          │                              │ [Edit] [Diff]                     │
+└──────────┴──────────────────────────────┴─────────────────────────────────┘
 ```
 
-**Status badges:**
-- `● current` — green dot, documentation is up to date
-- `⚠ stale` — amber dot, evidence nodes have changed since last update
-- `↻ generating` — spinning dot, agent is currently updating this block
-- `✗ error` — red dot, last generation failed
+**Viewer rules:**
+- Markdown is sanitized (no script execution).
+- Doc-block-managed sections are overlaid with: block type, status (fresh/stale/locked), and evidence affordances.
+- Selecting a block opens an evidence inspector (contracts + locations only; no code bodies by default).
+
+**Editing rules (Admin+):**
+- Editing happens on a preview branch and is shown as a diff before publish.
+- Publishing is a single action: **Open PR** (top nav).
+- Writes are hard-failed if the target repo is not the project’s configured docs repo.
 
 ---
 
-## 7. Doc Block Detail (`/repos/:repoId/docs/blocks/:blockId`)
+## 7. Doc Block Evidence Inspector (in-doc drawer)
 
-**Purpose:** View and verify a single documentation block with its evidence.
+**Purpose:** Let developers verify documentation claims without exposing code bodies.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  ← Documentation · api/auth.md                                              │
-│  ## POST /auth/login  ·  ● current  ·  Updated by PR #14 · 2h ago          │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-├───────────────────────────────────┬─────────────────────────────────────────┤
-│  DOCUMENTATION                    │  EVIDENCE  (3 contract references)      │
-│  ─────────────────────────────── │  ─────────────────────────────────────  │
-│                                   │                                         │
-│  ## POST /auth/login              │  1. src/auth/login.ts  lines 12–45      │
-│                                   │     Weight: primary ●                   │
-│  Authenticates a user with email  │     Signature: loginUser(email, password)│
-│  and password. Returns a signed   │     Returns: Promise<AuthResult>         │
-│  JWT token and sets a session     │     Constraints:                          │
-│  cookie.                          │     - email: format=email                │
-│                                   │     - password: minLength=8              │
-│  **Request body:**                │     [View Location]  [Open in GitHub ↗*] │
-│  ```json                          │                                         │
-│  {                                │  2. src/auth/jwt.ts  lines 8–22         │
-│    "email": "user@example.com",   │     Weight: secondary ○                 │
-│    "password": "secret"           │     Signature: signJWT(payload) → string│
-│  }                                │     [View Location]  [Open in GitHub ↗*] │
-│  ```                              │                                         │
-│                                   │  3. src/models/User.ts  lines 1–45      │
-│  **Response:**                    │     Weight: secondary ○                 │
-│  ```json                          │     Contract: User schema (fields, types)│
-│  {                                │     [View Location]  [Open in GitHub ↗*] │
-│    "token": "eyJ...",             │                                         │
-│    "user": { ... }                │                                         │
-│  }                                │                                         │
-│  ```                              │                                         │
-│                                   │                                         │
-│  **Errors:**                      │                                         │
-│  - 401 Invalid credentials        │                                         │
-│  - 422 Validation error           │                                         │
-│                                   │                                         │
-│  [Edit]  [Regenerate]  [Lock*]   │  ──────────────────────────────────────  │
-│                                   │  [+ Update Evidence]                    │
-│                                   │  [View node in Graph]                   │
-└───────────────────────────────────┴─────────────────────────────────────────┘
-```
+**Appears:** when a user clicks a block overlay (from the doc viewer/editor).
 
-**"Edit" button:** Opens an inline markdown editor. Saving creates a manual edit PR.
+Contents:
+- Block metadata: type, status, last PR run id
+- Evidence list: symbol UID, file path + line range + sha, contract summary (signature/schema/constraints)
+- Actions: view node in graph, regenerate block (developer+), lock/unlock (future)
 
-**"Regenerate" button:** Triggers the doc agent for this single block. Shows a progress indicator until the new PR is opened.
-
-**"Lock" button (future):** Prevent the agent from modifying this block unless an admin unlocks it (manual override protection).
-
-**Evidence panel privacy:** By default, the Evidence panel shows **contract + location metadata** only (signatures/schemas/constraints + file/line). It does not fetch or render source code bodies/snippets. “Open in GitHub” is an explicit user action and may reveal source code in GitHub.
-
-**"View node in Graph":** Navigates to the Graph Explorer with the primary evidence node selected.
-
-**"+ Update Evidence":** Opens a sheet to add or remove evidence nodes (search for nodes by name).
+**Privacy rule:** The inspector never fetches or renders source code bodies/snippets by default.
 
 ---
 
-## 8. PR Timeline (`/repos/:repoId/pr-runs`)
+## 8. Git (PR Runs + Diff Viewer) (`/app/:projectId?mode=git&run=:prRunId`)
 
-**Purpose:** Full history of all documentation PRs Graphfly has opened.
+**Purpose:** Show documentation PR history and allow review before merging.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Documentation PRs  ·  owner/my-api  →  owner/docs-repo                     │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  [All ▼]  [Date range ▼]                                                   │
-│                                                                             │
-│  FEBRUARY 2026                                                              │
-│                                                                             │
-│  ──●──────────────────────────────────────────────────────────────────────  │
-│    │  PR #14  ·  ✓ success  ·  February 13, 2026 at 14:32                   │
-│    │  Triggered by commit a3f8c2d                                           │
-│    │  "auth: add refresh token endpoint" — by Jane Smith                    │
-│    │                                                                        │
-│    │  Changed nodes:   loginUser  ·  refreshToken  ·  validateJWT           │
-│    │  3 blocks updated  ·  0 blocks created  ·  2 blocks unchanged          │
-│    │                                                                        │
-│    │  [View PR #14 on GitHub ↗]      [See 3 updated blocks]                │
-│    │                                                                        │
-│  ──●──────────────────────────────────────────────────────────────────────  │
-│    │  PR #13  ·  ✓ success  ·  February 13, 2026 at 09:15                   │
-│    │  Triggered by commit 9f2b1e4                                           │
-│    │  "models: add UserPreferences" — by John Doe                           │
-│    │  1 block created                                                       │
-│    │                                                                        │
-│    │  [View PR #13 on GitHub ↗]      [See 1 created block]                 │
-│    │                                                                        │
-│  JANUARY 2026                                                               │
-│                                                                             │
-│  ──●──────────────────────────────────────────────────────────────────────  │
-│    │  PR #12  ·  ✓ success  ·  January 28, 2026 at 11:00                    │
-│    │  Initial documentation                                                 │
-│    │  12 blocks created across 4 files                                      │
-│    │  [View PR #12 on GitHub ↗]      [See 12 created blocks]               │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+- **Column 2:** PR runs list + status.
+- **Column 3:** PR preview / diff viewer (selected run/branch).
+
+**Design notes:**
+- A PR run is the canonical unit of “what changed and why” (trigger SHA + changed nodes + blocks updated/created).
+- “View PR on GitHub” is always available as a safe escape hatch.
 
 ---
 
-## 9. Coverage Dashboard (`/repos/:repoId/coverage`)
+## 9. Coverage (Graph tab)
 
-**Purpose:** Understand what's documented, what isn't, and what to do next.
+Coverage is accessible from Graph mode as a tab/sub-view (not a primary sidebar item). It answers:
+- what is documented vs undocumented
+- highest-impact undocumented entrypoints
+- unresolved imports (graph gaps)
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Documentation Coverage  ·  owner/my-api                                    │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  ┌─────────┐ │
-│  │    Overall      │  │   Functions     │  │    Classes     │  │ Modules │ │
-│  │                 │  │                 │  │                │  │         │ │
-│  │      73%        │  │      68%        │  │      91%       │  │  100%   │ │
-│  │  ██████████░░░  │  │  █████████░░░░  │  │  ████████████░ │  │ ███████ │ │
-│  │  438 / 600      │  │  354 / 521      │  │   41 / 45      │  │ 34 / 34 │ │
-│  └─────────────────┘  └─────────────────┘  └────────────────┘  └─────────┘ │
-│                                                                             │
-│  Undocumented Entry Points              ☐ Select all  [Document Selected]  │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  ☐  handlePayment()       src/billing.ts:12         12 callers  ▲ HIGH      │
-│  ☐  processWebhook()      src/events.ts:45           8 callers  ▲ HIGH      │
-│  ☐  syncInventory()       src/sync.ts:78             5 callers  ● MED       │
-│  ☐  createSubscription()  src/subscriptions.ts:23    4 callers  ● MED       │
-│  ☐  sendNotification()    src/notifications.ts:11    3 callers  ▼ LOW       │
-│  ☐  retryFailedJobs()     src/queue.ts:56            2 callers  ▼ LOW       │
-│                                                                             │
-│  [Show all 162 undocumented...]                                             │
-│                                                                             │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  Unresolved Imports  (these appear as gaps in the graph)                    │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  stripe         npm package   ·  used in 8 files   ·  External ✓           │
-│  pg             npm package   ·  used in 3 files   ·  External ✓           │
-│  @internal/...  internal pkg  ·  used in 2 files   ·  ⚠ Not found          │
-│                                                                             │
-│  [Export Coverage Report →]                                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+Coverage actions (“Document selected”) enqueue doc agent runs and surface results as PR runs.
 
 ---
 
 ## 10. Real-time Indexing Banner
 
-**Appears:** On any repo page while the repo is being indexed.
+Appears during indexing and doc generation to provide live progress feedback.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -830,26 +421,14 @@ Layout: Centered 480px card, step progress dots at top
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Position: Sticky below the top navigation bar, above page content.
-Animation: Progress bar fills smoothly as `index:progress` events arrive.
+Position: Sticky below the top navigation bar, above workspace content.
 Dismissal: Fades out automatically when `index:complete` fires.
-
-**Toast on complete (bottom-right):**
-```
-┌──────────────────────────────────────────┐
-│  ✓  Graph ready                          │
-│     729 nodes · 1,847 edges              │
-│     Documentation PR queued             │
-│                                          │
-│                              [Dismiss]   │
-└──────────────────────────────────────────┘
-```
 
 ---
 
 ## 11. Agent Activity Live Feed
 
-**Appears:** In onboarding Step 6 and as a slide-over sheet during any active doc agent run.
+**Appears:** as a slide-over sheet during any active doc agent run (and linked from Git/Docs when a PR run is active).
 
 ```
 Doc Agent: PR #15                              × Close
@@ -864,7 +443,7 @@ Doc Agent: PR #15                              × Close
 ✓  docs.get_block(block_auth_login)                89ms
    → api/auth.md ## POST /auth/login (stale)
 
-✓  contracts.get([loginUser])                       234ms
+✓  contracts.get([loginUser])                      234ms
    → signature + schema + constraints
 
 ↻  docs.update_block(...)                          [updating]
@@ -877,80 +456,33 @@ Blocks updated: 2 of 5 estimated
 
 ---
 
-## 12. Settings Pages
+## 12. Settings (`/app/:projectId?mode=settings`)
 
-### Settings: Repositories (`/settings/repos`)
+Settings live in Column 2 (forms) with contextual previews/confirmations in Column 3.
 
-```
-Connected Repositories
+**Settings sections (v1):**
+- Billing (owner+)
+- Team (admin+)
+- GitHub integrations (install/verify Reader + Docs Apps)
+- Project settings (repo bindings):
+  - Code repo + tracked branch (display-only; immutable)
+  - Docs repo (display-only; immutable by default)
 
-[+ Connect Repository]
-
-owner/my-api          TypeScript  ●  ready    729 nodes   [Reindex]  [Disconnect]
-owner/frontend        React       ●  ready    491 nodes   [Reindex]  [Disconnect]
-```
-
-### Settings: Docs Repo (`/settings/docs-repo`)
-
-```
-Documentation Repository
-
-All Graphfly PRs are opened to:
-owner/docs-repo    [Change]
-
-Last PR:  #14 opened February 13, 2026
-```
-
-### Settings: Team (`/settings/team`)
-
-```
-Team Members                                          [Invite Member]
-
-Jane Smith    jane@co.com     ●  Owner     joined Jan 2026
-John Doe      john@co.com     ●  Admin     joined Jan 2026
-Alice Wong    alice@co.com    ●  Developer joined Feb 2026
-
-Pending Invitations
-
-bob@company.com    Developer    invited 2h ago    [Resend]  [Cancel]
-```
+**Changing repo bindings:** create a new project from the project dropdown.
 
 ---
 
 ## 13. Empty States
 
-### No repos connected
-```
-◈ Graphfly
-
-  Connect your first repository to get started.
-
-  Graphfly analyzes your code, builds a relationship graph,
-  and automatically generates and maintains documentation.
-
-  [Connect a Repository →]
-```
+### No projects yet
+- Show the Create First Project wizard immediately.
 
 ### Graph empty (indexing failed)
-```
-  Graph data unavailable.
+- Show error banner with run id, “Retry indexing”, and a link to logs.
 
-  The last index attempt failed:
-  "Could not parse src/config.ts: syntax error on line 42"
-
-  [View error details]  [Retry indexing]
-```
-
-### No doc blocks yet
-```
-  No documentation yet.
-
-  Documentation will appear here after your first
-  docs PR is opened (usually within 3 minutes of
-  completing the index).
-
-  [View indexing status]
-```
+### No documentation yet
+- Show a friendly state explaining that docs appear after the first docs PR is opened.
+- Provide a shortcut to Git (PR runs) and indexing status.
 
 ---
 

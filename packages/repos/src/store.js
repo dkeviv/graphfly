@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 export class InMemoryRepoStore {
   constructor() {
     this._byId = new Map(); // repoId -> repo
@@ -30,14 +32,33 @@ export class InMemoryRepoStore {
     return match[0];
   }
 
-  async createRepo({ tenantId, repoId, fullName, defaultBranch = 'main', githubRepoId = null }) {
-    if (!tenantId || !repoId || !fullName) throw new Error('tenantId, repoId, fullName are required');
+  async createRepo({
+    tenantId,
+    repoId = null,
+    fullName,
+    defaultBranch = 'main',
+    trackedBranch = null,
+    githubRepoId = null,
+    docsRepoFullName = null,
+    docsDefaultBranch = null
+  }) {
+    if (!tenantId || !fullName) throw new Error('tenantId, fullName are required');
+    const id = repoId ?? crypto.randomUUID();
     const fk = this._fk({ tenantId, fullName });
     if (this._byFullName.has(fk)) throw new Error('repo_already_exists');
-    const repo = { id: repoId, tenantId, fullName, defaultBranch, githubRepoId };
-    this._byId.set(repoId, repo);
-    this._byFullName.set(fk, repoId);
-    if (githubRepoId != null) this._byGitHubId.set(String(githubRepoId), { tenantId, repoId });
+    const repo = {
+      id,
+      tenantId,
+      fullName,
+      defaultBranch,
+      trackedBranch: trackedBranch ? String(trackedBranch) : null,
+      githubRepoId,
+      docsRepoFullName: docsRepoFullName ? String(docsRepoFullName) : null,
+      docsDefaultBranch: docsDefaultBranch ? String(docsDefaultBranch) : null
+    };
+    this._byId.set(id, repo);
+    this._byFullName.set(fk, id);
+    if (githubRepoId != null) this._byGitHubId.set(String(githubRepoId), { tenantId, repoId: id });
     return repo;
   }
 

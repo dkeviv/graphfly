@@ -32,7 +32,7 @@
 
 ### 2.1 Core metrics
 - **Webhooks**: events received, signature failures, dedup hits, processing time
-- **Queues (BullMQ)**: depth by queue, job wait time, retries, DLQ count
+- **Queues (Postgres jobs)**: depth by queue+status, job age, retry counts, dead jobs (DLQ)
 - **Indexer**: files/sec, nodes/sec, edges/sec, parse errors, peak memory, duration
 - **Database**: query latency, connection pool saturation, RLS errors, lock waits
 - **Doc agent**: blocks updated/created, tool-call durations, LLM latency/cost, failure rate
@@ -68,6 +68,7 @@
 1. Check worker health and concurrency settings.
 2. Inspect slow jobs (large repos, pathological files, parser errors).
 3. Scale horizontally: add indexer-worker instances or reduce per-job batch size.
+4. Use the Admin Jobs view to identify `dead` jobs and retry after fixing root cause.
 
 ### 4.3 Indexer job repeatedly failing
 1. Inspect stderr + last processed file from progress records.
@@ -91,12 +92,23 @@
    - tune query-time parameters (e.g., `hnsw.ef_search`) for recall/latency
    - schedule periodic `REINDEX` if index bloat is observed (rare; validate first)
 
+### 4.6 Jobs stuck / dead-letter handling (Postgres queue)
+1. Use the Admin Jobs view (or `GET /api/v1/jobs`) to filter by queue + status (`queued`, `active`, `dead`).
+2. For `dead` jobs:
+   - inspect `last_error`
+   - remediate root cause (auth/config/schema)
+   - retry the job (`POST /api/v1/jobs/:queue/:jobId/retry`)
+3. For jobs that appear stuck in `active`:
+   - confirm the worker is healthy and renewing locks
+   - optionally cancel the job (`POST /api/v1/jobs/:queue/:jobId/cancel`) to prevent re-lease loops
+   - re-enqueue (retry) after remediation
+4. Note: cancel is cooperative (it does not preempt work already running inside a worker process).
+
 ---
 
 ## 5. Backup / Restore & Disaster Recovery
 
 - **PostgreSQL**: daily automated backups (plus PITR if available)
-- **Redis**: persistence enabled (AOF) and managed backups if offered by provider
 - **RPO/RTO targets (V1)**:
   - RPO: 24h (improve for enterprise)
   - RTO: 4h (improve for enterprise)
@@ -109,7 +121,7 @@ Restore drills should be run periodically and documented (steps, expected timing
 
 - API is stateless: scale horizontally behind a load balancer.
 - Workers are stateless: scale `indexer-worker` and `doc-agent-worker` independently.
-- Use queue priority to protect interactive/user-triggered actions during high webhook volume.
+- Phase‑1 queue scheduling is FIFO per queue. Add priority lanes only after measuring real backlog/latency needs.
 
 ### 6.1 SaaS Multi-Tenancy (Workers)
 
@@ -142,12 +154,14 @@ This repository includes a local/test mode that avoids external dependencies and
 - Apply schema (requires `pg` dependency in your environment):
   - `node apps/cli/src/graphfly.js pg-migrate --database-url "$DATABASE_URL"`
 
-**OpenClaw remote mode (optional)**
+**OpenClaw remote mode**
 - Set:
   - `OPENCLAW_GATEWAY_URL`
-  - `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) (if required by your gateway)
+  - `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`)
 - By default, if `OPENCLAW_GATEWAY_URL` is set, Graphfly uses the remote OpenClaw gateway (LLM-agentic mode).
-- To force the deterministic local OpenClaw-compatible loop (offline/tests), set `OPENCLAW_USE_REMOTE=0` (or `false`).
+- In `GRAPHFLY_MODE=prod`, OpenClaw remote is required by default (fail-fast if missing).
+- Emergency override: `GRAPHFLY_OPENCLAW_REQUIRED=0` to allow deterministic/local mode in prod (not recommended).
+- To force deterministic local mode in dev/tests, set `OPENCLAW_USE_REMOTE=0` (or `false`).
 
 **Key environment variables**
 - `SOURCE_REPO_ROOT`: local filesystem path to the **source repo** to index (read-only). Default: `fixtures/sample-repo`.

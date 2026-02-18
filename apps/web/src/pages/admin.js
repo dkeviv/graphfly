@@ -27,6 +27,27 @@ export function renderAdminPage({ state, pageEl }) {
   const metricsOutEl = el('pre', { class: 'card pre' }, ['']);
   const metricsTokenInput = el('input', { class: 'input', id: 'metricsToken', placeholder: 'Metrics token (optional)', type: 'password' });
 
+  const jobStatusSelect = el('select', { class: 'select select--compact', 'aria-label': 'Job status filter' }, [
+    el('option', { value: '' }, ['all']),
+    el('option', { value: 'queued' }, ['queued']),
+    el('option', { value: 'active' }, ['active']),
+    el('option', { value: 'succeeded' }, ['succeeded']),
+    el('option', { value: 'dead' }, ['dead'])
+  ]);
+  const jobQueueSelect = el('select', { class: 'select select--compact', 'aria-label': 'Job queue filter' }, [
+    el('option', { value: '' }, ['all queues']),
+    el('option', { value: 'index' }, ['index']),
+    el('option', { value: 'graph' }, ['graph']),
+    el('option', { value: 'doc' }, ['doc'])
+  ]);
+  const jobsHeaderEl = el('div', { class: 'row' }, [
+    el('div', { class: 'card__title' }, ['Jobs']),
+    el('div', { class: 'row__spacer' }, []),
+    jobQueueSelect,
+    jobStatusSelect,
+    el('button', { class: 'button', type: 'button', onclick: () => refresh() }, ['Refresh'])
+  ]);
+
   async function refresh() {
     statusEl.textContent = 'Loading…';
     jobsEl.innerHTML = '';
@@ -67,13 +88,20 @@ export function renderAdminPage({ state, pageEl }) {
 
     // Jobs
     try {
-      const j = await api.listJobs({ limit: 25 });
+      const status = jobStatusSelect.value || null;
+      const queueFilter = jobQueueSelect.value || null;
+      const j = await api.listJobs({ status, limit: 50 });
       const all = [
         ...(j.indexJobs ?? []).map((x) => ({ ...x, _queue: 'index' })),
+        ...(j.graphJobs ?? []).map((x) => ({ ...x, _queue: 'graph' })),
         ...(j.docJobs ?? []).map((x) => ({ ...x, _queue: 'doc' }))
       ].sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
 
-      for (const job of all.slice(0, 25)) {
+      const filtered = queueFilter ? all.filter((x) => x._queue === queueFilter) : all;
+
+      for (const job of filtered.slice(0, 50)) {
+        const canRetry = job.status === 'dead' || job.status === 'failed';
+        const canCancel = job.status === 'queued' || job.status === 'active';
         jobsEl.appendChild(
           el('li', { class: 'list__item' }, [
             el('div', { class: 'row' }, [
@@ -81,7 +109,46 @@ export function renderAdminPage({ state, pageEl }) {
                 el('div', { class: 'h' }, [`${job._queue}: ${job.jobName}`]),
                 el('div', { class: 'small k' }, [`${job.status} • attempts=${fmt(job.attempts)}/${fmt(job.maxAttempts)}`]),
                 job.lastError ? el('div', { class: 'small' }, [String(job.lastError).slice(0, 180)]) : null
-              ])
+              ]),
+              el('div', { class: 'row__spacer' }, []),
+              canRetry
+                ? el(
+                    'button',
+                    {
+                      class: 'button',
+                      type: 'button',
+                      onclick: async () => {
+                        try {
+                          await api.retryJob({ queue: job._queue, jobId: job.id, resetAttempts: true });
+                          state.toast?.toast?.({ kind: 'ok', title: 'Retried', message: `${job._queue}:${job.jobName}` });
+                          await refresh();
+                        } catch (e) {
+                          state.toast?.toast?.({ kind: 'error', title: 'Retry failed', message: String(e?.message ?? e) });
+                        }
+                      }
+                    },
+                    ['Retry']
+                  )
+                : null,
+              canCancel
+                ? el(
+                    'button',
+                    {
+                      class: 'button button--danger',
+                      type: 'button',
+                      onclick: async () => {
+                        try {
+                          await api.cancelJob({ queue: job._queue, jobId: job.id, reason: 'canceled_by_admin' });
+                          state.toast?.toast?.({ kind: 'ok', title: 'Canceled', message: `${job._queue}:${job.jobName}` });
+                          await refresh();
+                        } catch (e) {
+                          state.toast?.toast?.({ kind: 'error', title: 'Cancel failed', message: String(e?.message ?? e) });
+                        }
+                      }
+                    },
+                    ['Cancel']
+                  )
+                : null
             ])
           ])
         );
@@ -192,7 +259,7 @@ export function renderAdminPage({ state, pageEl }) {
     el('div', { class: 'grid2' }, [
       el('div', { class: 'stack' }, [
         overviewEl,
-        el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Jobs']), jobsEl]),
+        el('div', { class: 'card' }, [jobsHeaderEl, jobsEl]),
         el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Audit']), auditEl])
       ]),
       el('div', { class: 'stack' }, [

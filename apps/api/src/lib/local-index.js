@@ -36,6 +36,7 @@ export async function enqueueLocalFullIndexOnRepoCreate({
   org,
   indexQueue,
   repoRoot,
+  docsRepoFullName = null,
   docsRepoFullNameFallback = null,
   docsRepoPath = null
 } = {}) {
@@ -45,7 +46,7 @@ export async function enqueueLocalFullIndexOnRepoCreate({
   if (!indexQueue?.add) throw new Error('indexQueue.add is required');
   if (typeof repoRoot !== 'string' || repoRoot.length === 0) throw new Error('repoRoot is required');
 
-  const configuredDocsRepoFullName = org?.docsRepoFullName ?? docsRepoFullNameFallback ?? null;
+  const configuredDocsRepoFullName = docsRepoFullName ?? repo?.docsRepoFullName ?? org?.docsRepoFullName ?? docsRepoFullNameFallback ?? null;
   if (!configuredDocsRepoFullName) throw codedError('docs_repo_not_configured', 'docs_repo_not_configured');
 
   const absRepoRoot = safeRealpath(repoRoot);
@@ -77,4 +78,3 @@ export async function enqueueLocalFullIndexOnRepoCreate({
     cloneAuth: null
   });
 }
-

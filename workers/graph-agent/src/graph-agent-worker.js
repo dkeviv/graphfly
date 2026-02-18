@@ -1,4 +1,5 @@
 import { runGraphEnrichmentWithOpenClaw } from './openclaw-graph-run.js';
+import { startLockHeartbeat } from '../../../packages/stores/src/lock-heartbeat.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -22,10 +23,21 @@ export function createGraphAgentWorker({ store, lockStore = null }) {
       const lockName = 'graph_enrich';
       const ttlMs = Number(process.env.GRAPHFLY_GRAPH_AGENT_LOCK_TTL_MS ?? 10 * 60 * 1000);
       let lockToken = null;
+      let lockHb = null;
       if (lockStore?.tryAcquire) {
         const lease = await lockStore.tryAcquire({ tenantId, repoId, lockName, ttlMs: Number.isFinite(ttlMs) ? Math.trunc(ttlMs) : 10 * 60 * 1000 });
         if (!lease.acquired) return { ok: true, skipped: true, reason: 'lock_busy' };
         lockToken = lease.token;
+        lockHb = startLockHeartbeat({
+          lockStore,
+          tenantId,
+          repoId,
+          lockName,
+          token: lockToken,
+          ttlMs: Number.isFinite(ttlMs) ? Math.trunc(ttlMs) : 10 * 60 * 1000,
+          onLostLock: () => console.warn(`WARN: lost graph lock for tenant=${tenantId} repo=${repoId}`),
+          onError: (e) => console.warn(`WARN: graph lock heartbeat failed: ${String(e?.message ?? e)}`)
+        });
       }
 
       const maxAttempts = Number(process.env.GRAPHFLY_GRAPH_AGENT_MAX_ATTEMPTS ?? 3);
@@ -44,6 +56,9 @@ export function createGraphAgentWorker({ store, lockStore = null }) {
           }
         }
       } finally {
+        try {
+          await lockHb?.stop?.();
+        } catch {}
         if (lockStore?.release && lockToken) {
           await lockStore.release({ tenantId, repoId, lockName, token: lockToken });
         }

@@ -33,5 +33,17 @@ export class PgLockStore {
     );
     return { released: res.rowCount > 0 };
   }
-}
 
+  async renew({ tenantId, repoId, lockName, token, ttlMs = 10 * 60 * 1000 }) {
+    const ttlSec = Math.max(1, Math.trunc(ttlMs / 1000));
+    const res = await this._c.query(
+      `UPDATE agent_locks
+       SET locked_at=now(),
+           lock_expires_at=now() + ($5 * interval '1 second')
+       WHERE tenant_id=$1 AND repo_id=$2 AND lock_name=$3 AND lock_token=$4
+       RETURNING lock_expires_at`,
+      [tenantId, repoId, lockName, token, ttlSec]
+    );
+    return { ok: true, updated: (res.rowCount ?? 0) > 0, expiresAt: res.rows?.[0]?.lock_expires_at ?? null };
+  }
+}

@@ -49,22 +49,30 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - System shall provide a separate GitHub App (Docs App) used **only** to write documentation to the configured docs repository
 - Docs App shall request: `contents:write`, `pull_requests:write`, `metadata:read` permissions
 - Docs App does not need to subscribe to `push` events (no indexing from docs repo)
-- System shall guide the user to install the Docs App on exactly one selected docs repository per organization
+- System shall guide the user to install the Docs App and grant access to the docs repositories selected for projects
+- System shall verify, per project, that the configured docs repo is authorized under the Docs App installation before opening any PRs
 
-#### FR-GH-02: Repository Connection
-- After Reader App installation, user shall be able to select which source repos to connect to Graphfly
+#### FR-PROJ-01: Projects (Repo + Docs Repo)
+- System shall treat a **project** as: 1 connected **code repo** (GitHub) + 1 configured **docs repo** (GitHub) + a fixed tracked code branch
+- System shall allow users to create multiple projects and switch between them
+- System shall enforce that each project has exactly one code repo + tracked branch and exactly one docs repo
+- Creating a project shall automatically enqueue the initial full index (no additional user action)
+- The tracked code branch shall be immutable after project creation (to change it, create a new project)
+
+#### FR-GH-02: Repository Connection (Project Creation)
+- After Reader App installation, user shall be able to create a project by selecting a source code repo to connect to Graphfly
 - System shall list all repos accessible via the Reader App installation
-- Each connected repo shall get its own graph in the system
-- Upon connecting a repo, system shall automatically enqueue the initial full index (no additional user action)
+- Each connected repo (project) shall get its own graph in the system
+- On project creation, system shall record the repo’s tracked code branch (defaults to the repo default branch unless otherwise selected during creation)
 
 #### FR-GH-03: Docs Repository Configuration
-- User shall set one "docs repo" per organization — the target for documentation PRs
-- Docs repo shall be explicitly selected by the user as part of onboarding
-- System shall require the Docs App to be installed on the configured docs repo before opening any PRs
-- System shall enforce that the docs repo is **separate** from any connected source repos for the organization
+- Each project shall set exactly one "docs repo" — the target for documentation PRs
+- Docs repo shall be explicitly selected by the user as part of project creation (and is immutable by default)
+- System shall require the Docs App to be installed and the docs repo to be authorized before opening any PRs
+- System shall enforce that the docs repo is **separate** from the project’s connected source repo
 
 #### FR-GH-06: Create Docs Repo (Onboarding)
-- System shall allow an Owner/Admin to create a new empty docs repository in GitHub from the SaaS UI during onboarding
+- System shall allow an Owner/Admin to create a new empty docs repository in GitHub from the SaaS UI during project creation
 - Docs repo creation shall support:
   - owner namespace (user or org)
   - repo name
@@ -74,32 +82,32 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - If automatic creation is blocked (missing permissions or org policy), system shall provide a guided fallback:
   - deep-link to GitHub “New repository” with the intended repo name
   - return to Graphfly for verification and selection
-- System shall hard-fail docs writes until the docs repo is configured and Docs App verification succeeds
+- System shall hard-fail docs writes until the project’s docs repo is configured and Docs App verification succeeds
 - Docs repo creation, verification, and selection shall be recorded in the audit log
 
 #### FR-GH-04: Webhook Processing
 - System shall receive and validate GitHub push webhooks (HMAC-SHA256 signature)
-- System shall only process pushes to the repo's default branch
+- System shall only process pushes to the project’s tracked code branch
 - System shall extract the list of added, modified, and removed files from the push payload
 - System shall handle the case of removed files (delete associated graph nodes)
 
 #### FR-GH-05: Enforced No-Write To Source Code Repos
 - System shall not request or possess `contents:write` permission on connected source code repositories
-- System shall only write files to the configured docs repository (via the Docs App)
+- System shall only write files to the configured docs repository for the project (via the Docs App)
 - System shall never open a PR that targets a source code repository
-- System shall hard-fail any attempted write operation where the target repo is not the configured docs repo for the organization
+- System shall hard-fail any attempted write operation where the target repo is not the configured docs repo for the project
 
 ---
 
 ### 2.2 Code Intelligence Graph Building
 
 #### FR-CIG-01: Full Index on Connection
-- Upon connecting a repo, system shall perform a full index of the default branch at HEAD
+- Upon project creation, system shall perform a full index of the tracked code branch at HEAD
 - Full index shall parse all supported source files and build the complete graph
 - Full index progress shall be streamed to the user in real-time
 
 #### FR-CIG-02: Incremental Index on Push
-- Upon receiving a push webhook, system shall perform an incremental index
+- Upon receiving a push webhook to the tracked code branch, system shall perform an incremental index
 - Incremental index shall only re-parse files listed in the push payload
 - Incremental index shall update the blast radius of changed nodes (re-resolve affected imports)
 - Incremental index shall complete within 60 seconds for repos with <10,000 files
@@ -247,9 +255,10 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
   - open a PR
 - Manual edits shall be visible in the docs repository browser preview mode prior to merge
 - System shall enforce doc policy constraints (no source code bodies/snippets; doc-block sections must not include code fences)
-- System shall hard-fail any attempted write where the target repo is not the configured docs repo for the organization
+- System shall hard-fail any attempted write where the target repo is not the configured docs repo for the project
 
 #### FR-AST-01: Product Documentation Assistant (Explain & Navigate)
+- System shall provide a chat-based UI with multiple persistent threads per project as the primary assistant surface
 - System shall provide an in-product assistant that helps users understand the system using:
   - the Public Contract Graph (contracts/constraints/allowable values)
   - flow entities + flow graphs
@@ -266,7 +275,7 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - Writing changes shall require explicit user confirmation
 - Assistant writes shall use Git-backed operations against the docs repo (branch + commit + push + PR)
 - Assistant changes shall be visible in the docs repository browser preview mode prior to merge
-- Assistant shall never write to source repos and shall hard-fail any attempted write outside the configured docs repo
+- Assistant shall never write to source repos and shall hard-fail any attempted write outside the configured docs repo for the project
 
 ---
 
@@ -399,8 +408,8 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 
 | Flow ID | Actor | Entry | Steps (happy path) | Success |
 |---|---|---|---|---|
-| UF-ONB-06 | Owner/Admin | Setup → Docs Repo | Click **Create docs repo** → choose owner/name/visibility → repo created → install Docs App → verify → set as docs repo | Docs repo configured without leaving onboarding |
-| UF-ONB-07 | Owner/Admin | Setup → Docs Repo | Click **Create docs repo** → blocked by policy → deep-link to GitHub create page → user creates → return → verify → set | Works under org policy limits |
+| UF-ONB-06 | Owner/Admin | Project creation → Docs Repo | Click **Create docs repo** → choose owner/name/visibility → repo created → install Docs App → verify → set as project docs repo | Docs repo configured without leaving project creation |
+| UF-ONB-07 | Owner/Admin | Project creation → Docs Repo | Click **Create docs repo** → blocked by policy → deep-link to GitHub create page → user creates → return → verify → set | Works under org policy limits |
 | UF-DOCS-07 | Any user | Docs → Repo Browser | Navigate file tree → open a file | Files are readable in-product |
 | UF-DOCS-08 | Any user | Docs → Repo Browser | Toggle view: default branch vs preview branch (latest PR run) → view Markdown + evidence overlays | Agent/user edits are visible before merge |
 | UF-DOCS-10 | Admin | Docs → Repo Browser | Edit file → preview → view diff → **Create PR** | Manual doc change shipped via PR |
@@ -428,7 +437,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 - Doc agent jobs: automatic retry up to 2 times
 - Failed jobs: moved to dead-letter queue for manual inspection
 - GitHub installation token refresh (Reader + Docs Apps): handled automatically by `@octokit/auth-app`
-- Webhook replay protection: deduplicate on `X-GitHub-Delivery` header (Redis SET with 24h TTL)
+- Webhook replay protection: deduplicate on `X-GitHub-Delivery` header (durable `webhook_deliveries` table with unique constraint; prune/TTL via ops)
 
 ### 3.3 Security
 
@@ -441,7 +450,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 
 ### 3.4 Scalability
 
-- System shall support horizontal scaling via multiple worker instances (BullMQ)
+- System shall support horizontal scaling via multiple worker instances (durable Postgres queue leasing)
 - System shall support repos with up to 50,000 source files via chunked indexing
 - System shall support up to 10,000 graph nodes per repo efficiently
 - System shall support up to 100 organizations on shared infrastructure
@@ -458,7 +467,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 - Target: 99.5% uptime for API and UI
 - Maintenance: zero-downtime deployments via rolling updates
 - Database: managed PostgreSQL with daily automated backups
-- Queue persistence: Redis with AOF persistence enabled
+- Queue persistence: PostgreSQL (`jobs` table) with durable leasing + retries
 
 ---
 
@@ -480,7 +489,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 
 ### Epic 2: Living Documentation
 
-**US-010**: As a developer, when I push code to my repository's main branch, Graphfly automatically identifies which doc blocks reference the changed code and updates them via a PR.
+**US-010**: As a developer, when I push code to my project’s tracked branch, Graphfly automatically identifies which doc blocks reference the changed code and updates them via a PR.
 
 **US-011**: As a developer, I can view the documentation PR that Graphfly opened and see which doc blocks were updated and why (which code nodes triggered the update).
 
@@ -520,7 +529,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 
 **US-041**: As an organization owner, I can change a team member's role or remove them from the organization.
 
-**US-042**: As an Admin, I can configure which repositories are connected and which docs repo receives PRs.
+**US-042**: As an Admin, I can configure projects (code repo + docs repo) so documentation PRs go to the intended docs repo per project.
 
 ---
 
@@ -529,7 +538,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 The following features are explicitly out of scope for V1 and will be addressed in future releases:
 
 - **Graph versions / historical views** — time-travel / per-commit snapshots of the Code Intelligence Graph
-- **PR branch indexing** — only default branch is indexed
+- **PR branch indexing** — only the project’s tracked code branch is indexed (no PR refs)
 - **Multiple LLM providers** — Claude only for V1
 - **Custom doc templates** — standard structure only
 - **Doc block locks / pinning** — prevent agent from modifying specific blocks (manual override protection)

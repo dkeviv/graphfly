@@ -20,6 +20,15 @@ function assertProdEnv(env) {
   req(env, 'GITHUB_APP_ID');
   req(env, 'GITHUB_APP_PRIVATE_KEY');
   req(env, 'GITHUB_WEBHOOK_SECRET');
+
+  const openclawReqRaw = String(env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
+  const openclawRequired = !(openclawReqRaw === '0' || openclawReqRaw === 'false');
+  if (openclawRequired) {
+    req(env, 'OPENCLAW_GATEWAY_URL');
+    if (!env.OPENCLAW_GATEWAY_TOKEN && !env.OPENCLAW_TOKEN) throw new Error('missing_env:OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_TOKEN)');
+    const envRemote = String(env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
+    if (envRemote === '0' || envRemote === 'false') throw new Error('missing_env:OPENCLAW_USE_REMOTE must not disable remote in prod');
+  }
 }
 
 async function main() {
@@ -46,4 +55,3 @@ async function main() {
 }
 
 await main();
-

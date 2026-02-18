@@ -381,6 +381,9 @@ export async function runGraphEnrichmentWithOpenClaw({
   const gatewayUrl = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? '';
   const token = openclaw?.token ?? process.env.OPENCLAW_TOKEN ?? '';
   const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
+  const openclawReqRaw = String(process.env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
+  const openclawRequired = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod' && !(openclawReqRaw === '0' || openclawReqRaw === 'false');
+  if (openclawRequired && (!gatewayUrl || !token)) throw new Error('openclaw_remote_required');
 
   const requestJson = gatewayUrl && token
     ? makeRetryingRequestJson(httpRequestJson, {
