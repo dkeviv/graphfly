@@ -118,7 +118,7 @@ export function registerAssistantRoutes({
       await assistantStore.addMessage({ tenantId, repoId, threadId, role: 'user', content: question, citations: [] });
     }
 
-    const { docsRepoFullName } = await resolveOrgDocsRepo({ tenantId, repoId });
+    const { docsRepoFullName, org } = await resolveOrgDocsRepo({ tenantId, repoId });
     const docsReader =
       typeof docsReaderFactory === 'function' && docsRepoFullName
         ? await docsReaderFactory({ tenantId, configuredDocsRepoFullName: docsRepoFullName })
@@ -132,6 +132,7 @@ export function registerAssistantRoutes({
       repoId,
       question,
       mode,
+      llm: org?.llmModel ? { model: org.llmModel } : null,
       contextMessages,
       onEvent: (type, payload) => realtime?.publish?.({ tenantId, repoId, type, payload })
     });
@@ -170,7 +171,7 @@ export function registerAssistantRoutes({
     const mode = req.body?.mode ?? 'support_safe';
     if (typeof instruction !== 'string' || instruction.trim().length === 0) return { status: 400, body: { error: 'instruction_required' } };
 
-    const { docsRepoFullName } = await resolveOrgDocsRepo({ tenantId, repoId });
+    const { docsRepoFullName, org } = await resolveOrgDocsRepo({ tenantId, repoId });
     if (!docsRepoFullName) return { status: 400, body: { error: 'docs_repo_not_configured' } };
 
     const docsReader =
@@ -185,6 +186,7 @@ export function registerAssistantRoutes({
       instruction,
       docsRepoFullName,
       mode,
+      llm: org?.llmModel ? { model: org.llmModel } : null,
       onEvent: (type, payload) => realtime?.publish?.({ tenantId, repoId, type, payload })
     });
 

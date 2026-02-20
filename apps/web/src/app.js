@@ -21,6 +21,7 @@ const modeSelect = document.getElementById('modeSelect');
 const projectSelectEl = document.getElementById('projectSelect');
 const codeBranchPillEl = document.getElementById('codeBranchPill');
 const docsBranchSelectEl = document.getElementById('docsBranchSelect');
+const llmModelSelectEl = document.getElementById('llmModelSelect');
 const openPrBtn = document.getElementById('openPrBtn');
 const userBtn = document.getElementById('userBtn');
 const toastsEl = document.getElementById('toasts');
@@ -49,13 +50,19 @@ const state = {
   docsRef: localStorage.getItem('graphfly_docs_ref') ?? 'default',
   docsDir: localStorage.getItem('graphfly_docs_dir') ?? '',
   docsPath: localStorage.getItem('graphfly_docs_path') || null,
+  docsAnchor: localStorage.getItem('graphfly_docs_anchor') || null,
   docsDraft: null,
+  llmModel: String(localStorage.getItem('graphfly_llm_model') ?? '').trim() || null,
+  llmModels: null,
+  llmModelsLoadedAtMs: 0,
+  llmModelsLoading: null,
   threadId: localStorage.getItem('graphfly_thread_id') || null,
   draftId: localStorage.getItem('graphfly_draft_id') || null,
   prRunId: localStorage.getItem('graphfly_pr_run_id') || null,
   authToken: localStorage.getItem('graphfly_auth_token') ?? null,
   panelMode: normalizePanelMode(localStorage.getItem('graphfly_panel_mode')),
   graphOn: localStorage.getItem('graphfly_canvas_graph') === '1',
+  graphFocusSymbolUid: localStorage.getItem('graphfly_graph_focus') || null,
   lastCanvasMode: normalizeCanvasMode(localStorage.getItem('graphfly_last_canvas_mode')),
   shell: { org: null, repos: [] },
   shellLoaded: false,
@@ -67,6 +74,77 @@ const state = {
 state.toast = createToastHub({ rootEl: toastsEl });
 state.realtime = createRealtimeClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, authToken: state.authToken });
 state.realtime.connect();
+
+function normalizeLlmModel(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.length > 200 ? s.slice(0, 200) : s;
+}
+
+function persistLlmModel(v) {
+  const m = normalizeLlmModel(v);
+  state.llmModel = m;
+  if (m) localStorage.setItem('graphfly_llm_model', m);
+  else localStorage.removeItem('graphfly_llm_model');
+}
+
+async function refreshLlmModels({ api, force = false } = {}) {
+  if (!llmModelSelectEl) return null;
+  if (state.llmModelsLoading) return state.llmModelsLoading;
+  const ttlMs = 10 * 60 * 1000;
+  const now = Date.now();
+  if (!force && Array.isArray(state.llmModels) && now - state.llmModelsLoadedAtMs < ttlMs) return state.llmModels;
+
+  state.llmModelsLoading = (async () => {
+    try {
+      const out = await api.llmModels();
+      const models = Array.isArray(out?.models) ? out.models : [];
+      state.llmModels = models;
+      state.llmModelsLoadedAtMs = now;
+      return models;
+    } catch {
+      state.llmModels = null;
+      state.llmModelsLoadedAtMs = now;
+      return null;
+    }
+  })();
+
+  try {
+    return await state.llmModelsLoading;
+  } finally {
+    state.llmModelsLoading = null;
+  }
+}
+
+async function refreshLlmModelSelect({ api, silent = false } = {}) {
+  if (!llmModelSelectEl) return;
+
+  const models = await refreshLlmModels({ api });
+  llmModelSelectEl.innerHTML = '';
+
+  if (!Array.isArray(models)) {
+    llmModelSelectEl.setAttribute('disabled', '');
+    const label = state.llmModel ? `Model: ${state.llmModel}` : 'Model: default';
+    llmModelSelectEl.appendChild(new Option(label, state.llmModel ?? ''));
+    llmModelSelectEl.value = state.llmModel ?? '';
+    return;
+  }
+
+  llmModelSelectEl.removeAttribute('disabled');
+  llmModelSelectEl.appendChild(new Option('Model: default', ''));
+  for (const m of models) {
+    const id = typeof m?.id === 'string' ? m.id : null;
+    if (!id) continue;
+    llmModelSelectEl.appendChild(new Option(`Model: ${id}`, id));
+  }
+  const desired = state.llmModel ?? '';
+  llmModelSelectEl.value = [...llmModelSelectEl.options].some((o) => o.value === desired) ? desired : '';
+
+  if (!silent && state.llmModel && llmModelSelectEl.value !== state.llmModel) {
+    state.toast?.toast?.({ kind: 'warn', title: 'Model not found', message: 'Your saved model is not in the current OpenRouter model list.' });
+  }
+}
 
 modeSelect.addEventListener('change', () => {
   state.mode = modeSelect.value;
@@ -103,6 +181,29 @@ docsBranchSelectEl.addEventListener('change', () => {
     return;
   }
   router.refresh();
+});
+
+llmModelSelectEl?.addEventListener('change', () => {
+  const next = llmModelSelectEl.value || null;
+  const prev = state.llmModel;
+  persistLlmModel(next);
+  const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
+  llmModelSelectEl.setAttribute('disabled', '');
+  (async () => {
+    try {
+      const org = await api.updateCurrentOrg({ llmModel: state.llmModel });
+      state.shell.org = org ?? state.shell.org;
+      if (org && Object.prototype.hasOwnProperty.call(org, 'llmModel')) persistLlmModel(org.llmModel ?? null);
+      await refreshLlmModelSelect({ api, silent: true });
+      state.toast?.toast?.({ kind: 'ok', title: 'Model updated', message: state.llmModel ? state.llmModel : 'default' });
+    } catch (e) {
+      persistLlmModel(prev);
+      await refreshLlmModelSelect({ api, silent: true });
+      state.toast?.toast?.({ kind: 'error', title: 'Model update failed', message: String(e?.message ?? e) });
+    } finally {
+      llmModelSelectEl.removeAttribute('disabled');
+    }
+  })();
 });
 
 openPrBtn.addEventListener('click', () => {
@@ -165,6 +266,7 @@ async function refreshShell() {
       const repos = (await api.listRepos())?.repos ?? [];
       state.shell.org = org ?? null;
       state.shell.repos = repos;
+      if (org && Object.prototype.hasOwnProperty.call(org, 'llmModel')) persistLlmModel(org.llmModel ?? null);
     } catch (e) {
       // Best-effort; shell can still render in local/dev.
       state.shell.org = null;
@@ -225,6 +327,8 @@ async function refreshShell() {
         docsBranchSelectEl.value = 'default';
       }
     }
+
+    await refreshLlmModelSelect({ api, silent: true });
   })();
   try {
     return await state.shellLoading;
@@ -307,11 +411,37 @@ function renderPanel() {
         rootEl: panelEl,
         onNavigate: (evt) => {
           if ((evt?.kind ?? null) === 'docs_from_citation' && currentHashRoute() === 'app') {
-            goAppWithQuery({ nav: 'docs', path: state.docsPath ?? null, ref: state.docsRef ?? 'default', thread: null, draft: null, run: null });
+            goAppWithQuery({
+              nav: 'docs',
+              path: state.docsPath ?? null,
+              ref: state.docsRef ?? 'default',
+              anchor: state.docsAnchor ?? null,
+              thread: null,
+              draft: null,
+              run: null
+            });
             return;
           }
           if ((evt?.kind ?? null) === 'docs_from_draft' && currentHashRoute() === 'app') {
             goAppWithQuery({ nav: 'docs', path: state.docsPath ?? null, ref: state.docsRef ?? 'default', thread: null, draft: null, run: null });
+            return;
+          }
+          if ((evt?.kind ?? null) === 'graph_from_citation' && currentHashRoute() === 'app') {
+            goAppWithQuery({
+              canvas: 'graph',
+              focus: state.graphFocusSymbolUid ?? evt?.symbolUid ?? null
+            });
+            return;
+          }
+          if ((evt?.kind ?? null) === 'flow_from_citation' && currentHashRoute() === 'app') {
+            goAppWithQuery({
+              canvas: null,
+              focus: null
+            });
+            return;
+          }
+          if ((evt?.kind ?? null) === 'git_from_citation' && currentHashRoute() === 'app') {
+            goAppWithQuery({ nav: 'git', run: state.prRunId ?? evt?.prRunId ?? null, thread: null, draft: null });
             return;
           }
           if ((evt?.kind ?? null) === 'chat_thread' && currentHashRoute() === 'app') {
@@ -337,9 +467,26 @@ function renderPanel() {
           if (currentHashRoute() === 'app') {
             const patch =
               evt?.kind === 'docs_file'
-                ? { nav: 'docs', dir: state.docsDir ?? '', path: state.docsPath ?? '', ref: state.docsRef ?? 'default', thread: null, draft: null, run: null }
+                ? {
+                    nav: 'docs',
+                    dir: state.docsDir ?? '',
+                    path: state.docsPath ?? '',
+                    ref: state.docsRef ?? 'default',
+                    anchor: state.docsAnchor ?? null,
+                    thread: null,
+                    draft: null,
+                    run: null
+                  }
                 : evt?.kind === 'docs_dir'
-                  ? { nav: 'docs', dir: state.docsDir ?? '', ref: state.docsRef ?? 'default', thread: null, draft: null, run: null }
+                  ? {
+                      nav: 'docs',
+                      dir: state.docsDir ?? '',
+                      ref: state.docsRef ?? 'default',
+                      anchor: null,
+                      thread: null,
+                      draft: null,
+                      run: null
+                    }
                   : null;
             if (patch) {
               goAppWithQuery(patch);
@@ -379,24 +526,48 @@ function renderPanel() {
   }
 
   if (state.panelMode === 'feedback') {
+    const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
+    const categorySelect = el('select', { class: 'select select--compact', 'aria-label': 'Category' }, [
+      el('option', { value: 'general' }, ['General']),
+      el('option', { value: 'bug' }, ['Bug']),
+      el('option', { value: 'ux' }, ['UX']),
+      el('option', { value: 'docs' }, ['Docs']),
+      el('option', { value: 'billing' }, ['Billing'])
+    ]);
     const messageInput = el('textarea', { class: 'input', rows: '6', placeholder: 'What can we improve?' });
+    const sendBtn = el('button', { class: 'button button--primary', type: 'button' }, ['Send']);
     panelEl.appendChild(
       el('div', { class: 'card' }, [
         el('div', { class: 'card__title' }, ['Feedback']),
+        el('div', { class: 'small k' }, ['Category']),
+        categorySelect,
+        el('div', { class: 'small k' }, ['Message']),
         messageInput,
         el('div', { class: 'row' }, [
-          el(
-            'button',
-            {
-              class: 'button button--primary',
-              onclick: () =>
-                state.toast?.toast?.({ kind: 'ok', title: 'Thanks', message: 'Feedback capture is not wired yet.' })
-            },
-            ['Send']
-          )
+          sendBtn
         ])
       ])
     );
+
+    sendBtn.addEventListener('click', () => {
+      const message = String(messageInput.value ?? '').trim();
+      if (!message) {
+        state.toast?.toast?.({ kind: 'warn', title: 'Missing message', message: 'Write a short note, then send.' });
+        return;
+      }
+      sendBtn.setAttribute('disabled', '');
+      (async () => {
+        try {
+          await api.submitFeedback({ category: categorySelect.value ?? 'general', message });
+          messageInput.value = '';
+          state.toast?.toast?.({ kind: 'ok', title: 'Thanks', message: 'Feedback submitted.' });
+        } catch (e) {
+          state.toast?.toast?.({ kind: 'error', title: 'Send failed', message: String(e?.message ?? e) });
+        } finally {
+          sendBtn.removeAttribute('disabled');
+        }
+      })();
+    });
   }
 }
 
@@ -471,6 +642,10 @@ for (const btn of document.querySelectorAll('.rail__item[data-nav]')) {
     if (nav === 'graph') {
       state.graphOn = !state.graphOn;
       localStorage.setItem('graphfly_canvas_graph', state.graphOn ? '1' : '0');
+      if (currentHashRoute() === 'app') {
+        goAppWithQuery(state.graphOn ? { canvas: 'graph' } : { canvas: null, focus: null });
+        return;
+      }
       router.refresh();
       return;
     }
@@ -533,6 +708,13 @@ function applyDeepLinkQuery(query) {
   const q = query && typeof query === 'object' ? query : null;
   if (!q) return;
 
+  const canvas = q.canvas ?? null;
+  if (canvas != null) {
+    const c = String(canvas);
+    state.graphOn = c === 'graph';
+    localStorage.setItem('graphfly_canvas_graph', state.graphOn ? '1' : '0');
+  }
+
   const nav = q.nav ?? null;
   if (nav && PANEL_MODES.has(String(nav))) {
     state.panelMode = normalizePanelMode(nav);
@@ -581,5 +763,21 @@ function applyDeepLinkQuery(query) {
     state.docsPath = p || null;
     if (p) localStorage.setItem('graphfly_docs_path', p);
     else localStorage.removeItem('graphfly_docs_path');
+  }
+
+  const anchor = q.anchor ?? null;
+  if (anchor != null) {
+    const a = String(anchor);
+    state.docsAnchor = a || null;
+    if (state.docsAnchor) localStorage.setItem('graphfly_docs_anchor', state.docsAnchor);
+    else localStorage.removeItem('graphfly_docs_anchor');
+  }
+
+  const focus = q.focus ?? null;
+  if (focus != null) {
+    const f = String(focus);
+    state.graphFocusSymbolUid = f || null;
+    if (state.graphFocusSymbolUid) localStorage.setItem('graphfly_graph_focus', state.graphFocusSymbolUid);
+    else localStorage.removeItem('graphfly_graph_focus');
   }
 }

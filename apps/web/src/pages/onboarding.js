@@ -131,7 +131,7 @@ export function renderOnboardingPage({ state, pageEl }) {
           el('details', { class: 'details' }, [
             el('summary', {}, ['Create new docs repo']),
             el('div', { class: 'details__body' }, [
-              el('div', { class: 'small' }, ['Create a separate docs repo in GitHub, then install the Docs App on it and verify.']),
+              el('div', { class: 'small' }, ['Create a separate docs repo in GitHub, then verify it. (GitHub Apps are optional.)']),
               docsCreateFullNameInput,
               el('div', { class: 'row' }, [docsCreateVisibilitySelect, docsCreateDefaultBranchInput]),
               docsCreateStatusEl,
@@ -208,8 +208,10 @@ export function renderOnboardingPage({ state, pageEl }) {
     const cloudSyncRequired = Boolean(latestOverview?.docs?.cloudSyncRequired);
     const runtimeMode = String(latestOverview?.runtime?.mode ?? 'dev').toLowerCase();
     if (docsMode === 'local') return true;
-    if (runtimeMode === 'prod' || cloudSyncRequired) return docsVerified && Boolean(latestOrg?.githubDocsInstallId);
-    return docsVerified || Boolean(latestOrg?.githubDocsInstallId);
+    // OAuth mode can write docs via the user's OAuth token (FR-GH-01 Mode 1).
+    // GitHub Apps are optional and preferred when configured, but should not be required for SaaS onboarding.
+    if (runtimeMode === 'prod' || cloudSyncRequired) return docsVerified;
+    return docsVerified;
   }
 
   function updateCreateProjectGate() {
@@ -314,6 +316,14 @@ export function renderOnboardingPage({ state, pageEl }) {
 
   async function refresh() {
     try {
+      // Check auth mode (OAuth vs GitHub Apps)
+      let authMode = { githubAppsMode: false, oauthMode: true, primaryAuthMode: 'oauth' };
+      try {
+        authMode = await api.getAuthMode();
+      } catch {
+        // Fallback to OAuth mode if endpoint not available
+      }
+      
       // Handle GitHub App return: ?app=reader|docs&installation_id=...
       const appCb = parseGitHubAppCallbackParams({ search: window.location.search });
       if (appCb) {
@@ -364,6 +374,21 @@ export function renderOnboardingPage({ state, pageEl }) {
       docsStatusEl.textContent = org.docsRepoFullName ? `Docs repo: ${org.docsRepoFullName}` : 'Docs repo: not set';
       docsVerified = localStorage.getItem('graphfly_docs_verified') === docsRepoInput.value.trim();
       updateDocsVerifyBadge();
+      
+      // Hide/show GitHub App install buttons based on auth mode
+      if (authMode.primaryAuthMode === 'oauth') {
+        readerAppBtn.style.display = 'none';
+        docsAppBtn.style.display = 'none';
+        steps[0].s = 'OAuth sign-in (simple path).';
+        githubStatusEl.textContent = authMode.oauthConnected ? 'Status: OAuth connected ✓' : 'Status: Click "Connect GitHub" to sign in';
+      } else {
+        readerAppBtn.style.display = '';
+        docsAppBtn.style.display = '';
+        steps[0].s = 'OAuth sign-in. GitHub Apps handle read/write access.';
+        const readerOk = Boolean(org?.githubReaderInstallId);
+        const docsOk = Boolean(org?.githubDocsInstallId);
+        githubStatusEl.textContent = `Status: Reader=${readerOk ? '✓' : '✗'} Docs=${docsOk ? '✓' : '✗'}`;
+      }
 
       const reposRes = await api.listRepos();
       const list = reposRes.repos ?? [];
@@ -463,7 +488,8 @@ export function renderOnboardingPage({ state, pageEl }) {
       const cloudSyncRequired = Boolean(latestOverview?.docs?.cloudSyncRequired);
 
       steps[0].ok = Boolean(state.authToken) || githubConnected || Boolean(org.githubReaderInstallId);
-      steps[1].ok = hasDocsRepo && (docsMode === 'local' ? true : docsVerified) && (docsMode === 'local' ? true : Boolean(org.githubDocsInstallId) || (!cloudSyncRequired && runtimeMode !== 'prod'));
+      // Docs repo is valid once it's set and verified (or local mode). GitHub Apps are optional.
+      steps[1].ok = hasDocsRepo && (docsMode === 'local' ? true : docsVerified);
       steps[2].ok = hasRepo;
 
       for (let i = 0; i < steps.length; i++) {

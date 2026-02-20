@@ -1,4 +1,4 @@
-import { runOpenClawToolLoop } from '../../../packages/openclaw-client/src/openresponses.js';
+import { runOpenRouterToolLoop } from '../../../packages/llm-openrouter/src/tool-loop.js';
 import { embedText384 } from '../../../packages/cig/src/embedding.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
 import { sanitizeNodeForMode, GraphflyMode } from '../../../packages/security/src/safe-mode.js';
@@ -79,7 +79,7 @@ function summarizeFlowDeterministic({ entrypoint, contract, trace }) {
   return { content: content.trimEnd(), payload };
 }
 
-function makeLocalGraphAgentGateway({ tenantId, repoId, store, triggerSha, maxEntrypoints, maxDepth }) {
+function makeLocalGraphAgentProvider({ tenantId, repoId, store, triggerSha, maxEntrypoints, maxDepth }) {
   let turn = 0;
   let cachedEntrypoints = null;
   const cachedContracts = new Map();
@@ -93,27 +93,33 @@ function makeLocalGraphAgentGateway({ tenantId, repoId, store, triggerSha, maxEn
         status: 200,
         text: '',
         json: {
-          id: 'resp_1',
-          output: [
+          id: 'chatcmpl_local_graph_1',
+          choices: [
             {
-              type: 'function_call',
-              name: 'flows_entrypoints_list',
-              call_id: 'call_entrypoints',
-              arguments: JSON.stringify({})
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  { id: 'call_entrypoints', type: 'function', function: { name: 'flows_entrypoints_list', arguments: JSON.stringify({}) } }
+                ]
+              }
             }
           ]
         }
       };
     }
 
-    const inputs = Array.isArray(body?.input) ? body.input : [];
     const outputsByCallId = new Map();
-    for (const item of inputs) {
-      if (item?.type !== 'function_call_output') continue;
+    const messages = Array.isArray(body?.messages) ? body.messages : [];
+    for (const m of messages) {
+      if (m?.role !== 'tool') continue;
+      const callId = m?.tool_call_id ?? null;
+      if (!callId) continue;
       try {
-        outputsByCallId.set(item.call_id, JSON.parse(item.output));
+        outputsByCallId.set(callId, JSON.parse(String(m.content ?? 'null')));
       } catch {
-        outputsByCallId.set(item.call_id, null);
+        outputsByCallId.set(callId, null);
       }
     }
 
@@ -121,24 +127,22 @@ function makeLocalGraphAgentGateway({ tenantId, repoId, store, triggerSha, maxEn
       const entrypoints = outputsByCallId.get('call_entrypoints') ?? [];
       cachedEntrypoints = entrypoints.slice(0, maxEntrypoints);
 
-      const calls = [];
+      const toolCalls = [];
       for (let i = 0; i < cachedEntrypoints.length; i++) {
         const ep = cachedEntrypoints[i];
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
-        calls.push({
-          type: 'function_call',
-          name: 'contracts_get',
-          call_id: `call_contract_${i}`,
-          arguments: JSON.stringify({ symbolUid })
-        });
-        calls.push({
-          type: 'function_call',
-          name: 'flows_trace',
-          call_id: `call_trace_${i}`,
-          arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: maxDepth })
+        toolCalls.push({ id: `call_contract_${i}`, type: 'function', function: { name: 'contracts_get', arguments: JSON.stringify({ symbolUid }) } });
+        toolCalls.push({
+          id: `call_trace_${i}`,
+          type: 'function',
+          function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: maxDepth }) }
         });
       }
-      return { status: 200, text: '', json: { id: 'resp_2', output: calls } };
+      return {
+        status: 200,
+        text: '',
+        json: { id: 'chatcmpl_local_graph_2', choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: toolCalls } }] }
+      };
     }
 
     if (turn === 3) {
@@ -150,7 +154,7 @@ function makeLocalGraphAgentGateway({ tenantId, repoId, store, triggerSha, maxEn
         if (t) cachedTraces.set(i, t);
       }
 
-      const calls = [];
+      const toolCalls = [];
       for (let i = 0; i < eps.length; i++) {
         const ep = eps[i];
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
@@ -159,32 +163,39 @@ function makeLocalGraphAgentGateway({ tenantId, repoId, store, triggerSha, maxEn
         const { content, payload } = summarizeFlowDeterministic({ entrypoint: ep, contract, trace });
         const v = validateAnnotationContent(content);
         if (!v.ok) throw new Error(`graph_annotation_invalid:${v.reason}`);
-        calls.push({
-          type: 'function_call',
-          name: 'graph_annotations_upsert',
-          call_id: `call_upsert_${i}`,
-          arguments: JSON.stringify({
-            symbolUid,
-            annotationType: 'flow_summary',
-            payload,
-            content,
-            sha: triggerSha
-          })
+        toolCalls.push({
+          id: `call_upsert_${i}`,
+          type: 'function',
+          function: {
+            name: 'graph_annotations_upsert',
+            arguments: JSON.stringify({ symbolUid, annotationType: 'flow_summary', payload, content, sha: triggerSha })
+          }
         });
       }
-      return { status: 200, text: '', json: { id: 'resp_3', output: calls } };
+      return {
+        status: 200,
+        text: '',
+        json: { id: 'chatcmpl_local_graph_3', choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: toolCalls } }] }
+      };
     }
 
-    return { status: 200, text: '', json: { id: `resp_${turn}`, output_text: 'ok' } };
+    return { status: 200, text: '', json: { id: `chatcmpl_local_graph_${turn}`, choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }] } };
   };
 }
 
-export async function runGraphEnrichmentWithOpenClaw({
+function isLlmRequired(env = process.env) {
+  const mode = String(env.GRAPHFLY_MODE ?? 'dev').toLowerCase();
+  if (mode !== 'prod') return false;
+  const v = String(env.GRAPHFLY_LLM_REQUIRED ?? '1').trim().toLowerCase();
+  return !(v === '0' || v === 'false');
+}
+
+export async function runGraphEnrichmentWithLlm({
   store,
   tenantId,
   repoId,
   triggerSha,
-  openclaw = null
+  llm = null
 }) {
   if (!store) throw new Error('store is required');
   const maxTurns = clampInt(process.env.GRAPHFLY_GRAPH_AGENT_MAX_TURNS ?? 12, { min: 2, max: 50, fallback: 12 });
@@ -378,20 +389,19 @@ export async function runGraphEnrichmentWithOpenClaw({
     }
   ];
 
-  const gatewayUrl = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? '';
-  const token = openclaw?.token ?? process.env.OPENCLAW_TOKEN ?? '';
-  const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const openclawReqRaw = String(process.env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
-  const openclawRequired = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod' && !(openclawReqRaw === '0' || openclawReqRaw === 'false');
-  if (openclawRequired && (!gatewayUrl || !token)) throw new Error('openclaw_remote_required');
+  const apiKey = llm?.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
+  const baseUrl = llm?.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
+  const model = llm?.model ?? process.env.GRAPHFLY_LLM_MODEL ?? 'openai/gpt-4o-mini';
+  const useRemote = Boolean(String(apiKey ?? '').trim());
+  if (isLlmRequired() && !useRemote) throw new Error('llm_api_key_required');
 
-  const requestJson = gatewayUrl && token
+  const requestJson = useRemote
     ? makeRetryingRequestJson(httpRequestJson, {
         maxAttempts: clampInt(process.env.GRAPHFLY_GRAPH_AGENT_HTTP_MAX_ATTEMPTS ?? 4, { min: 1, max: 10, fallback: 4 }),
         baseMs: clampInt(process.env.GRAPHFLY_GRAPH_AGENT_HTTP_RETRY_BASE_MS ?? 300, { min: 50, max: 5000, fallback: 300 }),
         maxMs: clampInt(process.env.GRAPHFLY_GRAPH_AGENT_HTTP_RETRY_MAX_MS ?? 10_000, { min: 500, max: 60_000, fallback: 10_000 })
       })
-    : makeLocalGraphAgentGateway({
+    : makeLocalGraphAgentProvider({
         tenantId,
         repoId,
         store,
@@ -407,15 +417,17 @@ export async function runGraphEnrichmentWithOpenClaw({
     `- Budget: maxEntrypoints=${maxEntrypoints}, maxDepth=${maxDepth}, maxTurns=${maxTurns}.\n` +
     'Goal: For each flow entrypoint, produce a flow_summary annotation with key facts and counts grounded in flows_trace + contracts_get.\n';
 
-  await runOpenClawToolLoop({
-    gatewayUrl: gatewayUrl || 'http://local',
-    token: token || null,
+  await runOpenRouterToolLoop({
+    apiKey: useRemote ? apiKey : 'local',
+    baseUrl,
     model,
     input: 'Generate graph annotations for this repo.',
     instructions,
-    user: { tenantId, repoId },
+    user: `graphfly:${tenantId}:${repoId}`,
     tools,
     maxTurns,
-    requestJson: async ({ url, method, headers, body }) => (!gatewayUrl || !token ? requestJson({ body }) : requestJson({ url, method, headers, body }))
+    requestJson,
+    appTitle: 'Graphfly',
+    httpReferer: process.env.OPENROUTER_HTTP_REFERER ?? null
   });
 }

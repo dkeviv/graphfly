@@ -56,6 +56,6 @@ Graphfly builds a **Code Intelligence Graph** — a rich, multi-layer map of you
 | IncrementalTracker (dirty file tracking) | Yantra | Reuse as-is |
 | HNSW + fastembed embeddings (384-dim) | Yantra | Keep in Rust CLI; replace index with pgvector |
 | Agent TurnOutcome loop | Yantra (`loop_core.rs`) | Port to TypeScript |
-| Tool factory pattern (TypeBox schemas) | OpenClaw | Reuse pattern |
-| Command queue | OpenClaw | Replace with BullMQ |
-| Graph UI components (Cytoscape.js) | Yantra React | Adapt to REST API |
+| Tool factory pattern (JSON Schema params) | Graphfly | Reuse pattern |
+| Durable jobs queue | Graphfly | PostgreSQL `jobs` table (RLS-protected) + worker leasing/heartbeats |
+| Graph UI components (Cytoscape.js) | Yantra React | Target for enterprise-scale graph UX; Phase-1 uses a lightweight SVG viewer to exercise APIs |

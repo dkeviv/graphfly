@@ -24,9 +24,9 @@ To keep Graphfly enterprise-grade and maintainable as it scales:
 - **Frontend styling:** avoid inline styling. Use CSS (or a CSS system like CSS Modules/Tailwind if adopted) and keep styling concerns out of logic components.
 - **Security-by-default:** no code bodies/snippets in doc blocks and no default code fetching in UI/support tools (see spec anchors above).
 
-## OpenClaw Leverage (Graph Builder + Agent Runtime)
+## Agent Runtime Patterns (Graph Builder + Agent Runtime)
 
-Graphfly explicitly leverages the strongest, battle-tested operational patterns from the OpenClaw project to make the **graph builder** and **agent runtimes** enterprise-grade:
+Graphfly explicitly leverages battle-tested operational patterns to make the **graph builder** and **agent runtimes** enterprise-grade:
 - **Deterministic lanes / serialization:** indexing and doc-generation run in controlled “lanes” to avoid concurrent mutation and to keep artifacts reproducible.
 - **Session / artifact write locks:** anything persisted (transcripts, artifacts, runs) uses a write-lock model with timeouts + stale-lock recovery.
 - **Tool schema enforcement:** every tool boundary validates inputs; outputs are normalized into stable result shapes for persistence and audits.

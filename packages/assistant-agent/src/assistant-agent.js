@@ -1,4 +1,4 @@
-import { runOpenClawToolLoop } from '../../openclaw-client/src/openresponses.js';
+import { runOpenRouterToolLoop } from '../../llm-openrouter/src/tool-loop.js';
 import { semanticSearch, textSearch } from '../../cig/src/search.js';
 import { traceFlow } from '../../cig/src/trace.js';
 import { sanitizeNodeForMode, GraphflyMode, normalizeMode } from '../../security/src/safe-mode.js';
@@ -64,8 +64,9 @@ function classifyRetry(err) {
   const msg = String(err?.message ?? err);
   if (msg.includes('assistant_tool_budget_exceeded')) return { retryable: false, reason: 'budget' };
   if (msg.includes('assistant_draft_invalid')) return { retryable: false, reason: 'invalid_draft' };
-  if (msg.includes('Invalid tool arguments')) return { retryable: false, reason: 'tool_args' };
-  if (msg.includes('OpenClaw /v1/responses failed')) return { retryable: true, reason: 'gateway_http' };
+  if (msg.includes('invalid_tool_arguments')) return { retryable: false, reason: 'tool_args' };
+  if (msg.includes('OpenRouter /chat/completions failed')) return { retryable: true, reason: 'provider_http' };
+  if (msg.includes('openrouter_api_key_required') || msg.includes('llm_api_key_required')) return { retryable: false, reason: 'missing_key' };
   if (msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') || msg.includes('ENOTFOUND')) return { retryable: true, reason: 'network' };
   return { retryable: false, reason: 'unknown' };
 }
@@ -88,10 +89,10 @@ function formatContextMessages(contextMessages, { maxMessages = 16, maxCharsPerM
   return lines.join('\n');
 }
 
-function isOpenClawRequired(env = process.env) {
+function isLlmRequired(env = process.env) {
   const mode = String(env.GRAPHFLY_MODE ?? 'dev').toLowerCase();
   if (mode !== 'prod') return false;
-  const v = String(env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
+  const v = String(env.GRAPHFLY_LLM_REQUIRED ?? '1').trim().toLowerCase();
   return !(v === '0' || v === 'false');
 }
 
@@ -103,7 +104,7 @@ export async function runDocsAssistantQuery({
   repoId,
   question,
   mode = GraphflyMode.SUPPORT_SAFE,
-  openclaw = null,
+  llm = null,
   contextMessages = null,
   onEvent = null
 } = {}) {
@@ -112,20 +113,11 @@ export async function runDocsAssistantQuery({
   const viewMode = normalizeMode(mode);
   const citations = [];
 
-  const configuredGatewayUrlRaw = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? null;
-  const configuredGatewayUrl = typeof configuredGatewayUrlRaw === 'string' ? configuredGatewayUrlRaw.trim() : null;
-  const gatewayUrl = configuredGatewayUrl ? configuredGatewayUrl : null;
-  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.OPENCLAW_TOKEN ?? '';
-  const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'assistant';
-  const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const envRemote = String(process.env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
-  const useRemote =
-    typeof openclaw?.useRemote === 'boolean'
-      ? openclaw.useRemote
-      : envRemote === '0' || envRemote === 'false'
-        ? false
-        : Boolean(gatewayUrl);
-  if (isOpenClawRequired() && !useRemote) throw new Error('openclaw_remote_required');
+  const apiKey = llm?.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
+  const model = llm?.model ?? process.env.GRAPHFLY_LLM_MODEL ?? 'openai/gpt-4o-mini';
+  const baseUrl = llm?.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
+  const useRemote = Boolean(String(apiKey ?? '').trim());
+  if (isLlmRequired() && !useRemote) throw new Error('llm_api_key_required');
 
   const maxTurns = clampInt(process.env.GRAPHFLY_ASSISTANT_MAX_TURNS ?? 12, { min: 2, max: 60, fallback: 12 });
   const maxToolCalls = clampInt(process.env.GRAPHFLY_ASSISTANT_MAX_TOOL_CALLS ?? 1500, { min: 10, max: 50_000, fallback: 1500 });
@@ -381,7 +373,7 @@ export async function runDocsAssistantQuery({
   const history = formatContextMessages(contextMessages, { maxMessages: 16, maxCharsPerMessage: 1200 });
   const inputText = history ? `Conversation (most recent last):\n${history}\n\nUser question:\n${q}` : `User question:\n${q}`;
 
-  // Deterministic fallback when no gateway configured.
+  // Deterministic fallback when no LLM is configured.
   if (!useRemote) {
     const matches = await semanticSearch({ store, tenantId, repoId, query: q, limit: maxSearch });
     const top = (Array.isArray(matches) ? matches : []).slice(0, 5).map((x) => sanitizeNodeForMode((x?.node ?? x), viewMode));
@@ -418,8 +410,6 @@ export async function runDocsAssistantQuery({
     return { ok: true, answerMarkdown: sanitizeAssistantAnswer(answer), citations: uniqCitations(citations) };
   }
 
-  const gateway = gatewayUrl ?? 'http://openclaw.invalid';
-
   const maxAttempts = clampInt(process.env.GRAPHFLY_ASSISTANT_MAX_ATTEMPTS ?? 3, { min: 1, max: 10, fallback: 3 });
   const baseBackoffMs = clampInt(process.env.GRAPHFLY_ASSISTANT_RETRY_BASE_MS ?? 500, { min: 100, max: 30_000, fallback: 500 });
 
@@ -427,16 +417,17 @@ export async function runDocsAssistantQuery({
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       onEvent?.('assistant:start', { tenantId, repoId, mode: viewMode, attempt });
-      const out = await runOpenClawToolLoop({
-        gatewayUrl: gateway,
-        token: token || null,
-        agentId,
+      const out = await runOpenRouterToolLoop({
+        apiKey,
+        baseUrl,
         model,
         input: inputText,
         instructions,
-        user: { tenantId, repoId },
+        user: `graphfly:${tenantId}:${repoId}`,
         tools,
         maxTurns,
+        appTitle: 'Graphfly',
+        httpReferer: process.env.OPENROUTER_HTTP_REFERER ?? null,
         onTurn: ({ turn, maxTurns: mt }) => onEvent?.('assistant:turn', { turn, maxTurns: mt }),
         onToolCall: ({ name }) => onEvent?.('assistant:tool_call', { name }),
         onToolResult: ({ name, result }) => onEvent?.('assistant:tool_result', { name, summary: typeof result === 'string' ? result.slice(0, 200) : null })
@@ -464,7 +455,7 @@ export async function runDocsAssistantDraftDocs({
   instruction,
   docsRepoFullName,
   mode = GraphflyMode.SUPPORT_SAFE,
-  openclaw = null,
+  llm = null,
   onEvent = null
 } = {}) {
   const prompt = String(instruction ?? '').trim();
@@ -561,20 +552,11 @@ export async function runDocsAssistantDraftDocs({
     }
   ];
 
-  const configuredGatewayUrlRaw = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? null;
-  const configuredGatewayUrl = typeof configuredGatewayUrlRaw === 'string' ? configuredGatewayUrlRaw.trim() : null;
-  const gatewayUrl = configuredGatewayUrl ? configuredGatewayUrl : null;
-  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.OPENCLAW_TOKEN ?? '';
-  const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'assistant';
-  const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const envRemote = String(process.env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
-  const useRemote =
-    typeof openclaw?.useRemote === 'boolean'
-      ? openclaw.useRemote
-      : envRemote === '0' || envRemote === 'false'
-        ? false
-        : Boolean(gatewayUrl);
-  if (isOpenClawRequired() && !useRemote) throw new Error('openclaw_remote_required');
+  const apiKey = llm?.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
+  const model = llm?.model ?? process.env.GRAPHFLY_LLM_MODEL ?? 'openai/gpt-4o-mini';
+  const baseUrl = llm?.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
+  const useRemote = Boolean(String(apiKey ?? '').trim());
+  if (isLlmRequired() && !useRemote) throw new Error('llm_api_key_required');
 
   const instructions = [
     'You are Graphfly Product Documentation Assistant.',
@@ -621,7 +603,6 @@ export async function runDocsAssistantDraftDocs({
     return { ok: true, files: Array.from(filesByPath.entries()).map(([path, content]) => ({ path, content })), diff, citations: uniqCitations(citations), summary: 'Draft created (deterministic fallback).' };
   }
 
-  const gateway = gatewayUrl ?? 'http://openclaw.invalid';
   const maxAttempts = clampInt(process.env.GRAPHFLY_ASSISTANT_MAX_ATTEMPTS ?? 3, { min: 1, max: 10, fallback: 3 });
   const baseBackoffMs = clampInt(process.env.GRAPHFLY_ASSISTANT_RETRY_BASE_MS ?? 500, { min: 100, max: 30_000, fallback: 500 });
 
@@ -629,16 +610,17 @@ export async function runDocsAssistantDraftDocs({
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       onEvent?.('assistant:start', { tenantId, repoId, mode: viewMode, attempt });
-      const out = await runOpenClawToolLoop({
-        gatewayUrl: gateway,
-        token: token || null,
-        agentId,
+      const out = await runOpenRouterToolLoop({
+        apiKey,
+        baseUrl,
         model,
         input: `User request:\n${prompt}\n\nDraft docs changes using draft_set_file.`,
         instructions,
-        user: { tenantId, repoId },
+        user: `graphfly:${tenantId}:${repoId}`,
         tools,
         maxTurns,
+        appTitle: 'Graphfly',
+        httpReferer: process.env.OPENROUTER_HTTP_REFERER ?? null,
         onTurn: ({ turn, maxTurns: mt }) => onEvent?.('assistant:turn', { turn, maxTurns: mt }),
         onToolCall: ({ name }) => onEvent?.('assistant:tool_call', { name }),
         onToolResult: ({ name, result }) => onEvent?.('assistant:tool_result', { name, summary: typeof result === 'string' ? result.slice(0, 200) : null })

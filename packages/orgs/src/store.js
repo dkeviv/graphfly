@@ -14,6 +14,7 @@ export class InMemoryOrgStore {
       slug: null,
       displayName: null,
       plan: 'free',
+      llmModel: null,
       githubReaderInstallId: null,
       githubDocsInstallId: null,
       docsRepoFullName: null,
@@ -38,6 +39,7 @@ export class InMemoryOrgStore {
       if (patch.slug !== undefined) next.slug = patch.slug ?? null;
       if (patch.displayName !== undefined) next.displayName = patch.displayName ?? null;
       if (patch.plan !== undefined) next.plan = patch.plan ?? prev.plan;
+      if (patch.llmModel !== undefined) next.llmModel = patch.llmModel ?? null;
       if (patch.githubReaderInstallId !== undefined) next.githubReaderInstallId = patch.githubReaderInstallId ?? null;
       if (patch.githubDocsInstallId !== undefined) next.githubDocsInstallId = patch.githubDocsInstallId ?? null;
       if (patch.docsRepoFullName !== undefined) next.docsRepoFullName = patch.docsRepoFullName ?? null;
@@ -48,4 +50,3 @@ export class InMemoryOrgStore {
     return next;
   }
 }
-

@@ -45,12 +45,17 @@ Required database settings:
 - Allow the app role to set `SET app.tenant_id = <uuid>` (RLS isolation contract).
 
 ### 1.2 GitHub Integrations
-You need **both**:
+Graphfly supports two GitHub authentication modes (FR-GH-01):
+
+**Mode 1 — OAuth (Primary SaaS Path)**
+- **GitHub OAuth App** (used for “Connect GitHub” sign-in/onboarding)
+- The user OAuth token (encrypted at rest) is used for repo listing, cloning, and docs PR creation.
+- Webhooks require **manual user configuration** (or polling-based change detection in a future phase).
+
+**Mode 2 — GitHub Apps (Optional / Enterprise / Least-Privilege)**
 - **Reader App** (installed on source repos): `contents:read`, `metadata:read`, webhooks for `push`
 - **Docs App** (installed on docs repo only): `contents:write`, `pull_requests:write`, `metadata:read`
-
-Optional (for user sign-in and repo listing):
-- GitHub OAuth App (used for “Connect GitHub” in onboarding)
+- When configured, installation tokens are preferred over the OAuth token.
 
 ### 1.3 Stripe (optional for billing)
 - Stripe secret key
@@ -68,6 +73,10 @@ Graphfly enforces hard requirements when `GRAPHFLY_MODE=prod`:
 - `GRAPHFLY_AUTH_MODE=jwt`
 - `GRAPHFLY_JWT_SECRET`
 - `GRAPHFLY_QUEUE_MODE=pg`
+- `GITHUB_OAUTH_CLIENT_ID`
+- `GITHUB_OAUTH_CLIENT_SECRET`
+- `GITHUB_OAUTH_REDIRECT_URI`
+- `GITHUB_WEBHOOK_SECRET` (required for automatic incremental indexing via GitHub push webhooks)
 
 Recommended explicit store modes:
 - `GRAPHFLY_GRAPH_STORE=pg`
@@ -85,6 +94,7 @@ Recommended explicit store modes:
 - `GITHUB_OAUTH_REDIRECT_URI` (must point back to the web onboarding page)
 
 ### 2.3 GitHub App auth (installation tokens)
+Optional (enterprise / least-privilege):
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY` (PEM or base64 PEM)
 - `GITHUB_API_BASE_URL` (optional; for GitHub Enterprise) — default `https://api.github.com`
@@ -99,7 +109,8 @@ Recommended explicit store modes:
 
 Docs repo creation (optional onboarding):
 - `POST /api/v1/orgs/docs-repo/create` creates a new GitHub repo (auto-initialized) using the connected user OAuth token.
-- This is a convenience for greenfield orgs; production docs writes still require the Docs App installation scoped to the docs repo.
+- In OAuth mode, docs PRs are opened using the OAuth token (repo scope).
+- In GitHub Apps mode, docs PRs are opened using the Docs App installation token when available (preferred).
 
 Invitation links (team onboarding) use:
 - `GRAPHFLY_WEB_URL` (optional) — absolute web origin used to build invite accept URLs (e.g. `https://app.graphfly.example`)
@@ -158,7 +169,7 @@ Key env vars (guardrails):
 - `GRAPHFLY_GRAPH_AGENT_HTTP_RETRY_MAX_MS` (default 10000)
 
 Optional (LLM-backed) mode:
-- `OPENCLAW_GATEWAY_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_MODEL`
+- `OPENROUTER_API_KEY` (plus optional `OPENROUTER_BASE_URL` and `GRAPHFLY_LLM_MODEL`)
 - If not configured, Graphfly uses a deterministic local policy so enrichment remains reproducible and testable.
 - In dev, Graphfly records an `index_diagnostic` and falls back to deterministic adapters.
 
@@ -230,26 +241,25 @@ Enable by running the worker:
 - `npm run worker:doc`
 
 Agent runtime modes:
-- **LLM-backed (remote)**: set `OPENCLAW_GATEWAY_URL` + `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`).
-- **Deterministic local loop (offline/tests)**: unset `OPENCLAW_GATEWAY_URL` or set `OPENCLAW_USE_REMOTE=0` (or `false`).
+- **LLM-backed (remote)**: set `OPENROUTER_API_KEY` (plus optional `OPENROUTER_BASE_URL` and `GRAPHFLY_LLM_MODEL`).
+- **Deterministic local loop (offline/tests)**: leave `OPENROUTER_API_KEY` unset.
 
 Production requirement:
-- In `GRAPHFLY_MODE=prod`, OpenClaw remote is required by default (fail-fast if missing).
-- Emergency override: `GRAPHFLY_OPENCLAW_REQUIRED=0` to allow deterministic/local mode in prod.
+- In `GRAPHFLY_MODE=prod`, LLM is required by default (fail-fast if missing) via `GRAPHFLY_LLM_REQUIRED=1`.
+- Emergency override: `GRAPHFLY_LLM_REQUIRED=0` to allow deterministic/local mode in prod (not recommended).
 
 Key env vars:
-- `OPENCLAW_GATEWAY_URL` — remote agent gateway base URL (enables LLM-agentic mode by default when set)
-- `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`) — bearer token for your gateway (required in prod when OpenClaw is required)
-- `OPENCLAW_MODEL` — optional model identifier (gateway-defined)
-- `OPENCLAW_AGENT_ID` — optional agent id (for routing/quotas)
-- `OPENCLAW_USE_REMOTE=0|false` — force deterministic local mode even when a gateway URL is configured
-- `GRAPHFLY_OPENCLAW_REQUIRED=0|false` — disable the prod-default “remote required” behavior (not recommended)
+- `OPENROUTER_API_KEY` — OpenRouter API key (enables LLM-agentic mode)
+- `OPENROUTER_BASE_URL` — optional override for OpenRouter-compatible API base URL
+- `OPENROUTER_HTTP_REFERER` — optional HTTP referer header value (some providers use this for policy/analytics)
+- `GRAPHFLY_LLM_MODEL` — default OpenRouter model id (can also be set per org via UI)
+- `GRAPHFLY_LLM_REQUIRED=0|false` — disable the prod-default “LLM required” behavior (not recommended)
 
 Doc agent guardrails (recommended):
 - `GRAPHFLY_DOC_AGENT_LOCK_TTL_MS` (default `1800000`) — per-repo doc generation lock TTL (serializes runs)
 - `GRAPHFLY_DOC_AGENT_MAX_TURNS` (default `20`) — hard cap on agent loop turns
 - `GRAPHFLY_DOC_AGENT_MAX_TOOL_CALLS` (default `8000`) — hard cap on total tool calls per run
-- `GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS` (default `4`) — remote gateway HTTP retry attempts (429/5xx)
+- `GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS` (default `4`) — provider HTTP retry attempts (429/5xx)
 - `GRAPHFLY_DOC_AGENT_RETRY_BASE_MS` (default `250`)
 - `GRAPHFLY_DOC_AGENT_RETRY_MAX_MS` (default `5000`)
 - `GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES` / `GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES` — truncation caps for `flows_trace`
@@ -370,10 +380,13 @@ Notes:
 
 For a new org:
 1. User clicks **Connect GitHub** (OAuth) and completes authorization.
-2. Admin installs **Reader App** (source repos) and **Docs App** (docs repo).
-3. Admin selects a **docs repo** (must be separate) and clicks **Verify**.
-4. User selects a source repo and clicks **Create Project**.
-5. System enqueues index job → graph builds → docs PR opened in docs repo.
+2. Admin selects a **docs repo** (must be separate) and clicks **Verify**.
+3. User selects a source repo + tracked branch (locked) and clicks **Create Project**.
+4. System enqueues index job → graph builds → docs PR opened in docs repo.
+
+Optional (recommended for Enterprise / least-privilege):
+- Install **Reader App** (source repos) and **Docs App** (docs repo) to use installation tokens and automatic webhook subscriptions.
+- Otherwise, configure push webhooks manually for OAuth mode.
 
 ---
 
@@ -415,6 +428,11 @@ Minimum:
 Monitor:
 - webhook verification failures
   - delivery dedupe hit rate
+- ignored deliveries (repo not configured / non-tracked branch)
+
+Operational notes:
+- Graphfly **ignores** GitHub push webhooks for repos that are not configured as a Project.
+- When `GRAPHFLY_WEBHOOK_DEDUPE=pg` and `GRAPHFLY_QUEUE_MODE=pg`, Graphfly inserts the webhook delivery record and enqueues the `index.run` job **transactionally** (prevents “deduped but not enqueued” drops).
 
 ### 6.4 Realtime progress streaming
 
@@ -465,6 +483,7 @@ Metrics endpoint controls:
 
 ### 7.3 Audit log
 - Use `/api/v1/audit` to review admin actions (requires DB).
+- `POST /api/v1/feedback` records a `feedback.submit` event into `audit_log` (best-effort; secrets redacted).
 
 ### 7.4 Admin dashboard
 - The web app includes an **Admin** page that surfaces: org config, indexing/docs job status, audit events, secrets rewrap, and a `/metrics` preview.
@@ -483,6 +502,8 @@ Likely causes:
 - Reader App not installed
 - Webhook secret mismatch
 - Delivery dedupe incorrectly configured or DB unavailable
+- Repo is not configured as a Project (Graphfly ignores unknown repos)
+- Push is not on the Project’s tracked branch (Graphfly ignores non-tracked branches)
 
 ### 8.3 “Jobs stuck queued”
 Likely causes:

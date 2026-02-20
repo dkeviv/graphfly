@@ -1,5 +1,5 @@
-import { TokenBucketLimiter } from '../../../packages/ratelimit/src/token-bucket.js';
-import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
+import { TokenBucketLimiter } from '../../../../packages/ratelimit/src/token-bucket.js';
+import { limitsForPlan } from '../../../../packages/entitlements/src/limits.js';
 
 export function makeRateLimitMiddleware({ entitlementsStore, limiter = null } = {}) {
   const bucket = limiter ?? new TokenBucketLimiter({ capacity: 120, refillPerSecond: 2 });

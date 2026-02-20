@@ -242,6 +242,16 @@ export function renderDocsViewerCanvas({ state, rootEl, onNavigate }) {
         }
 
         bodyEl.appendChild(md);
+
+        const wantedAnchor = state.docsAnchor ? String(state.docsAnchor) : null;
+        if (wantedAnchor && headingEls.has(wantedAnchor)) {
+          const headingEl = headingEls.get(wantedAnchor);
+          headingEl.classList.add('md__anchor-highlight');
+          headingEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          setTimeout(() => headingEl.classList.remove('md__anchor-highlight'), 2200);
+          state.docsAnchor = null;
+          localStorage.removeItem('graphfly_docs_anchor');
+        }
       }
 
       await renderCurrent();

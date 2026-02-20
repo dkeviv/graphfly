@@ -6,7 +6,7 @@ import { InMemoryLockStore } from '../packages/lock-store/src/in-memory.js';
 import { createDocWorker } from '../workers/doc-agent/src/doc-worker.js';
 import { InMemoryEntitlementsStore } from '../packages/entitlements/src/store.js';
 import { InMemoryUsageCounters } from '../packages/usage/src/in-memory.js';
-import { runDocPrWithOpenClaw } from '../workers/doc-agent/src/openclaw-doc-run.js';
+import { runDocPrWithLlm } from '../workers/doc-agent/src/llm-doc-run.js';
 
 class CapturingDocsWriter {
   constructor() {
@@ -110,7 +110,7 @@ test('doc agent enforces tool-call budget', async () => {
   }
 });
 
-test('doc agent retries gateway 5xx in remote mode (agent-loop retry)', async () => {
+test('doc agent retries provider 5xx in remote mode (agent-loop retry)', async () => {
   const prevBase = process.env.GRAPHFLY_DOC_AGENT_RETRY_BASE_MS;
   const prevMax = process.env.GRAPHFLY_DOC_AGENT_RETRY_MAX_MS;
   const prevAttempts = process.env.GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS;
@@ -136,29 +136,43 @@ test('doc agent retries gateway 5xx in remote mode (agent-loop retry)', async ()
           status: 200,
           text: '',
           json: {
-            id: 'resp_1',
-            output: [
+            id: 'chatcmpl_1',
+            choices: [
               {
-                type: 'function_call',
-                name: 'github_create_pr',
-                call_id: 'call_pr',
-                arguments: JSON.stringify({
-                  targetRepoFullName: 'org/docs',
-                  title: 't',
-                  body: 'b',
-                  branchName: 'docs/update-test',
-                  files: []
-                })
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'call_pr',
+                      type: 'function',
+                      function: {
+                        name: 'github_create_pr',
+                        arguments: JSON.stringify({
+                          targetRepoFullName: 'org/docs',
+                          title: 't',
+                          body: 'b',
+                          branchName: 'docs/update-test',
+                          files: []
+                        })
+                      }
+                    }
+                  ]
+                }
               }
             ]
           }
         };
       }
-      assert.ok(Array.isArray(body?.input));
-      return { status: 200, text: '', json: { id: 'resp_2', output_text: 'done' } };
+      assert.ok(url.includes('/chat/completions'));
+      assert.equal(method, 'POST');
+      assert.ok(Array.isArray(body?.messages));
+      assert.ok(body.messages.some((m) => m?.role === 'tool' && m?.tool_call_id === 'call_pr'));
+      return { status: 200, text: '', json: { id: 'chatcmpl_2', choices: [{ index: 0, message: { role: 'assistant', content: 'done' } }] } };
     };
 
-    const { pr } = await runDocPrWithOpenClaw({
+    const { pr } = await runDocPrWithLlm({
       store,
       docStore,
       docsWriter,
@@ -166,7 +180,7 @@ test('doc agent retries gateway 5xx in remote mode (agent-loop retry)', async ()
       repoId,
       docsRepoFullName: 'org/docs',
       triggerSha: 's1',
-      openclaw: { useRemote: true, requestJson, gatewayUrl: 'http://fake-gateway.local', token: '', agentId: 'doc-agent', model: 'openclaw' }
+      llm: { requestJson, model: 'openai/gpt-4o-mini' }
     });
 
     assert.equal(pr.ok, true);

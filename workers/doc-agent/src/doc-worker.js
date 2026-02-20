@@ -1,4 +1,4 @@
-import { runDocPrWithOpenClaw } from './openclaw-doc-run.js';
+import { runDocPrWithLlm } from './llm-doc-run.js';
 import { limitsForPlan } from '../../../packages/entitlements/src/limits.js';
 import { InMemoryEntitlementsStore } from '../../../packages/entitlements/src/store.js';
 import { InMemoryUsageCounters } from '../../../packages/usage/src/in-memory.js';
@@ -13,6 +13,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
       const { tenantId, repoId } = job.payload ?? {};
       const docsRepoFullName = job.payload?.docsRepoFullName;
       const triggerSha = job.payload?.sha ?? 'mock';
+      const llmModel = job.payload?.llmModel ?? null;
       const requestedEntrypointKeys = Array.isArray(job.payload?.entrypointKeys) ? job.payload.entrypointKeys : null;
       const requestedSymbolUids = Array.isArray(job.payload?.symbolUids) ? job.payload.symbolUids : null;
       if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) {
@@ -56,7 +57,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
         realtime?.publish?.({ tenantId, repoId, type: 'agent:start', payload: { agent: 'doc', sha: triggerSha, prRunId: prRun?.id ?? null } });
         // Explicit request (coverage dashboard / single-target regeneration): honor requested targets.
         if ((requestedEntrypointKeys && requestedEntrypointKeys.length > 0) || (requestedSymbolUids && requestedSymbolUids.length > 0)) {
-          const { pr, stats } = await runDocPrWithOpenClaw({
+          const { pr, stats } = await runDocPrWithLlm({
             store,
             docStore,
             docsWriter: writer,
@@ -67,6 +68,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
             prRunId: prRun?.id ?? null,
             entrypointKeys: requestedEntrypointKeys,
             symbolUids: requestedSymbolUids,
+            llmModel,
             onEvent: (type, payload) => realtime?.publish?.({ tenantId, repoId, type, payload })
           });
 
@@ -211,7 +213,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
           return { ok: true, pr: { ok: true, empty: true, targetRepoFullName: docsRepoFullName, filesCount: 0 } };
         }
 
-        const { pr, stats } = await runDocPrWithOpenClaw({
+        const { pr, stats } = await runDocPrWithLlm({
           store,
           docStore,
           docsWriter: writer,
@@ -222,6 +224,7 @@ export function createDocWorker({ store, docsWriter, docStore, entitlementsStore
           prRunId: prRun?.id ?? null,
           entrypointKeys,
           symbolUids,
+          llmModel,
           onEvent: (type, payload) => realtime?.publish?.({ tenantId, repoId, type, payload })
         });
 

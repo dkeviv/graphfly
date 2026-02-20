@@ -13,7 +13,8 @@ function formatCitation(c) {
   if (type === 'symbol') return `symbol: ${String(c?.qualifiedName ?? c?.symbolUid ?? '').slice(0, 80)}`;
   if (type === 'flow') return `flow: ${String(c?.entrypointKey ?? '').slice(0, 80)}`;
   if (type === 'docs_file') return `doc: ${String(c?.path ?? '').slice(0, 80)}`;
-  if (type === 'doc_block') return `block: ${String(c?.docFile ?? '').slice(0, 60)}`;
+  if (type === 'doc_block') return `block: ${String(c?.docFile ?? '').slice(0, 60)} ${String(c?.blockAnchor ?? '').slice(0, 50)}`.trim();
+  if (type === 'pr_run') return `pr run: ${String(c?.prRunId ?? '').slice(0, 12)}`;
   return type ? `evidence: ${type}` : 'evidence';
 }
 
@@ -57,6 +58,14 @@ export function renderChatsPanel({ state, rootEl, onNavigate }) {
 
   const draftPreviewEl = el('div', { class: 'card chat__draft-preview chat__draft-preview--hidden' }, []);
 
+  const activityStatusEl = el('div', { class: 'small' }, ['Waiting for agent activity…']);
+  const activityListEl = el('ul', { class: 'list' }, []);
+  const activitySummaryEl = el('summary', {}, ['Live activity']);
+  const activityDetailsEl = el('details', { class: 'details' }, [
+    activitySummaryEl,
+    el('div', { class: 'details__body' }, [activityStatusEl, activityListEl])
+  ]);
+
   const messagesStatusEl = el('div', { class: 'small' }, ['Select a thread to start.']);
   const messagesEl = el('div', { class: 'chat__messages' }, []);
   const inputEl = el('textarea', { class: 'input chat__input', rows: '3', placeholder: 'Ask about the system…' });
@@ -72,6 +81,7 @@ export function renderChatsPanel({ state, rootEl, onNavigate }) {
       el('div', { class: 'card' }, [threadsStatusEl, threadsListEl]),
       el('div', { class: 'card' }, [el('div', { class: 'card__title' }, ['Drafts']), draftsStatusEl, draftsListEl]),
       draftPreviewEl,
+      activityDetailsEl,
       convoEl
     ])
   );
@@ -83,6 +93,55 @@ export function renderChatsPanel({ state, rootEl, onNavigate }) {
   let drafts = [];
   let loadingDraftId = null;
   let selectedDraft = null;
+
+  const recentActivity = [];
+  let unsubscribe = null;
+  try {
+    unsubscribe = state.realtime?.subscribe?.((evt) => {
+      if (!evt || evt.repoId !== state.repoId) return;
+      const type = String(evt?.type ?? '');
+      if (!type.startsWith('agent:') && !type.startsWith('assistant:')) return;
+      const p = evt?.payload ?? {};
+      recentActivity.unshift({ ts: new Date().toISOString(), type, payload: p });
+      if (recentActivity.length > 40) recentActivity.length = 40;
+      activityStatusEl.textContent = `Last: ${type}`;
+      activitySummaryEl.textContent = `Live activity (${type})`;
+      activityListEl.innerHTML = '';
+      for (const item of recentActivity) {
+        const t = String(item.type ?? '');
+        const pay = item.payload ?? {};
+        const label =
+          t === 'agent:tool_call'
+            ? `${String(pay?.agent ?? 'agent')} tool_call ${String(pay?.name ?? '')}`
+            : t === 'agent:tool_result'
+              ? `${String(pay?.agent ?? 'agent')} tool_result ${String(pay?.name ?? '')}`
+              : t === 'assistant:tool_call'
+                ? `assistant tool_call ${String(pay?.name ?? '')}`
+                : t === 'assistant:tool_result'
+                  ? `assistant tool_result ${String(pay?.name ?? '')}`
+                  : t;
+        const meta = [];
+        if (pay?.summary) meta.push(String(pay.summary));
+        if (pay?.error) meta.push(String(pay.error));
+        activityListEl.appendChild(
+          el('li', { class: 'list__item' }, [
+            el('div', { class: 'h' }, [label.trim()]),
+            el('div', { class: 'small k' }, [meta.join(' • ') || item.ts])
+          ])
+        );
+      }
+    });
+  } catch {
+    // ignore
+  }
+
+  function parentDir(p) {
+    const s = String(p ?? '').replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    if (!s) return '';
+    const parts = s.split('/').filter(Boolean);
+    parts.pop();
+    return parts.join('/');
+  }
 
   function setSelectedThreadId(id) {
     state.threadId = id ? String(id) : null;
@@ -181,12 +240,73 @@ export function renderChatsPanel({ state, rootEl, onNavigate }) {
                   class: 'badge chat__cite',
                   type: 'button',
                   onclick: () => {
-                    if (c?.type === 'docs_file' && c?.path) {
+                    const t = String(c?.type ?? '');
+                    if (t === 'docs_file' && c?.path) {
                       state.panelMode = 'docs';
                       localStorage.setItem('graphfly_panel_mode', state.panelMode);
+                      if (c?.ref) {
+                        state.docsRef = String(c.ref);
+                        localStorage.setItem('graphfly_docs_ref', state.docsRef);
+                      }
                       state.docsPath = String(c.path);
                       localStorage.setItem('graphfly_docs_path', state.docsPath);
+                      state.docsDir = parentDir(state.docsPath);
+                      localStorage.setItem('graphfly_docs_dir', state.docsDir);
+                      state.docsAnchor = null;
+                      localStorage.removeItem('graphfly_docs_anchor');
                       onNavigate?.({ kind: 'docs_from_citation', path: state.docsPath });
+                      return;
+                    }
+
+                    if (t === 'doc_block' && (c?.docFile || c?.doc_file)) {
+                      const docFile = c?.docFile ?? c?.doc_file ?? null;
+                      const blockAnchor = c?.blockAnchor ?? c?.block_anchor ?? null;
+                      state.panelMode = 'docs';
+                      localStorage.setItem('graphfly_panel_mode', state.panelMode);
+                      if (c?.ref) {
+                        state.docsRef = String(c.ref);
+                        localStorage.setItem('graphfly_docs_ref', state.docsRef);
+                      }
+                      state.docsPath = String(docFile);
+                      localStorage.setItem('graphfly_docs_path', state.docsPath);
+                      state.docsDir = parentDir(state.docsPath);
+                      localStorage.setItem('graphfly_docs_dir', state.docsDir);
+                      state.docsAnchor = blockAnchor ? String(blockAnchor) : null;
+                      if (state.docsAnchor) localStorage.setItem('graphfly_docs_anchor', state.docsAnchor);
+                      else localStorage.removeItem('graphfly_docs_anchor');
+                      onNavigate?.({ kind: 'docs_from_citation', path: state.docsPath, anchor: state.docsAnchor });
+                      return;
+                    }
+
+                    if (t === 'symbol' && c?.symbolUid) {
+                      state.graphOn = true;
+                      localStorage.setItem('graphfly_canvas_graph', '1');
+                      state.graphFocusSymbolUid = String(c.symbolUid);
+                      localStorage.setItem('graphfly_graph_focus', state.graphFocusSymbolUid);
+                      onNavigate?.({ kind: 'graph_from_citation', symbolUid: state.graphFocusSymbolUid });
+                      return;
+                    }
+
+                    if (t === 'flow' && (c?.symbolUid || c?.entrypointKey)) {
+                      state.graphOn = false;
+                      localStorage.setItem('graphfly_canvas_graph', '0');
+                      const uid = c?.symbolUid ? String(c.symbolUid) : null;
+                      const key = c?.entrypointKey ? String(c.entrypointKey) : null;
+                      state.flowSymbolUid = uid;
+                      if (uid) localStorage.setItem('graphfly_flow_uid', uid);
+                      state.flowEntrypointKey = key;
+                      if (key) localStorage.setItem('graphfly_flow_key', key);
+                      onNavigate?.({ kind: 'flow_from_citation', symbolUid: uid, entrypointKey: key });
+                      return;
+                    }
+
+                    if (t === 'pr_run' && c?.prRunId) {
+                      state.panelMode = 'git';
+                      localStorage.setItem('graphfly_panel_mode', state.panelMode);
+                      state.prRunId = String(c.prRunId);
+                      localStorage.setItem('graphfly_pr_run_id', state.prRunId);
+                      onNavigate?.({ kind: 'git_from_citation', prRunId: state.prRunId });
+                      return;
                     }
                   }
                 },
@@ -495,5 +615,10 @@ export function renderChatsPanel({ state, rootEl, onNavigate }) {
 
   return () => {
     cancelled = true;
+    try {
+      unsubscribe?.();
+    } catch {
+      // ignore
+    }
   };
 }

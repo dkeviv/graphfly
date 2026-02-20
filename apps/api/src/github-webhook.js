@@ -7,20 +7,21 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
       return { status: 400, body: { error: 'missing_delivery_id' } };
     }
 
-    if (dedupe.seen(deliveryId)) {
-      return { status: 202, body: { ok: true, deduped: true } };
-    }
-
     const sig = headers['x-hub-signature-256'];
     const verified = verifyGitHubSignature256({ secret, rawBody, signature256: sig });
     if (!verified.ok) {
       return { status: 401, body: { error: 'invalid_signature', reason: verified.reason } };
     }
 
-    dedupe.mark(deliveryId);
+    if (dedupe?.seen?.(deliveryId)) {
+      return { status: 202, body: { ok: true, deduped: true } };
+    }
 
     const event = headers['x-github-event'];
-    if (event !== 'push') return { status: 200, body: { ok: true, ignored: true, event } };
+    if (event !== 'push') {
+      dedupe?.mark?.(deliveryId);
+      return { status: 200, body: { ok: true, ignored: true, event } };
+    }
 
     let payload = null;
     try {
@@ -55,6 +56,7 @@ export function makeGitHubWebhookHandler({ secret, dedupe, onPush }) {
       removedFiles: Array.from(removedFiles)
     });
 
+    dedupe?.mark?.(deliveryId);
     return { status: 200, body: { ok: true } };
   };
 }

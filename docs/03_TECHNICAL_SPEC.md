@@ -28,18 +28,22 @@ CREATE EXTENSION IF NOT EXISTS "vector";      -- pgvector 0.7+
 -- ═══════════════════════════════════════════════════════════════════════
 -- TENANTS (Organizations)
 -- ═══════════════════════════════════════════════════════════════════════
-	CREATE TABLE orgs (
-	    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-	    slug                  TEXT NOT NULL UNIQUE,        -- URL-safe identifier
-	    display_name          TEXT NOT NULL,
-	    plan                  TEXT NOT NULL DEFAULT 'free'
-	                          CHECK (plan IN ('free','pro','enterprise')),
-	    github_reader_install_id BIGINT,                   -- GitHub Reader App installation ID (source repos)
-	    github_docs_install_id   BIGINT,                   -- GitHub Docs App installation ID (docs PR writes)
-	    stripe_customer_id    TEXT,
-	    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
-	    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
-	);
+CREATE TABLE orgs (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name                    TEXT NOT NULL,
+    slug                    TEXT,
+    display_name            TEXT,
+    plan                    TEXT NOT NULL DEFAULT 'free'
+                            CHECK (plan IN ('free','pro','enterprise')),
+    llm_model               TEXT,                             -- default model id for tool-loop agents (org-scoped)
+    github_reader_install_id BIGINT,                          -- GitHub Reader App installation ID (source repos)
+    github_docs_install_id   BIGINT,                          -- GitHub Docs App installation ID (docs PR writes)
+    docs_repo_full_name     TEXT,                             -- configured docs PR target repo
+    stripe_customer_id      TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_orgs_slug_unique ON orgs(slug) WHERE slug IS NOT NULL;
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- BILLING (Stripe)
@@ -99,27 +103,17 @@ CREATE INDEX idx_usage_org_key ON usage_counters(org_id, key);
 -- ═══════════════════════════════════════════════════════════════════════
 -- USERS & RBAC
 -- ═══════════════════════════════════════════════════════════════════════
-CREATE TYPE org_role AS ENUM ('owner', 'admin', 'developer', 'viewer');
-
-CREATE TABLE users (
-    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    clerk_id      TEXT NOT NULL UNIQUE,  -- Clerk subject (sub claim)
-    email         TEXT NOT NULL,
-    display_name  TEXT,
-    avatar_url    TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
+-- Phase-1: auth is external (GitHub OAuth). Graphfly stores membership + role per tenant.
 CREATE TABLE org_members (
-    org_id        UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role          org_role NOT NULL DEFAULT 'developer',
-    invited_by    UUID REFERENCES users(id),
-    invited_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    accepted_at   TIMESTAMPTZ,
-    PRIMARY KEY (org_id, user_id)
+    tenant_id    UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    user_id      TEXT NOT NULL,
+    role         TEXT NOT NULL DEFAULT 'viewer'
+                 CHECK (role IN ('viewer','member','admin','owner')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, user_id)
 );
-CREATE INDEX idx_org_members_user ON org_members(user_id);
+CREATE INDEX idx_org_members_role ON org_members(tenant_id, role);
 
 -- Member invitations (Phase-1). Invitation token is stored as a hash; email delivery is external.
 CREATE TABLE org_invites (
@@ -127,9 +121,9 @@ CREATE TABLE org_invites (
     tenant_id             UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     email                 TEXT NOT NULL,
     role                  TEXT NOT NULL DEFAULT 'viewer'
-                           CHECK (role IN ('viewer','member','admin','owner')),
+	                           CHECK (role IN ('viewer','member','admin','owner')),
     status                TEXT NOT NULL DEFAULT 'pending'
-                           CHECK (status IN ('pending','accepted','revoked','expired')),
+	                           CHECK (status IN ('pending','accepted','revoked','expired')),
     token_hash            TEXT NOT NULL,
     expires_at            TIMESTAMPTZ NOT NULL,
     accepted_at           TIMESTAMPTZ,
@@ -139,6 +133,7 @@ CREATE TABLE org_invites (
     UNIQUE (tenant_id, token_hash)
 );
 CREATE INDEX idx_org_invites_status ON org_invites(tenant_id, status, expires_at);
+CREATE INDEX idx_org_invites_email ON org_invites(tenant_id, email);
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- REPOS
@@ -746,7 +741,7 @@ async function runDocAgentLoop(job: DocAgentJob): Promise<void> {
         tool_call_id: call.id,
         content: JSON.stringify(result),
       });
-      // Stream to UI via Socket.IO
+      // Stream to UI via WebSocket
       await emitAgentEvent(job.prRunId, 'agent:tool_call', {
         tool: call.name,
         args: call.arguments,
@@ -1215,7 +1210,7 @@ Graphfly includes an **agentic enrichment loop** that iteratively explores the a
 - **Hard turn limit** (`maxTurns`) and **hard tool-call budget** (max tool invocations per run).
 - **Bounded exploration**: max entrypoints, max depth, max nodes surfaced per tool response.
 - **No code bodies by default**: tools provide contracts + evidence pointers; enrichment rejects code fences.
-- **Deterministic fallback**: if an LLM gateway is not configured, Graphfly runs a deterministic enrichment policy to keep behavior testable and stable.
+- **Deterministic fallback**: if an LLM provider key is not configured, Graphfly runs a deterministic enrichment policy to keep behavior testable and stable.
 - **Retry + backoff classification (loop level):** retryable failures (429/5xx/network timeouts) use bounded exponential backoff; non-retryable failures (invalid tool args/output, budget exceeded, policy violations) stop immediately and emit diagnostics.
 - **Context compaction:** graph-trace tool outputs are compacted and bounded (max nodes/edges per response) to keep token usage predictable and prevent runaway context growth.
 
@@ -1234,11 +1229,11 @@ This assistant is **safe-by-design** and **docs-repo-only**:
 - Any proposed docs writes MUST be previewed (diff) and require explicit confirmation.
 
 **Implementation strategy**
-- The assistant uses the same hardened **tool-loop agent gateway** pattern as the doc agent:
+- The assistant uses the same hardened **tool-loop agent runtime** pattern as the doc agent:
   - tool schema enforcement
   - hard turn/tool budgets
   - retry/backoff classification (429/5xx/timeouts retry; policy/budget violations fail fast)
-  - deterministic fallback behavior when no gateway is configured (for dev/test stability)
+  - deterministic fallback behavior when no LLM key is configured (for dev/test stability)
 - Query-time data sources:
   - Public Contract Graph node search + contract lookup
   - Flow entrypoints + bounded flow tracing (contract-first)
@@ -1266,12 +1261,14 @@ This assistant is **safe-by-design** and **docs-repo-only**:
 
 ### 3.1 Authentication
 
-All endpoints (except `/webhooks/github`) require:
+In production (`GRAPHFLY_AUTH_MODE=jwt`), all endpoints (except `/webhooks/github`) require:
 ```
 Authorization: Bearer <jwt>
 ```
 
-The JWT contains `tenantId` in claims (HS256 in Phase-1). Middleware:
+In dev/test (`GRAPHFLY_AUTH_MODE=none`), requests are treated as an implicit Owner for the requested tenant (via `tenantId` in query/body) to keep local iteration fast.
+
+The JWT contains `tenantId` in claims (HS256). Middleware:
 1. Validates JWT signature (when `GRAPHFLY_AUTH_MODE=jwt`)
 2. Extracts `tenantId` from claims
 3. Sets `req.tenantId = tenantId`
@@ -1280,21 +1277,31 @@ The JWT contains `tenantId` in claims (HS256 in Phase-1). Middleware:
 ### 3.2 Endpoints
 
 ```
-─── AUTH ──────────────────────────────────────────────────────────────
-POST /api/v1/auth/webhook
-  Body: Clerk webhook payload
-  Action: Upsert user record from Clerk event
+─── AUTH (Phase-1) ───────────────────────────────────────────────────
+Auth modes:
+  dev/test: GRAPHFLY_AUTH_MODE=none  (implicit owner; tenantId via query/body)
+  prod:     GRAPHFLY_AUTH_MODE=jwt   (Bearer JWT HS256; claims: tenantId, sub, role)
 
-GET /api/v1/auth/me
-  Response: { id, email, display_name, orgs: [{ id, slug, role }] }
+─── GITHUB OAUTH + APPS ───────────────────────────────────────────────
+GET  /api/v1/integrations/github/oauth/start
+POST /api/v1/integrations/github/oauth/callback
+GET  /api/v1/github/reader-app-url
+GET  /api/v1/github/docs-app-url
+GET  /api/v1/integrations/github/repos
+GET  /api/v1/integrations/github/branches
 
 ─── ORGANIZATIONS ─────────────────────────────────────────────────────
 GET /api/v1/orgs/current
-  Response: { id, slug, display_name, plan, github_reader_install_id, github_docs_install_id }
+  Response: { id, slug, displayName, plan, llmModel, githubReaderInstallId, githubDocsInstallId, docsRepoFullName }
 
 PUT /api/v1/orgs/current
-  Body: { display_name?: string }
+  Body: { displayName?: string, docsRepoFullName?: string|null, llmModel?: string|null }
   Permission: admin+
+
+─── LLM ───────────────────────────────────────────────────────────────
+GET /api/v1/llm/models
+  Response: { ok: true, models: [{ id, name, contextLength }] }
+  Permission: member+
 
 GET /api/v1/orgs/members
   Response: { members: [{ userId, role }] }
@@ -1774,14 +1781,14 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 
 1. Database: PostgreSQL + pgvector schema (all tables above), db-migrate
 2. Postgres durable queue setup (`jobs` table; queues: `index`, `graph`, `doc`)
-3. API skeleton: Express + Clerk JWT middleware + RLS tenant injection
+3. API skeleton: Node.js HTTP + tiny router + Graphfly JWT middleware + RLS tenant injection
 4. **Implement the built‑in Code Intelligence Graph builder** (`packages/indexer-engine/`):
    - Modular parsing pipeline with language/manifest adapters (no monolith)
    - Emits NDJSON records (nodes/edges/edge_occurrence/flow_entrypoint/manifests/deps/mismatches/diagnostics)
    - File‑level fault isolation (single file parse failure must not fail the whole job; emit diagnostics instead)
    - Incremental mode accepts a re-parse scope list (changed + impacted) and emits `index_diagnostic`
 5. `IndexerWorker`: job consumer → run built‑in indexer (default) OR configured external indexer → stream NDJSON → batch upsert PostgreSQL
-6. Socket.IO `index:progress` / `index:complete` events
+6. WebSocket `index:progress` / `index:complete` events
 7. Basic graph query endpoints: `/graph/nodes`, `/graph/edges`
 
 **Milestone:** Manually trigger index on test repo → `GET /graph/nodes` returns real data
@@ -1791,7 +1798,7 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 9. Implement `/api/v1/github/reader/callback` and `/api/v1/github/docs/callback`
 10. Implement `POST /webhooks/github` → HMAC validation + push → incremental index jobs (Reader App only)
 11. `GitHubService.cloneRepo()` using Reader installation token (no token-in-URL)
-12. Clerk integration: JWT validation, org creation, request-scoped tenant injection (`SET` + `RESET`), RBAC
+12. Auth + RBAC: JWT validation (prod), org creation/ensure, request-scoped tenant injection (`SET` + `RESET`), roles via `org_members`
 13. Project creation API: select code repo + tracked branch + docs repo, validate Reader/Docs App installations and repo authorization
 
 **Milestone:** Install Reader App + create project → push to tracked branch triggers automatic incremental index; Docs App installed + docs repo authorized → docs PRs open automatically
@@ -1801,7 +1808,7 @@ export async function getDocsInstallationToken(docsInstallationId: number): Prom
 15. All 9 doc agent tools implemented with PostgreSQL backend
 16. Surgical update algorithm (phases 1–5 above)
 17. `pr_runs` table + `/pr-runs` API endpoints
-18. Socket.IO `agent:*` event streaming
+18. WebSocket `agent:*` event streaming
 
 **Milestone:** Push code → automatic docs PR opens in docs repo within 3 minutes
 

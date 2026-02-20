@@ -1,4 +1,4 @@
-import { runGraphEnrichmentWithOpenClaw } from './openclaw-graph-run.js';
+import { runGraphEnrichmentWithLlm } from './llm-graph-run.js';
 import { startLockHeartbeat } from '../../../packages/stores/src/lock-heartbeat.js';
 
 function sleep(ms) {
@@ -10,7 +10,8 @@ function classifyRetry(err) {
   if (msg.includes('graph_agent_tool_budget_exceeded')) return { retryable: false, reason: 'budget' };
   if (msg.includes('graph_annotation_invalid')) return { retryable: false, reason: 'invalid_annotation' };
   if (msg.includes('invalid_tool_arguments')) return { retryable: false, reason: 'tool_args' };
-  if (msg.includes('OpenClaw /v1/responses failed')) return { retryable: true, reason: 'gateway_http' };
+  if (msg.includes('OpenRouter /chat/completions failed')) return { retryable: true, reason: 'provider_http' };
+  if (msg.includes('llm_api_key_required') || msg.includes('openrouter_api_key_required')) return { retryable: false, reason: 'missing_key' };
   if (msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') || msg.includes('ENOTFOUND')) return { retryable: true, reason: 'network' };
   return { retryable: false, reason: 'unknown' };
 }
@@ -18,7 +19,7 @@ function classifyRetry(err) {
 export function createGraphAgentWorker({ store, lockStore = null }) {
   return {
     async handle(job) {
-      const { tenantId, repoId, sha = 'mock' } = job.payload ?? {};
+      const { tenantId, repoId, sha = 'mock', llmModel = null } = job.payload ?? {};
       if (!tenantId || !repoId) throw new Error('tenantId and repoId are required');
       const lockName = 'graph_enrich';
       const ttlMs = Number(process.env.GRAPHFLY_GRAPH_AGENT_LOCK_TTL_MS ?? 10 * 60 * 1000);
@@ -46,7 +47,7 @@ export function createGraphAgentWorker({ store, lockStore = null }) {
       try {
         for (let attempt = 1; attempt <= (Number.isFinite(maxAttempts) ? Math.trunc(maxAttempts) : 3); attempt++) {
           try {
-            await runGraphEnrichmentWithOpenClaw({ store, tenantId, repoId, triggerSha: sha });
+            await runGraphEnrichmentWithLlm({ store, tenantId, repoId, triggerSha: sha, llm: llmModel ? { model: llmModel } : null });
             break;
           } catch (err) {
             const cls = classifyRetry(err);

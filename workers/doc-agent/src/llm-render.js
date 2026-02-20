@@ -1,4 +1,4 @@
-import { runOpenClawToolLoop } from '../../../packages/openclaw-client/src/openresponses.js';
+import { runOpenRouterToolLoop } from '../../../packages/llm-openrouter/src/tool-loop.js';
 import { renderContractDocBlock } from './doc-block-render.js';
 import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/validate.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
@@ -11,7 +11,7 @@ function safeString(v) {
   return redactSecrets(s);
 }
 
-function makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }) {
+function makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store }) {
   let callCount = 0;
 
   return async ({ body }) => {
@@ -22,40 +22,41 @@ function makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }) {
         status: 200,
         text: '',
         json: {
-          id: 'resp_1',
-          output: [
+          id: 'chatcmpl_local_flowdoc_1',
+          choices: [
             {
-              type: 'function_call',
-              name: 'contracts_get',
-              call_id: 'call_contracts',
-              arguments: JSON.stringify({ symbolUid })
-            },
-            {
-              type: 'function_call',
-              name: 'flows_trace',
-              call_id: 'call_trace',
-              arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 })
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  { id: 'call_contracts', type: 'function', function: { name: 'contracts_get', arguments: JSON.stringify({ symbolUid }) } },
+                  { id: 'call_trace', type: 'function', function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 }) } }
+                ]
+              }
             }
           ]
         }
       };
     }
 
-    const inputs = Array.isArray(body?.input) ? body.input : [];
     const outputsByCallId = new Map();
-    for (const item of inputs) {
-      if (item?.type !== 'function_call_output') continue;
+    const messages = Array.isArray(body?.messages) ? body.messages : [];
+    for (const m of messages) {
+      if (m?.role !== 'tool') continue;
+      const callId = m?.tool_call_id ?? null;
+      if (!callId) continue;
       try {
-        outputsByCallId.set(item.call_id, JSON.parse(item.output));
+        outputsByCallId.set(callId, JSON.parse(String(m.content ?? 'null')));
       } catch {
-        outputsByCallId.set(item.call_id, null);
+        outputsByCallId.set(callId, null);
       }
     }
 
     const contractPayload = outputsByCallId.get('call_contracts');
     const tracePayload = outputsByCallId.get('call_trace');
 
-    if (!contractPayload) throw new Error('local_openclaw_missing_contract_payload');
+    if (!contractPayload) throw new Error('local_llm_missing_contract_payload');
     const md =
       renderContractDocBlock(contractPayload).trimEnd() +
       `\n\n### Flow (Derived)\n- Depth: ${tracePayload?.depth ?? 3}\n- Nodes: ${tracePayload?.nodes?.length ?? 0}\n- Edges: ${tracePayload?.edges?.length ?? 0}\n`;
@@ -67,19 +68,27 @@ function makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }) {
       status: 200,
       text: '',
       json: {
-        id: 'resp_2',
-        output_text: md
+        id: 'chatcmpl_local_flowdoc_2',
+        choices: [{ index: 0, message: { role: 'assistant', content: md } }]
       }
     };
   };
 }
 
-export async function generateFlowDocWithOpenClaw({
+function isLlmRequired(env = process.env) {
+  const mode = String(env.GRAPHFLY_MODE ?? 'dev').toLowerCase();
+  if (mode !== 'prod') return false;
+  const v = String(env.GRAPHFLY_LLM_REQUIRED ?? '1').trim().toLowerCase();
+  return !(v === '0' || v === 'false');
+}
+
+export async function generateFlowDocWithLlm({
   store,
   tenantId,
   repoId,
   symbolUid,
-  openclaw = null
+  llmModel = null,
+  llm = null
 }) {
   const node = await store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
   if (!node) throw new Error('symbol_not_found');
@@ -151,22 +160,19 @@ export async function generateFlowDocWithOpenClaw({
     }
   ];
 
-  const configuredGatewayUrlRaw = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? null;
-  const configuredGatewayUrl = typeof configuredGatewayUrlRaw === 'string' ? configuredGatewayUrlRaw.trim() : null;
-  const gatewayUrl = configuredGatewayUrl ? configuredGatewayUrl : 'http://local-openclaw.invalid';
-  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.OPENCLAW_TOKEN ?? '';
-  const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'doc-agent';
-  const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const envRemote = String(process.env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
-  const useRemote =
-    typeof openclaw?.useRemote === 'boolean'
-      ? openclaw.useRemote
-      : envRemote === '0' || envRemote === 'false'
-        ? false
-        : Boolean(configuredGatewayUrl);
-  const requestJson =
-    openclaw?.requestJson ??
-    (useRemote ? undefined : makeLocalDocAgentGateway({ symbolUid, tenantId, repoId, store }));
+  const apiKeyRaw = llm?.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
+  const baseUrl = llm?.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
+  const requestOverride = typeof llm?.requestJson === 'function' ? llm.requestJson : null;
+  const apiKey = String(apiKeyRaw ?? '').trim() || (requestOverride ? 'test' : '');
+  const model = llm?.model ?? llmModel ?? process.env.GRAPHFLY_LLM_MODEL ?? 'openai/gpt-4o-mini';
+  const useRemote = Boolean(requestOverride) || Boolean(String(apiKeyRaw ?? '').trim());
+  if (isLlmRequired() && !useRemote) throw new Error('llm_api_key_required');
+
+  const requestJson = requestOverride
+    ? requestOverride
+    : useRemote
+      ? undefined
+      : makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store });
 
   const instructions = [
     'You are Graphfly Doc Agent.',
@@ -181,17 +187,18 @@ export async function generateFlowDocWithOpenClaw({
     'Call contracts_get and flows_trace, then output final Markdown.'
   ].join('\n');
 
-  const { outputText } = await runOpenClawToolLoop({
-    gatewayUrl,
-    token,
-    agentId,
+  const { outputText } = await runOpenRouterToolLoop({
+    apiKey: useRemote ? apiKey : 'local',
+    baseUrl,
     model,
     input,
     instructions,
     user: `graphfly:${tenantId}:${repoId}`,
     tools,
     maxTurns: 10,
-    requestJson
+    requestJson,
+    appTitle: 'Graphfly',
+    httpReferer: process.env.OPENROUTER_HTTP_REFERER ?? null
   });
 
   const v = validateDocBlockMarkdown(outputText);

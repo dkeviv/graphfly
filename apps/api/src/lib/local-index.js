@@ -73,6 +73,7 @@ export async function enqueueLocalFullIndexOnRepoCreate({
     sha,
     changedFiles: [],
     removedFiles: [],
+    llmModel: org?.llmModel ?? null,
     docsRepoFullName: configuredDocsRepoFullName,
     cloneSource: null,
     cloneAuth: null

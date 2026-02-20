@@ -1,5 +1,5 @@
 {
-  "name": "@graphfly/openclaw-client",
+  "name": "@graphfly/llm-openrouter",
   "private": true,
   "type": "module"
 }

@@ -15,15 +15,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null, realtime = null, lockStore = null }) {
+export function createIndexerWorker({ store, docQueue, docStore, graphQueue = null, realtime = null, lockStore = null, resolveCloneAuth = null }) {
   return {
     async handle(job) {
-      const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [], docsRepoFullName = null } = job.payload ?? {};
+      const { tenantId, repoId, repoRoot, sha = 'mock', changedFiles = [], docsRepoFullName = null, llmModel = null } = job.payload ?? {};
       const cloneSource = job.payload?.cloneSource ?? null;
-      const cloneAuth = job.payload?.cloneAuth ?? null;
+      let cloneAuth = job.payload?.cloneAuth ?? null;
       const removedFiles = job.payload?.removedFiles ?? [];
       let reparsedFiles = Array.isArray(changedFiles) ? changedFiles : [];
       const modeLabel = Array.isArray(changedFiles) && changedFiles.length > 0 ? 'incremental' : 'full';
+
+      // Durable queue safety: do not persist auth tokens in jobs.payload (docs/05_SECURITY.md).
+      // Resolve clone auth at execution time for remote clones.
+      const wantsRemoteClone = typeof cloneSource === 'string' && /^https?:\/\//i.test(cloneSource);
+      if (!cloneAuth && wantsRemoteClone && typeof resolveCloneAuth === 'function') {
+        cloneAuth = await resolveCloneAuth({ tenantId, repoId, cloneSource });
+      }
 
       // Execution lane: serialize index runs per (tenantId, repoId) to avoid concurrent graph writes.
       const lockName = 'index_run';
@@ -213,22 +220,26 @@ export function createIndexerWorker({ store, docQueue, docStore, graphQueue = nu
       }
 
       if (graphQueue?.add) {
-        graphQueue.add('graph.enrich', { tenantId, repoId, sha, changedFiles });
-      }
-      docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName });
         try {
-          const nodes = await store.listNodes({ tenantId, repoId });
-          const edges = await store.listEdges({ tenantId, repoId });
-          realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel, nodes: nodes.length, edges: edges.length } });
+          await Promise.resolve(graphQueue.add('graph.enrich', { tenantId, repoId, sha, changedFiles, llmModel }));
         } catch {
-          realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel } });
+          // Best-effort: graph enrichment is optional; do not fail the index job if enqueue fails.
         }
-        return { ok: true };
-      } finally {
-        try {
-          await lockHb?.stop?.();
-        } catch {}
-        if (lockStore?.release && lockToken) {
+      }
+      await Promise.resolve(docQueue.add('doc.generate', { tenantId, repoId, sha, changedFiles, docsRepoFullName, llmModel }));
+      try {
+        const nodes = await store.listNodes({ tenantId, repoId });
+        const edges = await store.listEdges({ tenantId, repoId });
+        realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel, nodes: nodes.length, edges: edges.length } });
+      } catch {
+        realtime?.publish?.({ tenantId, repoId, type: 'index:complete', payload: { sha, mode: modeLabel } });
+      }
+      return { ok: true };
+    } finally {
+      try {
+        await lockHb?.stop?.();
+      } catch {}
+      if (lockStore?.release && lockToken) {
           await lockStore.release({ tenantId, repoId, lockName, token: lockToken });
         }
       }

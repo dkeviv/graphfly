@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryGraphStore } from '../packages/cig/src/store.js';
-import { generateFlowDocWithOpenClaw } from '../workers/doc-agent/src/openclaw-render.js';
+import { generateFlowDocWithLlm } from '../workers/doc-agent/src/llm-render.js';
 
-test('generateFlowDocWithOpenClaw returns a validated contract-first doc block', async () => {
+test('generateFlowDocWithLlm returns a validated contract-first doc block', async () => {
   const store = new InMemoryGraphStore();
   const tenantId = 't-1';
   const repoId = 'r-1';
@@ -30,9 +30,8 @@ test('generateFlowDocWithOpenClaw returns a validated contract-first doc block',
   });
   store.upsertEdge({ tenantId, repoId, edge: { source_symbol_uid: 'A', target_symbol_uid: 'B', edge_type: 'ControlFlow' } });
 
-  const { markdown } = await generateFlowDocWithOpenClaw({ store, tenantId, repoId, symbolUid: 'A' });
+  const { markdown } = await generateFlowDocWithLlm({ store, tenantId, repoId, symbolUid: 'A' });
   assert.ok(markdown.includes('##'));
   assert.ok(markdown.includes('### Flow (Derived)'));
   assert.ok(!markdown.includes('```'));
 });
-

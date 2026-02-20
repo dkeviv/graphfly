@@ -29,7 +29,7 @@
 **Primary assets**
 - Source code contents (cloned / read via GitHub)
 - Derived artifacts: graph nodes/edges, embeddings, doc blocks, evidence links
-- Authentication tokens (Clerk JWTs), GitHub installation tokens, GitHub app private keys
+- Authentication tokens (Graphfly JWTs in prod), GitHub installation tokens, GitHub app private keys
 
 **Primary threats**
 - Cross-tenant data access (broken isolation)
@@ -104,7 +104,7 @@ Graphfly uses two separate GitHub Apps:
 - GitHub Reader App private key
 - GitHub Docs App private key
 - GitHub webhook secret
-- Database credentials, Redis credentials
+- Database credentials
 
 **Controls**
 - Store secrets in a secrets manager (Doppler/AWS Secrets Manager) with rotation support.
@@ -120,7 +120,7 @@ Graphfly uses two separate GitHub Apps:
   - Public Contract Graph fields (signatures/schemas/constraints/allowables)
   - Flow entities + bounded flow traces (contract-first)
   - Docs repo Markdown reads (sanitized; code blocks stripped; size capped)
-- **No secrets:** redact credentials/tokens/secrets from all tool outputs before they reach the gateway.
+- **No secrets:** redact credentials/tokens/secrets from all tool outputs before they reach the LLM provider.
 - **No raw logs:** log tool usage and outputs at a high level (counts, IDs, timings), not raw content, unless explicitly enabled for debugging and access-controlled.
 
 Assistant writes (FR-AST-02) are staged as drafts:

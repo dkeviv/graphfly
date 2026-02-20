@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { InMemoryGraphStore } from '../packages/cig/src/store.js';
 import { InMemoryDocStore } from '../packages/doc-store/src/in-memory.js';
 import { runDocsAssistantQuery } from '../packages/assistant-agent/src/assistant-agent.js';
-import { runDocPrWithOpenClaw } from '../workers/doc-agent/src/openclaw-doc-run.js';
-import { runGraphEnrichmentWithOpenClaw } from '../workers/graph-agent/src/openclaw-graph-run.js';
+import { runDocPrWithLlm } from '../workers/doc-agent/src/llm-doc-run.js';
+import { runGraphEnrichmentWithLlm } from '../workers/graph-agent/src/llm-graph-run.js';
 
 function withEnv(patch, fn) {
   const prev = {};
@@ -23,15 +23,12 @@ function withEnv(patch, fn) {
     });
 }
 
-test('prod requires OpenClaw remote for assistant query', async () => {
+test('prod requires LLM key for assistant query by default', async () => {
   await withEnv(
     {
       GRAPHFLY_MODE: 'prod',
-      GRAPHFLY_OPENCLAW_REQUIRED: '1',
-      OPENCLAW_GATEWAY_URL: null,
-      OPENCLAW_GATEWAY_TOKEN: null,
-      OPENCLAW_TOKEN: null,
-      OPENCLAW_USE_REMOTE: null
+      GRAPHFLY_LLM_REQUIRED: '1',
+      OPENROUTER_API_KEY: null
     },
     async () => {
       const store = new InMemoryGraphStore();
@@ -45,21 +42,18 @@ test('prod requires OpenClaw remote for assistant query', async () => {
             repoId: 'r',
             question: 'How does login work?'
           }),
-        /openclaw_remote_required/
+        /llm_api_key_required/
       );
     }
   );
 });
 
-test('prod requires OpenClaw remote for doc agent', async () => {
+test('prod requires LLM key for doc agent by default', async () => {
   await withEnv(
     {
       GRAPHFLY_MODE: 'prod',
-      GRAPHFLY_OPENCLAW_REQUIRED: '1',
-      OPENCLAW_GATEWAY_URL: null,
-      OPENCLAW_GATEWAY_TOKEN: null,
-      OPENCLAW_TOKEN: null,
-      OPENCLAW_USE_REMOTE: null
+      GRAPHFLY_LLM_REQUIRED: '1',
+      OPENROUTER_API_KEY: null
     },
     async () => {
       const store = new InMemoryGraphStore();
@@ -67,7 +61,7 @@ test('prod requires OpenClaw remote for doc agent', async () => {
       const docsWriter = { async openPullRequest() { return { ok: true, stub: true }; } };
       await assert.rejects(
         () =>
-          runDocPrWithOpenClaw({
+          runDocPrWithLlm({
             store,
             docStore,
             docsWriter,
@@ -76,28 +70,25 @@ test('prod requires OpenClaw remote for doc agent', async () => {
             docsRepoFullName: 'org/docs',
             triggerSha: 'deadbeef'
           }),
-        /openclaw_remote_required/
+        /llm_api_key_required/
       );
     }
   );
 });
 
-test('prod requires OpenClaw remote for graph agent', async () => {
+test('prod requires LLM key for graph agent by default', async () => {
   await withEnv(
     {
       GRAPHFLY_MODE: 'prod',
-      GRAPHFLY_OPENCLAW_REQUIRED: '1',
-      OPENCLAW_GATEWAY_URL: null,
-      OPENCLAW_GATEWAY_TOKEN: null,
-      OPENCLAW_TOKEN: null
+      GRAPHFLY_LLM_REQUIRED: '1',
+      OPENROUTER_API_KEY: null
     },
     async () => {
       const store = new InMemoryGraphStore();
       await assert.rejects(
-        () => runGraphEnrichmentWithOpenClaw({ store, tenantId: 't', repoId: 'r', triggerSha: 'deadbeef' }),
-        /openclaw_remote_required/
+        () => runGraphEnrichmentWithLlm({ store, tenantId: 't', repoId: 'r', triggerSha: 'deadbeef' }),
+        /llm_api_key_required/
       );
     }
   );
 });
-

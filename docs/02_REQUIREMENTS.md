@@ -39,18 +39,30 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 
 ### 2.1 GitHub Integration
 
-#### FR-GH-01: GitHub Reader App Installation (Source Repos)
-- System shall provide a GitHub App that users install on their organization or personal account to connect **source code repositories**
-- Reader App shall request: `contents:read`, `metadata:read` permissions
-- Reader App shall subscribe to: `push`, `installation`, `installation_repositories` webhook events
+#### FR-GH-01: GitHub Authentication (OAuth or GitHub Apps)
+**System shall support two GitHub authentication modes:**
+
+**Mode 1: OAuth (Primary SaaS Path)**
+- User authenticates via GitHub OAuth with `repo` scope (read + write access to repositories)
+- System shall store the user's OAuth access token (encrypted) in the secrets store
+- System shall use the OAuth token for all GitHub operations (repo listing, cloning, PR creation)
+- OAuth mode is the default when `GITHUB_APP_ID` environment variable is not configured
+- User completes sign-in and repo access in a single OAuth flow (no separate app installations)
+- Webhooks: user must configure manually OR system shall poll for changes (future enhancement)
+
+**Mode 2: GitHub Apps (Enterprise / Fine-Grained Permissions)**
+- System shall provide **two separate GitHub Apps** for enhanced security and audit trail:
+  - **Reader App** (read-only on source repos): `contents:read`, `metadata:read`, subscribes to `push` webhooks
+  - **Docs App** (write-only on docs repos): `contents:write`, `pull_requests:write`, `metadata:read`
+- GitHub Apps mode is enabled when `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` are configured
+- System shall guide users to install both apps during onboarding
+- System shall prefer installation tokens over OAuth tokens when both are available (principle of least privilege)
 - Installation shall not require any changes to the user's source code repository
 
-#### FR-GH-01B: GitHub Docs App Installation (Docs Repo Only)
-- System shall provide a separate GitHub App (Docs App) used **only** to write documentation to the configured docs repository
-- Docs App shall request: `contents:write`, `pull_requests:write`, `metadata:read` permissions
-- Docs App does not need to subscribe to `push` events (no indexing from docs repo)
-- System shall guide the user to install the Docs App and grant access to the docs repositories selected for projects
-- System shall verify, per project, that the configured docs repo is authorized under the Docs App installation before opening any PRs
+**Authentication Resolution (Precedence Order)**
+1. If GitHub Apps configured + installation IDs available → use installation tokens
+2. Else if OAuth token available → use OAuth token
+3. Else → fail with authentication error
 
 #### FR-PROJ-01: Projects (Repo + Docs Repo)
 - System shall treat a **project** as: 1 connected **code repo** (GitHub) + 1 configured **docs repo** (GitHub) + a fixed tracked code branch
@@ -60,16 +72,18 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - The tracked code branch shall be immutable after project creation (to change it, create a new project)
 
 #### FR-GH-02: Repository Connection (Project Creation)
-- After Reader App installation, user shall be able to create a project by selecting a source code repo to connect to Graphfly
-- System shall list all repos accessible via the Reader App installation
+- After authentication (OAuth or GitHub Apps), user shall be able to create a project by selecting a source code repo to connect to Graphfly
+- System shall list all repos accessible via the active authentication method (OAuth scope or App installation)
 - Each connected repo (project) shall get its own graph in the system
-- On project creation, system shall record the repo’s tracked code branch (defaults to the repo default branch unless otherwise selected during creation)
+- On project creation, system shall record the repo's tracked code branch (defaults to the repo default branch unless otherwise selected during creation)
 
 #### FR-GH-03: Docs Repository Configuration
 - Each project shall set exactly one "docs repo" — the target for documentation PRs
 - Docs repo shall be explicitly selected by the user as part of project creation (and is immutable by default)
-- System shall require the Docs App to be installed and the docs repo to be authorized before opening any PRs
-- System shall enforce that the docs repo is **separate** from the project’s connected source repo
+- System shall verify write access to the docs repo before opening any PRs:
+  - **OAuth mode**: verify OAuth token has `repo` scope
+  - **GitHub Apps mode**: verify Docs App installation and authorization
+- System shall enforce that the docs repo is **separate** from the project's connected source repo
 
 #### FR-GH-06: Create Docs Repo (Onboarding)
 - System shall allow an Owner/Admin to create a new empty docs repository in GitHub from the SaaS UI during project creation
@@ -78,24 +92,28 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
   - repo name
   - visibility (private/public)
   - default branch name (optional; defaults to GitHub default)
-- After creation, system shall guide the user to install the Docs App on the new docs repo and verify access
+- After creation, system shall verify write access:
+  - **OAuth mode**: uses OAuth token (already has repo write access)
+  - **GitHub Apps mode**: guides user to install the Docs App on the new docs repo
 - If automatic creation is blocked (missing permissions or org policy), system shall provide a guided fallback:
-  - deep-link to GitHub “New repository” with the intended repo name
+  - deep-link to GitHub "New repository" with the intended repo name
   - return to Graphfly for verification and selection
-- System shall hard-fail docs writes until the project’s docs repo is configured and Docs App verification succeeds
+- System shall hard-fail docs writes until the project's docs repo is configured and write access is verified
 - Docs repo creation, verification, and selection shall be recorded in the audit log
 
 #### FR-GH-04: Webhook Processing
-- System shall receive and validate GitHub push webhooks (HMAC-SHA256 signature)
-- System shall only process pushes to the project’s tracked code branch
+- System shall receive and validate GitHub push webhooks (HMAC-SHA256 signature) when GitHub Apps mode is active
+- **OAuth mode**: webhooks require manual user configuration OR future polling-based change detection
+- System shall only process pushes to the project's tracked code branch
 - System shall extract the list of added, modified, and removed files from the push payload
 - System shall handle the case of removed files (delete associated graph nodes)
 
 #### FR-GH-05: Enforced No-Write To Source Code Repos
-- System shall not request or possess `contents:write` permission on connected source code repositories
-- System shall only write files to the configured docs repository for the project (via the Docs App)
+- System shall only write files to the configured docs repository for the project (never to source repos)
 - System shall never open a PR that targets a source code repository
 - System shall hard-fail any attempted write operation where the target repo is not the configured docs repo for the project
+- **GitHub Apps mode**: enforced via separate Reader (read-only) and Docs (write-only) apps
+- **OAuth mode**: enforced via runtime validation (docs repo guard checks before any write operation)
 
 ---
 
@@ -338,10 +356,10 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 - Each user can belong to one or more organizations
 
 #### FR-TM-02: Role-Based Access Control
-- System shall enforce 4 roles: Owner, Admin, Developer, Viewer
+- System shall enforce 4 roles: Owner, Admin, Member, Viewer
 - Owner: all permissions + delete org + billing
 - Admin: manage members + repos + docs repo + trigger reindex + edit doc blocks
-- Developer: view graph + view docs + trigger single-block regeneration
+- Member: view graph + view docs + trigger single-block regeneration
 - Viewer: view graph + view docs (read-only)
 
 #### FR-TM-03: Member Invitations
@@ -355,7 +373,7 @@ Graphfly keeps your documentation truthful, automatically. By grounding every do
 
 #### FR-RT-01: Indexing Progress
 - Users shall see live indexing progress: percentage, current file, nodes/edges processed
-- Progress updates shall arrive via WebSocket (Socket.IO)
+- Progress updates shall arrive via WebSocket (`/ws`)
 - When indexing completes, user shall see a toast notification with summary stats
 
 #### FR-RT-02: Agent Activity Streaming
@@ -429,7 +447,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 | Full index (1,000 files) | <300s | End-to-end wall clock |
 | Doc agent run (10 blocks) | <120s | End-to-end including LLM calls |
 | API response (all list endpoints) | <500ms p99 | Including DB query |
-| WebSocket event delivery | <2s from event | Graph → Socket.IO → browser |
+| WebSocket event delivery | <2s from event | Graph → WebSocket → browser |
 
 ### 3.2 Reliability
 
@@ -444,7 +462,7 @@ The tables below are the canonical UX flows for docs repo creation, browsing, ma
 - **Tenant isolation**: PostgreSQL RLS — tenant A's data is physically inaccessible to tenant B's queries
 - **GitHub secrets**: Reader + Docs App private keys stored in a secrets manager (Doppler/AWS Secrets Manager)
 - **Webhook verification**: All GitHub webhooks validated with HMAC-SHA256 before processing
-- **JWT validation**: All API requests validated against Clerk public key
+- **JWT validation**: All API requests validated against Graphfly JWT secret (HS256) in `GRAPHFLY_AUTH_MODE=jwt`
 - **Code not executed**: Graphfly only reads source files, never executes user code
 - **Clone cleanup**: Ephemeral clones deleted after indexing completes
 
@@ -539,7 +557,7 @@ The following features are explicitly out of scope for V1 and will be addressed 
 
 - **Graph versions / historical views** — time-travel / per-commit snapshots of the Code Intelligence Graph
 - **PR branch indexing** — only the project’s tracked code branch is indexed (no PR refs)
-- **Multiple LLM providers** — Claude only for V1
+- **Multiple LLM providers** — OpenRouter only for V1
 - **Custom doc templates** — standard structure only
 - **Doc block locks / pinning** — prevent agent from modifying specific blocks (manual override protection)
 - **Webhook to Slack/email** — no notification integrations

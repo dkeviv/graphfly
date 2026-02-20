@@ -34,27 +34,27 @@ Typography:
   Code:     JetBrains Mono (signatures, file paths, line numbers)
 
 Color Palette:
-  Background:     #FFFFFF (white)
-  Surface:        #F9FAFB (gray-50, cards, sidebars)
-  Border:         #E5E7EB (gray-200)
-  Border-focus:   #4F46E5 (indigo-600)
+  Background:     #0B1220 (workspace)
+  Surface:        #0F1A30 (top nav + cards)
+  Surface-2:      #101F3B (inputs + rail items)
+  Border:         rgba(231, 238, 252, 0.12)
+  Border-focus:   rgba(122, 162, 255, 0.65)
 
-  Text-primary:   #111827 (gray-900)
-  Text-secondary: #6B7280 (gray-500)
-  Text-muted:     #9CA3AF (gray-400)
+  Text-primary:   #E7EEFC
+  Text-secondary: #A9B7D6
+  Text-muted:     rgba(231, 238, 252, 0.65)
 
-  Primary:        #4F46E5 (indigo-600)
-  Primary-hover:  #4338CA (indigo-700)
-  Primary-bg:     #EEF2FF (indigo-50)
+  Primary:        #7AA2FF
+  Primary-hover:  #5B8CFF
 
-  Success:        #10B981 (emerald-500)
-  Warning:        #F59E0B (amber-500)
-  Error:          #EF4444 (red-500)
+  Success:        #2DD4BF
+  Warning:        #F59E0B
+  Error:          #FF5F6D
 
-  Node-function:  #4F46E5 (indigo)
-  Node-class:     #10B981 (emerald)
-  Node-module:    #6B7280 (gray)
-  Node-package:   #F59E0B (amber)
+  Node-function:  #7AA2FF
+  Node-class:     #2DD4BF
+  Node-module:    #A9B7D6
+  Node-package:   #F59E0B
 
 Spacing:  8px grid
 Radius:   rounded-lg (8px) for cards, rounded-md (6px) for buttons
@@ -100,7 +100,7 @@ Column 2 and Column 3 are independently scrollable.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│ [Logo] [Project ▾] [Code: main (locked)] [Docs: main ▾]      [Open PR] [👤]│
+│ [Logo] [Project ▾] [Code: main (locked)] [Docs: main ▾] [Model: … ▾] [Open PR] [👤]│
 ├──────────┬──────────────────────────────┬─────────────────────────────────┤
 │ SIDEBAR  │ Column 2 (Context Panel)     │ Column 3 (Canvas / Viewer)      │
 │          │ (scrollable)                 │ (scrollable)                    │
@@ -117,6 +117,7 @@ Top bar rules:
 - **Project dropdown** is the primary navigation. Creating a new project triggers repo + branch selection.
 - **Code branch** is selected at project creation and **cannot be changed** for an existing project (create a new project instead).
 - **Docs branch** is selectable for viewing/previewing docs (`default` vs Graphfly-created preview branches from PR runs).
+- **Model** selects the LLM model used by the assistant + background agents (when LLM is configured). In Phase‑1, this is org-scoped.
 - **Open PR** is the single publishing action for docs changes (manual edits and assistant-drafted edits).
 
 ### 2.2 Navigation Modes
@@ -246,7 +247,64 @@ Layout: Centered, 400px wide, vertically centered
 - **Code repo** + **tracked code branch** (locked after creation)
 - **Docs repo** (Graphfly writes PRs to this repo only)
 
-Project creation is a single guided flow (inspired by v0), and gates indexing until access is verified.
+Project creation is a single guided flow (inspired by v0).
+
+**OAuth Mode (Default / Simple Path)**
+
+```
+Create your first project
+
+┌────────────────────────────────────────────────────────────┐
+│ GitHub Connected ✓                                          │
+│ Using OAuth access from sign-in                             │
+│                                                            │
+│ Code repo                                                   │
+│ [ owner/my-api                                      ▼ ]     │
+│ Tracked branch (locked):  main                              │
+│                                                            │
+│ Docs repo                                                   │
+│ [ owner/my-api-docs                                 ▼ ]     │
+│ or:  [+ Create new docs repo]                               │
+│                                                            │
+│                                    [Create project →]       │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Behavior (OAuth Mode):**
+- OAuth token from sign-in is used for all GitHub operations (no separate app installs needed)
+- Repo lists show all repos the user has access to via OAuth scope
+- Creating a new docs repo uses the OAuth token (Apps are optional, not required)
+- Creating a project immediately enqueues initial indexing
+- Changing the code repo or tracked branch requires creating a new project (projects are immutable by default)
+
+**GitHub Apps Mode (Enterprise / Optional)**
+
+```
+Create your first project
+
+┌────────────────────────────────────────────────────────────┐
+│ GitHub Apps                                                 │
+│ Reader App (read-only; index code)   [Verified ✓]          │
+│ Docs App   (write docs PRs only)     [Verified ✓]          │
+│                                                            │
+│ Code repo                                                   │
+│ [ owner/my-api                                      ▼ ]     │
+│ Tracked branch (locked):  main                              │
+│                                                            │
+│ Docs repo                                                   │
+│ [ owner/my-api-docs                                 ▼ ]     │
+│ or:  [+ Create new docs repo]                               │
+│                                                            │
+│                                    [Create project →]       │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Behavior (GitHub Apps Mode):**
+- If GitHub Apps are already installed, shows "Verified ✓"
+- If not installed, shows "Install / Verify →" buttons
+- Repo lists are limited to repos accessible under the relevant GitHub App installation
+- Apps provide fine-grained permissions + automatic webhook subscriptions
+- Enabled when `GITHUB_APP_ID` environment variable is configured
 
 ```
 Create your first project

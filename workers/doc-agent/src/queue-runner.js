@@ -10,6 +10,8 @@ import { createDocWorker } from './doc-worker.js';
 import { GitHubDocsWriter } from '../../../packages/github-service/src/docs-writer.js';
 import { LocalDocsWriter } from '../../../packages/github-service/src/local-docs-writer.js';
 import { createRealtimePublisherFromEnv } from '../../../packages/realtime/src/publisher.js';
+import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-store.js';
+import { resolveGitHubWriteToken } from '../../../packages/github-service/src/unified-auth.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -39,6 +41,7 @@ async function main() {
   const usageCounters = await createUsageCountersFromEnv();
   const realtime = createRealtimePublisherFromEnv() ?? null;
   const lockStore = await createLockStoreFromEnv();
+  const secrets = await createSecretsStoreFromEnv();
 
   const docsRepoPath = process.env.DOCS_REPO_PATH ?? null;
   const appId = process.env.GITHUB_APP_ID ?? '';
@@ -47,14 +50,28 @@ async function main() {
   const docsWriterFactory = async ({ configuredDocsRepoFullName, tenantId }) => {
     const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
     const docsInstallId = org?.githubDocsInstallId ?? null;
-    return docsRepoPath
-      ? new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath })
-      : new GitHubDocsWriter({
-          configuredDocsRepoFullName,
-          appId: appId || null,
-          privateKeyPem,
-          installationId: docsInstallId
-        });
+    if (docsRepoPath) {
+      return new LocalDocsWriter({ configuredDocsRepoFullName, docsRepoPath });
+    }
+
+    let token = null;
+    try {
+      token = await resolveGitHubWriteToken({ tenantId, org, secrets });
+    } catch (e) {
+      // Best-effort; worker will return stub PRs when auth is missing (dev),
+      // and doc-worker will fail-fast in prod when cloud sync is required.
+      console.warn('docs_writer_no_auth', { tenantId, error: String(e?.message ?? e) });
+      token = null;
+    }
+
+    return new GitHubDocsWriter({
+      configuredDocsRepoFullName,
+      token: token || null,
+      // Legacy GitHub App fields (deprecated; unified auth handles this)
+      appId: appId || null,
+      privateKeyPem,
+      installationId: docsInstallId
+    });
   };
 
   const worker = createDocWorker({ store, docsWriter: docsWriterFactory, docStore, entitlementsStore: entitlements, usageCounters, realtime, lockStore });

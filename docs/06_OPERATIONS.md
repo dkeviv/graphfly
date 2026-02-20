@@ -154,23 +154,25 @@ This repository includes a local/test mode that avoids external dependencies and
 - Apply schema (requires `pg` dependency in your environment):
   - `node apps/cli/src/graphfly.js pg-migrate --database-url "$DATABASE_URL"`
 
-**OpenClaw remote mode**
+**LLM provider mode (OpenRouter)**
 - Set:
-  - `OPENCLAW_GATEWAY_URL`
-  - `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_TOKEN`)
-- By default, if `OPENCLAW_GATEWAY_URL` is set, Graphfly uses the remote OpenClaw gateway (LLM-agentic mode).
-- In `GRAPHFLY_MODE=prod`, OpenClaw remote is required by default (fail-fast if missing).
-- Emergency override: `GRAPHFLY_OPENCLAW_REQUIRED=0` to allow deterministic/local mode in prod (not recommended).
-- To force deterministic local mode in dev/tests, set `OPENCLAW_USE_REMOTE=0` (or `false`).
+  - `OPENROUTER_API_KEY`
+  - `OPENROUTER_BASE_URL` (optional; default `https://openrouter.ai/api/v1`)
+  - `GRAPHFLY_LLM_MODEL` (optional; default `openai/gpt-4o-mini`)
+- In `GRAPHFLY_MODE=prod`, LLM is required by default (fail-fast if missing) via `GRAPHFLY_LLM_REQUIRED=1`.
+- Emergency override: `GRAPHFLY_LLM_REQUIRED=0` to allow deterministic/local mode in prod (not recommended).
+- In dev/tests, if `OPENROUTER_API_KEY` is unset, Graphfly uses deterministic local tool loops for stability and reproducibility.
 
 **Key environment variables**
 - `SOURCE_REPO_ROOT`: local filesystem path to the **source repo** to index (read-only). Default: `fixtures/sample-repo`.
 - `DOCS_REPO_FULL_NAME`: configured docs repo identifier (string). Default: `org/docs`.
 - `DOCS_REPO_PATH`: local filesystem path to a **separate docs git repository**. When set, docs updates are written by creating a new branch + commit (simulating a PR) and never touch the source repo.
+- `OPENROUTER_API_KEY`: OpenRouter API key used by tool-loop agents (assistant/doc/graph) when LLM mode is enabled.
+- `GRAPHFLY_LLM_MODEL`: selected OpenRouter model id (can also be set per org via UI).
 - `GITHUB_WEBHOOK_SECRET`: secret used to verify GitHub `push` webhooks (HMAC-SHA256).
 - `STRIPE_WEBHOOK_SECRET`: secret used to verify Stripe webhook signatures.
- - `DATABASE_URL`: Postgres connection string (enables DB-backed graph store when `GRAPHFLY_GRAPH_STORE=pg`).
- - `GRAPHFLY_GRAPH_STORE`: set to `pg` to use Postgres-backed Code Intelligence Graph store.
+- `DATABASE_URL`: Postgres connection string (enables DB-backed graph store when `GRAPHFLY_GRAPH_STORE=pg`).
+- `GRAPHFLY_GRAPH_STORE`: set to `pg` to use Postgres-backed Code Intelligence Graph store.
 
 **Operational guardrails (must hold in all environments)**
 - Documentation writes are denied unless the target repo matches the configured docs repo.

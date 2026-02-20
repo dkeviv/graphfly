@@ -16,19 +16,24 @@ function assertProdEnv(env) {
   if (String(env.GRAPHFLY_AUTH_MODE ?? '') !== 'jwt') throw new Error('missing_env:GRAPHFLY_AUTH_MODE=jwt');
   if (String(env.GRAPHFLY_QUEUE_MODE ?? '') !== 'pg') throw new Error('missing_env:GRAPHFLY_QUEUE_MODE=pg');
 
-  // GitHub: required for indexing and docs PRs in the cloud.
-  req(env, 'GITHUB_APP_ID');
-  req(env, 'GITHUB_APP_PRIVATE_KEY');
+  // GitHub OAuth: used for user sign-in + OAuth-first onboarding (FR-GH-01 Mode 1).
+  req(env, 'GITHUB_OAUTH_CLIENT_ID');
+  req(env, 'GITHUB_OAUTH_CLIENT_SECRET');
+  req(env, 'GITHUB_OAUTH_REDIRECT_URI');
+
+  // Webhooks: required for automatic incremental indexing. In OAuth mode this is manually configured by the user.
   req(env, 'GITHUB_WEBHOOK_SECRET');
 
-  const openclawReqRaw = String(env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
-  const openclawRequired = !(openclawReqRaw === '0' || openclawReqRaw === 'false');
-  if (openclawRequired) {
-    req(env, 'OPENCLAW_GATEWAY_URL');
-    if (!env.OPENCLAW_GATEWAY_TOKEN && !env.OPENCLAW_TOKEN) throw new Error('missing_env:OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_TOKEN)');
-    const envRemote = String(env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
-    if (envRemote === '0' || envRemote === 'false') throw new Error('missing_env:OPENCLAW_USE_REMOTE must not disable remote in prod');
+  // GitHub Apps (optional enterprise mode / least-privilege): require both if either is set.
+  const appsMode = Boolean(env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY);
+  if (appsMode) {
+    req(env, 'GITHUB_APP_ID');
+    req(env, 'GITHUB_APP_PRIVATE_KEY');
   }
+
+  const llmReqRaw = String(env.GRAPHFLY_LLM_REQUIRED ?? '1').trim().toLowerCase();
+  const llmRequired = !(llmReqRaw === '0' || llmReqRaw === 'false');
+  if (llmRequired) req(env, 'OPENROUTER_API_KEY');
 }
 
 async function main() {

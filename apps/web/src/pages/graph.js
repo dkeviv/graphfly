@@ -293,6 +293,8 @@ export function renderGraphPage({ state, pageEl }) {
     if (!uid) return;
     const prev = focusSymbolUid;
     focusSymbolUid = uid;
+    state.graphFocusSymbolUid = uid;
+    localStorage.setItem('graphfly_graph_focus', uid);
     const t = ++token;
 
     if (prev && prev !== uid) {
@@ -663,6 +665,14 @@ export function renderGraphPage({ state, pageEl }) {
   );
 
   pageEl.prepend(bannerEl);
+
+  const initialFocus = state.graphFocusSymbolUid ? String(state.graphFocusSymbolUid).trim() : '';
+  if (initialFocus) {
+    setTimeout(() => {
+      if (!pageEl.isConnected || cancelled) return;
+      setFocus(initialFocus).catch(() => {});
+    }, 0);
+  }
 
   return () => {
     cancelled = true;

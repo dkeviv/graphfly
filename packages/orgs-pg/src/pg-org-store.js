@@ -28,7 +28,7 @@ export class PgOrgStore {
   async getOrg({ tenantId }) {
     assertUuid(tenantId, 'tenantId');
     const res = await this._c.query(
-      `SELECT id, name, slug, display_name, plan, github_reader_install_id, github_docs_install_id, docs_repo_full_name, stripe_customer_id
+      `SELECT id, name, slug, display_name, plan, llm_model, github_reader_install_id, github_docs_install_id, docs_repo_full_name, stripe_customer_id
        FROM orgs
        WHERE id=$1
        LIMIT 1`,
@@ -42,6 +42,7 @@ export class PgOrgStore {
       slug: row.slug ?? null,
       displayName: row.display_name ?? null,
       plan: normalizePlan(row.plan),
+      llmModel: row.llm_model ?? null,
       githubReaderInstallId: row.github_reader_install_id ?? null,
       githubDocsInstallId: row.github_docs_install_id ?? null,
       docsRepoFullName: row.docs_repo_full_name ?? null,
@@ -63,10 +64,11 @@ export class PgOrgStore {
          slug=COALESCE($3, slug),
          display_name=COALESCE($4, display_name),
          plan=COALESCE($5, plan),
-         github_reader_install_id=COALESCE($6, github_reader_install_id),
-         github_docs_install_id=COALESCE($7, github_docs_install_id),
-         docs_repo_full_name=COALESCE($8, docs_repo_full_name),
-         stripe_customer_id=COALESCE($9, stripe_customer_id),
+         llm_model=COALESCE($6, llm_model),
+         github_reader_install_id=COALESCE($7, github_reader_install_id),
+         github_docs_install_id=COALESCE($8, github_docs_install_id),
+         docs_repo_full_name=COALESCE($9, docs_repo_full_name),
+         stripe_customer_id=COALESCE($10, stripe_customer_id),
          updated_at=now()
        WHERE id=$1`,
       [
@@ -75,6 +77,7 @@ export class PgOrgStore {
         p.slug !== undefined ? (p.slug ?? null) : null,
         p.displayName !== undefined ? (p.displayName ?? null) : null,
         p.plan !== undefined ? plan : null,
+        p.llmModel !== undefined ? (p.llmModel ?? null) : null,
         p.githubReaderInstallId !== undefined ? (p.githubReaderInstallId ?? null) : null,
         p.githubDocsInstallId !== undefined ? (p.githubDocsInstallId ?? null) : null,
         p.docsRepoFullName !== undefined ? (p.docsRepoFullName ?? null) : null,
@@ -85,4 +88,3 @@ export class PgOrgStore {
     return this.getOrg({ tenantId });
   }
 }
-

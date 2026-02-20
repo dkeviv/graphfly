@@ -25,10 +25,18 @@ export async function enqueueInitialFullIndexOnRepoCreate({
     throw err;
   }
 
-  const readerToken = await resolveGitHubReaderToken({ tenantId, org });
-  if (!readerToken || !org?.githubReaderInstallId) {
-    const err = new Error('github_reader_app_not_configured');
-    err.code = 'github_reader_app_not_configured';
+  let readerToken = null;
+  try {
+    readerToken = await resolveGitHubReaderToken({ tenantId, org });
+  } catch (e) {
+    const err = new Error('github_auth_not_configured');
+    err.code = 'github_auth_not_configured';
+    err.cause = e;
+    throw err;
+  }
+  if (!readerToken) {
+    const err = new Error('github_auth_not_configured');
+    err.code = 'github_auth_not_configured';
     throw err;
   }
 
@@ -43,7 +51,6 @@ export async function enqueueInitialFullIndexOnRepoCreate({
     throw err;
   }
 
-  const cloneAuth = { username: 'x-access-token', password: readerToken };
   return indexQueue.add('index.run', {
     tenantId,
     repoId: repo.id,
@@ -51,8 +58,9 @@ export async function enqueueInitialFullIndexOnRepoCreate({
     sha,
     changedFiles: [],
     removedFiles: [],
+    llmModel: org?.llmModel ?? null,
     docsRepoFullName: configuredDocsRepoFullName,
     cloneSource: info.cloneUrl ?? null,
-    cloneAuth
+    // IMPORTANT: do not persist auth tokens in durable queue payloads (docs/05_SECURITY.md).
   });
 }

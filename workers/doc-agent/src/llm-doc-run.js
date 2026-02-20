@@ -1,4 +1,4 @@
-import { runOpenClawToolLoop } from '../../../packages/openclaw-client/src/openresponses.js';
+import { runOpenRouterToolLoop } from '../../../packages/llm-openrouter/src/tool-loop.js';
 import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/validate.js';
 import { renderContractDocBlock } from './doc-block-render.js';
 import { traceFlow } from '../../../packages/cig/src/trace.js';
@@ -175,7 +175,7 @@ function safeString(v) {
   return sanitizeString(s, { maxLen: 600 });
 }
 
-function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName, triggerSha, entrypointKeys, symbolUids }) {
+function makeLocalDocPrAgentProvider({ tenantId, repoId, store, docsRepoFullName, triggerSha, entrypointKeys, symbolUids }) {
   let callCount = 0;
   let cachedEntrypoints = null;
   let cachedPublicNodes = null;
@@ -189,33 +189,34 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
         status: 200,
         text: '',
         json: {
-          id: 'resp_1',
-          output: [
+          id: 'chatcmpl_local_docspr_1',
+          choices: [
             {
-              type: 'function_call',
-              name: 'flows_entrypoints_list',
-              call_id: 'call_entrypoints',
-              arguments: JSON.stringify({})
-            },
-            {
-              type: 'function_call',
-              name: 'public_nodes_list',
-              call_id: 'call_public_nodes',
-              arguments: JSON.stringify({})
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  { id: 'call_entrypoints', type: 'function', function: { name: 'flows_entrypoints_list', arguments: JSON.stringify({}) } },
+                  { id: 'call_public_nodes', type: 'function', function: { name: 'public_nodes_list', arguments: JSON.stringify({}) } }
+                ]
+              }
             }
           ]
         }
       };
     }
 
-    const inputs = Array.isArray(body?.input) ? body.input : [];
     const outputsByCallId = new Map();
-    for (const item of inputs) {
-      if (item?.type !== 'function_call_output') continue;
+    const messages = Array.isArray(body?.messages) ? body.messages : [];
+    for (const m of messages) {
+      if (m?.role !== 'tool') continue;
+      const callId = m?.tool_call_id ?? null;
+      if (!callId) continue;
       try {
-        outputsByCallId.set(item.call_id, JSON.parse(item.output));
+        outputsByCallId.set(callId, JSON.parse(String(m.content ?? 'null')));
       } catch {
-        outputsByCallId.set(item.call_id, null);
+        outputsByCallId.set(callId, null);
       }
     }
 
@@ -224,21 +225,15 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
       cachedEntrypoints = entrypoints;
       const publicNodes = outputsByCallId.get('call_public_nodes') ?? [];
       cachedPublicNodes = publicNodes;
-      const calls = [];
+      const toolCalls = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const ep = entrypoints[i];
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
-        calls.push({
-          type: 'function_call',
-          name: 'contracts_get',
-          call_id: `call_contracts_flow_${i}`,
-          arguments: JSON.stringify({ symbolUid })
-        });
-        calls.push({
-          type: 'function_call',
-          name: 'flows_trace',
-          call_id: `call_trace_flow_${i}`,
-          arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 })
+        toolCalls.push({ id: `call_contracts_flow_${i}`, type: 'function', function: { name: 'contracts_get', arguments: JSON.stringify({ symbolUid }) } });
+        toolCalls.push({
+          id: `call_trace_flow_${i}`,
+          type: 'function',
+          function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 }) }
         });
       }
 
@@ -246,26 +241,25 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
         const n = publicNodes[i];
         const symbolUid = n.symbol_uid ?? n.symbolUid;
         if (!symbolUid) continue;
-        calls.push({
-          type: 'function_call',
-          name: 'contracts_get',
-          call_id: `call_contracts_public_${i}`,
-          arguments: JSON.stringify({ symbolUid })
-        });
+        toolCalls.push({ id: `call_contracts_public_${i}`, type: 'function', function: { name: 'contracts_get', arguments: JSON.stringify({ symbolUid }) } });
       }
-      return { status: 200, text: '', json: { id: 'resp_2', output: calls } };
+      return {
+        status: 200,
+        text: '',
+        json: { id: 'chatcmpl_local_docspr_2', choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: toolCalls } }] }
+      };
     }
 
     if (callCount === 3) {
       const entrypoints = cachedEntrypoints ?? (await store.listFlowEntrypoints({ tenantId, repoId }));
       const publicNodes = cachedPublicNodes ?? [];
-      const calls = [];
+      const toolCalls = [];
       for (let i = 0; i < entrypoints.length; i++) {
         const ep = entrypoints[i];
         const symbolUid = ep.entrypoint_symbol_uid ?? ep.symbol_uid;
         const contractPayload = outputsByCallId.get(`call_contracts_flow_${i}`);
         const tracePayload = outputsByCallId.get(`call_trace_flow_${i}`);
-        if (!contractPayload) throw new Error('local_openclaw_missing_contract_payload');
+        if (!contractPayload) throw new Error('local_llm_missing_contract_payload');
 
         const md =
           renderContractDocBlock(contractPayload).trimEnd() +
@@ -288,11 +282,10 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
             }))
           : [{ symbolUid, filePath: contractPayload?.location?.filePath ?? null, lineStart: contractPayload?.location?.lineStart ?? null, sha: triggerSha }];
 
-        calls.push({
-          type: 'function_call',
-          name: 'docs_upsert_block',
-          call_id: `call_docs_flow_${i}`,
-          arguments: JSON.stringify({ docFile, blockAnchor, blockType: 'flow', content: md, evidence })
+        toolCalls.push({
+          id: `call_docs_flow_${i}`,
+          type: 'function',
+          function: { name: 'docs_upsert_block', arguments: JSON.stringify({ docFile, blockAnchor, blockType: 'flow', content: md, evidence }) }
         });
       }
 
@@ -320,15 +313,18 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
           }
         ];
 
-        calls.push({
-          type: 'function_call',
-          name: 'docs_upsert_block',
-          call_id: `call_docs_public_${i}`,
-          arguments: JSON.stringify({ docFile, blockAnchor, blockType, content: md, evidence })
+        toolCalls.push({
+          id: `call_docs_public_${i}`,
+          type: 'function',
+          function: { name: 'docs_upsert_block', arguments: JSON.stringify({ docFile, blockAnchor, blockType, content: md, evidence }) }
         });
       }
 
-      return { status: 200, text: '', json: { id: 'resp_3', output: calls } };
+      return {
+        status: 200,
+        text: '',
+        json: { id: 'chatcmpl_local_docspr_3', choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: toolCalls } }] }
+      };
     }
 
     if (callCount === 4) {
@@ -342,19 +338,30 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
         status: 200,
         text: '',
         json: {
-          id: 'resp_4',
-          output: [
+          id: 'chatcmpl_local_docspr_4',
+          choices: [
             {
-              type: 'function_call',
-              name: 'github_create_pr',
-              call_id: 'call_pr',
-              arguments: JSON.stringify({
-                targetRepoFullName: docsRepoFullName,
-                title: 'Graphfly: update docs',
-                body: 'Automated update based on Code Intelligence Graph evidence.',
-                branchName: `graphfly/docs/${Date.now()}`,
-                files
-              })
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'call_pr',
+                    type: 'function',
+                    function: {
+                      name: 'github_create_pr',
+                      arguments: JSON.stringify({
+                        targetRepoFullName: docsRepoFullName,
+                        title: 'Graphfly: update docs',
+                        body: 'Automated update based on Code Intelligence Graph evidence.',
+                        branchName: `graphfly/docs/${Date.now()}`,
+                        files
+                      })
+                    }
+                  }
+                ]
+              }
             }
           ]
         }
@@ -365,14 +372,21 @@ function makeLocalDocPrAgentGateway({ tenantId, repoId, store, docsRepoFullName,
       status: 200,
       text: '',
       json: {
-        id: `resp_${callCount}`,
-        output_text: 'ok'
+        id: `chatcmpl_local_docspr_${callCount}`,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }]
       }
     };
   };
 }
 
-export async function runDocPrWithOpenClaw({
+function isLlmRequired(env = process.env) {
+  const mode = String(env.GRAPHFLY_MODE ?? 'dev').toLowerCase();
+  if (mode !== 'prod') return false;
+  const v = String(env.GRAPHFLY_LLM_REQUIRED ?? '1').trim().toLowerCase();
+  return !(v === '0' || v === 'false');
+}
+
+export async function runDocPrWithLlm({
   store,
   docStore,
   docsWriter,
@@ -383,7 +397,8 @@ export async function runDocPrWithOpenClaw({
   prRunId = null,
   entrypointKeys = null,
   symbolUids = null,
-  openclaw = null,
+  llmModel = null,
+  llm = null,
   onEvent = null
 }) {
   if (!docStore) throw new Error('docStore is required');
@@ -835,28 +850,19 @@ export async function runDocPrWithOpenClaw({
     }
   ];
 
-  const configuredGatewayUrlRaw = openclaw?.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? null;
-  const configuredGatewayUrl = typeof configuredGatewayUrlRaw === 'string' ? configuredGatewayUrlRaw.trim() : null;
-  const gatewayUrl = configuredGatewayUrl ? configuredGatewayUrl : 'http://local-openclaw.invalid';
-  const token = openclaw?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.OPENCLAW_TOKEN ?? '';
-  const agentId = openclaw?.agentId ?? process.env.OPENCLAW_AGENT_ID ?? 'doc-agent';
-  const model = openclaw?.model ?? process.env.OPENCLAW_MODEL ?? 'openclaw';
-  const envRemote = String(process.env.OPENCLAW_USE_REMOTE ?? '').trim().toLowerCase();
-  const useRemote =
-    typeof openclaw?.useRemote === 'boolean'
-      ? openclaw.useRemote
-      : envRemote === '0' || envRemote === 'false'
-        ? false
-        : Boolean(configuredGatewayUrl);
-  const openclawReqRaw = String(process.env.GRAPHFLY_OPENCLAW_REQUIRED ?? '1').trim().toLowerCase();
-  const openclawRequired = String(process.env.GRAPHFLY_MODE ?? 'dev').toLowerCase() === 'prod' && !(openclawReqRaw === '0' || openclawReqRaw === 'false');
-  if (openclawRequired && !useRemote) throw new Error('openclaw_remote_required');
-  if (openclawRequired && !String(token ?? '').trim()) throw new Error('openclaw_token_required');
-  const baseRequestJson =
-    openclaw?.requestJson ??
-    (useRemote
+  const apiKeyRaw = llm?.apiKey ?? process.env.OPENROUTER_API_KEY ?? '';
+  const baseUrl = llm?.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
+  const requestOverride = typeof llm?.requestJson === 'function' ? llm.requestJson : null;
+  const apiKey = String(apiKeyRaw ?? '').trim() || (requestOverride ? 'test' : '');
+  const model = llm?.model ?? llmModel ?? process.env.GRAPHFLY_LLM_MODEL ?? 'openai/gpt-4o-mini';
+  const useRemote = Boolean(requestOverride) || Boolean(String(apiKeyRaw ?? '').trim());
+  if (isLlmRequired() && !useRemote) throw new Error('llm_api_key_required');
+
+  const baseRequestJson = requestOverride
+    ? requestOverride
+    : useRemote
       ? httpRequestJson
-      : makeLocalDocPrAgentGateway({
+      : makeLocalDocPrAgentProvider({
           tenantId,
           repoId,
           store,
@@ -864,7 +870,8 @@ export async function runDocPrWithOpenClaw({
           triggerSha,
           entrypointKeys: entrypointKeys ? new Set(entrypointKeys) : null,
           symbolUids: symbolUids ? new Set(symbolUids) : null
-        }));
+        });
+
   const requestJson = useRemote
     ? makeRetryingRequestJson(baseRequestJson, {
         maxAttempts: clampInt(process.env.GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS ?? 4, { min: 1, max: 12, fallback: 4 }),
@@ -912,10 +919,9 @@ export async function runDocPrWithOpenClaw({
     return out;
   }
 
-  await runOpenClawToolLoop({
-    gatewayUrl,
-    token,
-    agentId,
+  await runOpenRouterToolLoop({
+    apiKey: useRemote ? apiKey : 'local',
+    baseUrl,
     model,
     input,
     instructions,
@@ -923,6 +929,8 @@ export async function runDocPrWithOpenClaw({
     tools,
     maxTurns,
     requestJson,
+    appTitle: 'Graphfly',
+    httpReferer: process.env.OPENROUTER_HTTP_REFERER ?? null,
     onTurn: ({ turn, maxTurns }) => emit('agent:turn', { agent: 'doc', turn, maxTurns }),
     onToolCall: ({ name, callId, args }) => emit('agent:tool_call', { agent: 'doc', name, callId, args: summarizeArgs(args) }),
     onToolResult: ({ name, callId, result }) =>

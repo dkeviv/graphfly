@@ -137,8 +137,16 @@ export class ApiClient {
     return this.getJson(`/api/v1/orgs/current?tenantId=${encodeURIComponent(this.tenantId)}`);
   }
 
-  updateCurrentOrg({ displayName, docsRepoFullName }) {
-    return this.sendJson('PUT', '/api/v1/orgs/current', { tenantId: this.tenantId, displayName, docsRepoFullName });
+  llmModels() {
+    return this.getJson(`/api/v1/llm/models?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+  
+  getAuthMode() {
+    return this.getJson(`/api/v1/auth/mode?tenantId=${encodeURIComponent(this.tenantId)}`);
+  }
+
+  updateCurrentOrg({ displayName, docsRepoFullName, llmModel }) {
+    return this.sendJson('PUT', '/api/v1/orgs/current', { tenantId: this.tenantId, displayName, docsRepoFullName, llmModel });
   }
 
   verifyDocsRepo({ docsRepoFullName = null } = {}) {
@@ -168,6 +176,11 @@ export class ApiClient {
 
   billingPortal() {
     return this.sendJson('POST', '/api/v1/billing/portal', { tenantId: this.tenantId });
+  }
+
+  submitFeedback({ repoId = null, category = 'general', message } = {}) {
+    const rid = repoId ?? this.repoId;
+    return this.sendJson('POST', '/api/v1/feedback', { tenantId: this.tenantId, repoId: rid, category, message });
   }
 
   listOrgMembers() {

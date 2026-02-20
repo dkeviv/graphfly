@@ -5,6 +5,9 @@ import { startQueueHeartbeat } from '../../../packages/stores/src/queue-heartbea
 import { createLockStoreFromEnv } from '../../../packages/stores/src/lock-store.js';
 import { createIndexerWorker } from './indexer-worker.js';
 import { createRealtimePublisherFromEnv } from '../../../packages/realtime/src/publisher.js';
+import { createOrgStoreFromEnv } from '../../../packages/stores/src/org-store.js';
+import { createSecretsStoreFromEnv } from '../../../packages/stores/src/secrets-store.js';
+import { resolveGitHubReadToken } from '../../../packages/github-service/src/unified-auth.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -20,6 +23,8 @@ async function main() {
   const graphQueue = await createQueueFromEnv({ queueName: 'graph' });
   const realtime = createRealtimePublisherFromEnv() ?? null;
   const lockStore = await createLockStoreFromEnv();
+  const orgs = await createOrgStoreFromEnv();
+  const secrets = await createSecretsStoreFromEnv();
 
   const canLease = typeof indexQueue.lease === 'function';
   const canLeaseAny = typeof indexQueue.leaseAny === 'function';
@@ -30,7 +35,19 @@ async function main() {
     throw new Error('queue_global_lease_not_supported: update queue implementation or set TENANT_ID');
   }
 
-  const worker = createIndexerWorker({ store, docQueue, docStore, graphQueue, realtime, lockStore });
+  const worker = createIndexerWorker({
+    store,
+    docQueue,
+    docStore,
+    graphQueue,
+    realtime,
+    lockStore,
+    resolveCloneAuth: async ({ tenantId }) => {
+      const org = await Promise.resolve(orgs.getOrg?.({ tenantId }));
+      const token = await resolveGitHubReadToken({ tenantId, org, secrets });
+      return token ? { username: 'x-access-token', password: token } : null;
+    }
+  });
   const lockMs = 5 * 60 * 1000;
 
   // Phase-1: single concurrency. Supports:
