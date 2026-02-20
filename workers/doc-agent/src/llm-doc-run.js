@@ -233,7 +233,7 @@ function makeLocalDocPrAgentProvider({ tenantId, repoId, store, docsRepoFullName
         toolCalls.push({
           id: `call_trace_flow_${i}`,
           type: 'function',
-          function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 }) }
+          function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: traceDepth }) }
         });
       }
 
@@ -405,10 +405,11 @@ export async function runDocPrWithLlm({
   if (!docsWriter) throw new Error('docsWriter is required');
   if (typeof docsRepoFullName !== 'string' || docsRepoFullName.length === 0) throw new Error('docsRepoFullName is required');
 
-  const maxTurns = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TURNS ?? 20, { min: 5, max: 80, fallback: 20 });
+  const maxTurns = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TURNS ?? 40, { min: 5, max: 80, fallback: 40 });
   const maxToolCalls = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TOOL_CALLS ?? 8000, { min: 20, max: 100_000, fallback: 8000 });
-  const maxTraceNodes = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES ?? 250, { min: 10, max: 20_000, fallback: 250 });
-  const maxTraceEdges = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES ?? 400, { min: 10, max: 100_000, fallback: 400 });
+  const traceDepth = clampInt(process.env.GRAPHFLY_DOC_AGENT_TRACE_DEPTH ?? 5, { min: 1, max: 10, fallback: 5 });
+  const maxTraceNodes = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES ?? 1500, { min: 10, max: 20_000, fallback: 1500 });
+  const maxTraceEdges = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES ?? 3000, { min: 10, max: 100_000, fallback: 3000 });
   const maxEvidenceLinks = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_LINKS ?? 250, { min: 10, max: 10_000, fallback: 250 });
   const maxDocBlockChars = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_BLOCK_CHARS ?? 50_000, { min: 2000, max: 500_000, fallback: 50_000 });
   const maxExistingBlockChars = clampInt(process.env.GRAPHFLY_DOC_AGENT_MAX_EXISTING_BLOCK_CHARS ?? 10_000, { min: 500, max: 200_000, fallback: 10_000 });
@@ -629,6 +630,66 @@ export async function runDocPrWithLlm({
       })
     },
     {
+      name: 'call_site_evidence',
+      description:
+        'Returns callers of a symbol (incoming CALLS edges) with their signatures, parameter info, and call-site file/line locations. ' +
+        'Use this for any symbol — especially those with thin or missing contracts (no JSDoc/docstring) — to infer parameter roles, ' +
+        'return-type usage, and behavioural constraints from how the function is actually called in the codebase. ' +
+        'Do NOT output source code bodies. Use only signatures and structural metadata.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          symbolUid: { type: 'string' }
+        },
+        required: ['symbolUid']
+      },
+      handler: guardTool(async ({ symbolUid }) => {
+        // Incoming CALLS edges — who calls this symbol?
+        const incomingEdges = (
+          await store.listEdgesByNode({ tenantId, repoId, symbolUid, direction: 'in' })
+        ).filter((e) => e.edge_type === 'CALLS');
+
+        const callers = await Promise.all(
+          incomingEdges.map(async (e) => {
+            const callerNode = await store.getNodeBySymbolUid({
+              tenantId,
+              repoId,
+              symbolUid: e.source_symbol_uid
+            });
+            const occurrences = await store.listEdgeOccurrencesForEdge({
+              tenantId,
+              repoId,
+              sourceSymbolUid: e.source_symbol_uid,
+              edgeType: 'CALLS',
+              targetSymbolUid: symbolUid
+            });
+            return {
+              caller_symbol_uid: e.source_symbol_uid,
+              caller_qualified_name: callerNode?.qualified_name ?? null,
+              caller_node_type: callerNode?.node_type ?? null,
+              caller_signature: sanitizeString(callerNode?.signature ?? null, { maxLen: 600 }) || null,
+              // Parameter info from the caller's own contract — helps infer argument types
+              caller_parameters: callerNode?.parameters ?? null,
+              caller_return_type: callerNode?.return_type ?? null,
+              // Call-site locations: file + line range without code bodies
+              call_sites: occurrences.slice(0, 10).map((o) => ({
+                file_path: o.file_path ?? null,
+                line_start: o.line_start ?? null,
+                line_end: o.line_end ?? null
+              }))
+            };
+          })
+        );
+
+        return {
+          symbolUid,
+          callerCount: incomingEdges.length,
+          callers
+        };
+      })
+    },
+    {
       name: 'flows_trace',
       description: 'Traces a derived flow graph from an entrypoint symbol (no code bodies).',
       parameters: {
@@ -640,7 +701,7 @@ export async function runDocPrWithLlm({
         },
         required: ['startSymbolUid']
       },
-      handler: guardTool(async ({ startSymbolUid, depth = 3 }) => {
+      handler: guardTool(async ({ startSymbolUid, depth = traceDepth }) => {
         const out = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
         const nodesRaw = Array.isArray(out.nodes) ? out.nodes : [];
         const edgesRaw = Array.isArray(out.edges) ? out.edges : [];
@@ -888,7 +949,17 @@ export async function runDocPrWithLlm({
     'When new public nodes exist with no doc evidence, generate new doc blocks (undocumented_public_nodes_list).',
     'The flows_entrypoints_list and public_nodes_list tools already return only the targets for this run.',
     'Only open PRs in the configured docs repo.',
-    'Use tools to list entrypoints, fetch contracts/flows, upsert doc blocks, then create a PR.'
+    'Use tools to list entrypoints, fetch contracts/flows, upsert doc blocks, then create a PR.',
+    'Contract enrichment: after fetching a contract via contracts_get, assess whether the node has rich context ' +
+      '(populated docstring, parameters, constraints, allowableValues). If any of these are thin or absent, ' +
+      'call call_site_evidence(symbolUid) to retrieve callers and call-site locations. ' +
+      'Use caller signatures, parameter names, and call-site patterns to infer: ' +
+      '(1) what each parameter is used for and its likely type/range, ' +
+      '(2) what the return value represents based on how callers consume it, ' +
+      '(3) any invariants or constraints implied by the call patterns. ' +
+      'Write inferences in the doc block as explicit "Inferred from usage" bullets, clearly distinguished from declared facts. ' +
+      'If the contract is already fully documented, skip call_site_evidence for that node. ' +
+      'Do NOT guess beyond what the structural evidence supports. Do NOT output code bodies.'
   ].join('\n');
 
   const input = [

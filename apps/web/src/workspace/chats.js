@@ -96,35 +96,74 @@ export function renderChatsPanel({ state, rootEl, onNavigate }) {
 
   const recentActivity = [];
   let unsubscribe = null;
+
+  /** Map internal event-type + payload to a human-readable activity label. */
+  function formatActivityLabel(type, pay) {
+    switch (type) {
+      case 'index:progress': {
+        const msg = pay?.message ?? pay?.phase ?? '…';
+        const count = pay?.filesProcessed != null ? ` (${pay.filesProcessed} files)` : '';
+        return `Indexing: ${msg}${count}`;
+      }
+      case 'index:complete':
+        return '✓ Indexing complete';
+      case 'index:error':
+        return `✗ Indexing failed${pay?.message ? `: ${pay.message}` : ''}`;
+      case 'agent:turn': {
+        const turn = pay?.turn != null ? ` — turn ${pay.turn}${pay?.maxTurns != null ? `/${pay.maxTurns}` : ''}` : '';
+        return `Doc agent${turn}`;
+      }
+      case 'agent:tool_call': {
+        const toolLabels = {
+          flows_trace: 'Tracing call graph',
+          contracts_get: 'Fetching contract',
+          call_site_evidence: 'Analysing callers',
+          docs_upsert_block: 'Writing doc block',
+          neighborhood: 'Exploring graph neighbourhood',
+          impact: 'Assessing impact',
+          docs_get_block: 'Reading doc block',
+          docs_list_blocks: 'Listing doc blocks',
+        };
+        const name = String(pay?.name ?? '');
+        return toolLabels[name] ?? `Tool: ${name || 'unknown'}`;
+      }
+      case 'agent:tool_result': {
+        const name = String(pay?.name ?? '');
+        return `✓ ${name || 'tool'}`;
+      }
+      case 'assistant:tool_call':
+        return `Assistant: ${String(pay?.name ?? 'tool')}`;
+      case 'assistant:tool_result':
+        return `✓ Assistant: ${String(pay?.name ?? 'tool')}`;
+      default:
+        return type;
+    }
+  }
+
   try {
     unsubscribe = state.realtime?.subscribe?.((evt) => {
       if (!evt || evt.repoId !== state.repoId) return;
       const type = String(evt?.type ?? '');
-      if (!type.startsWith('agent:') && !type.startsWith('assistant:')) return;
+      if (!type.startsWith('agent:') && !type.startsWith('assistant:') && !type.startsWith('index:')) return;
       const p = evt?.payload ?? {};
       recentActivity.unshift({ ts: new Date().toISOString(), type, payload: p });
       if (recentActivity.length > 40) recentActivity.length = 40;
-      activityStatusEl.textContent = `Last: ${type}`;
+      const statusLabel = formatActivityLabel(type, p);
+      activityStatusEl.textContent = `Last: ${statusLabel}`;
       activitySummaryEl.textContent = `Live activity (${type})`;
       activityListEl.innerHTML = '';
       for (const item of recentActivity) {
         const t = String(item.type ?? '');
         const pay = item.payload ?? {};
-        const label =
-          t === 'agent:tool_call'
-            ? `${String(pay?.agent ?? 'agent')} tool_call ${String(pay?.name ?? '')}`
-            : t === 'agent:tool_result'
-              ? `${String(pay?.agent ?? 'agent')} tool_result ${String(pay?.name ?? '')}`
-              : t === 'assistant:tool_call'
-                ? `assistant tool_call ${String(pay?.name ?? '')}`
-                : t === 'assistant:tool_result'
-                  ? `assistant tool_result ${String(pay?.name ?? '')}`
-                  : t;
+        const label = formatActivityLabel(t, pay);
         const meta = [];
         if (pay?.summary) meta.push(String(pay.summary));
         if (pay?.error) meta.push(String(pay.error));
+        const isError = t.endsWith(':error') || Boolean(pay?.error);
+        const isDone = t.endsWith(':complete') || t === 'agent:tool_result' || t === 'assistant:tool_result';
+        const itemClass = `list__item${isError ? ' list__item--error' : isDone ? ' list__item--done' : ''}`;
         activityListEl.appendChild(
-          el('li', { class: 'list__item' }, [
+          el('li', { class: itemClass }, [
             el('div', { class: 'h' }, [label.trim()]),
             el('div', { class: 'small k' }, [meta.join(' • ') || item.ts])
           ])

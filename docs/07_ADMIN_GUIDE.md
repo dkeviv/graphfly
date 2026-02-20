@@ -155,12 +155,12 @@ Enable by running the worker:
 - `npm run worker:graph`
 
 Key env vars (guardrails):
-- `GRAPHFLY_GRAPH_AGENT_MAX_TURNS` (default 12)
-- `GRAPHFLY_GRAPH_AGENT_MAX_TOOL_CALLS` (default 300)
-- `GRAPHFLY_GRAPH_AGENT_MAX_ENTRYPOINTS` (default 25)
-- `GRAPHFLY_GRAPH_AGENT_MAX_DEPTH` (default 4)
-- `GRAPHFLY_GRAPH_AGENT_MAX_TRACE_NODES` (default 200)
-- `GRAPHFLY_GRAPH_AGENT_MAX_TRACE_EDGES` (default 300)
+- `GRAPHFLY_GRAPH_AGENT_MAX_TURNS` (default `20`) — **Enterprise: 20**
+- `GRAPHFLY_GRAPH_AGENT_MAX_TOOL_CALLS` (default `300`)
+- `GRAPHFLY_GRAPH_AGENT_MAX_ENTRYPOINTS` (default `50`) — **Enterprise: 50**
+- `GRAPHFLY_GRAPH_AGENT_MAX_DEPTH` (default `5`) — **Enterprise: 5**
+- `GRAPHFLY_GRAPH_AGENT_MAX_TRACE_NODES` (default `1500`) — **Enterprise: 1500**
+- `GRAPHFLY_GRAPH_AGENT_MAX_TRACE_EDGES` (default `3000`) — **Enterprise: 3000**
 - `GRAPHFLY_GRAPH_AGENT_LOCK_TTL_MS` (default 600000)
 - `GRAPHFLY_GRAPH_AGENT_MAX_ATTEMPTS` (default 3)
 - `GRAPHFLY_GRAPH_AGENT_RETRY_BASE_MS` (default 500)
@@ -257,16 +257,26 @@ Key env vars:
 
 Doc agent guardrails (recommended):
 - `GRAPHFLY_DOC_AGENT_LOCK_TTL_MS` (default `1800000`) — per-repo doc generation lock TTL (serializes runs)
-- `GRAPHFLY_DOC_AGENT_MAX_TURNS` (default `20`) — hard cap on agent loop turns
-- `GRAPHFLY_DOC_AGENT_MAX_TOOL_CALLS` (default `8000`) — hard cap on total tool calls per run
+- `GRAPHFLY_DOC_AGENT_MAX_TURNS` (default `40`, range `5-80`) — hard cap on agent loop turns. **Enterprise: 40. Large monolith: 60.**
+- `GRAPHFLY_DOC_AGENT_MAX_TOOL_CALLS` (default `8000`) — hard cap on total tool calls per run (DoS guard)
 - `GRAPHFLY_DOC_AGENT_HTTP_MAX_ATTEMPTS` (default `4`) — provider HTTP retry attempts (429/5xx)
 - `GRAPHFLY_DOC_AGENT_RETRY_BASE_MS` (default `250`)
 - `GRAPHFLY_DOC_AGENT_RETRY_MAX_MS` (default `5000`)
-- `GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES` / `GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES` — truncation caps for `flows_trace`
+- `GRAPHFLY_DOC_AGENT_TRACE_DEPTH` (default `5`, range `1-10`) — call-graph hops walked per entrypoint during doc generation. Depth 5 covers controller→service→repo→client→external. **Do not exceed 7 without also raising `MAX_TRACE_NODES`/`MAX_TRACE_EDGES`; beyond depth 6 you trace into framework/ORM internals. Enterprise: 5. Large monolith: 6.**
+- `GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES` (default `1500`, max `20000`) — node budget for `flows_trace`; trace returns `truncated: true` when hit. **Enterprise: 1500. Large monolith: 5000.** Raise together with `TRACE_DEPTH`.
+- `GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES` (default `3000`, max `100000`) — edge budget for `flows_trace`. **Enterprise: 3000. Large monolith: 10000.**
 - `GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_NODES` — cap on evidence links derived from a trace (local deterministic mode)
 - `GRAPHFLY_DOC_AGENT_MAX_EVIDENCE_LINKS` — cap on evidence links persisted per doc block
 - `GRAPHFLY_DOC_AGENT_MAX_BLOCK_CHARS` — reject oversized doc blocks
 - `GRAPHFLY_DOC_AGENT_MAX_EXISTING_BLOCK_CHARS` — truncate existing block content returned to the agent
+
+**Enterprise quick-start tuning set:**
+```
+GRAPHFLY_DOC_AGENT_TRACE_DEPTH=5
+GRAPHFLY_DOC_AGENT_MAX_TRACE_NODES=1500
+GRAPHFLY_DOC_AGENT_MAX_TRACE_EDGES=3000
+GRAPHFLY_DOC_AGENT_MAX_TURNS=40
+```
 
 Manual block regeneration (FR-DOC-07):
 - `POST /docs/regenerate` (admin-only) with `{ tenantId, repoId, blockId }` enqueues a single-target doc job and opens a new PR.

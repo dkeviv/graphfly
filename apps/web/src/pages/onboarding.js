@@ -548,8 +548,29 @@ export function renderOnboardingPage({ state, pageEl }) {
         state.repoId = repo.id;
         localStorage.setItem('graphfly_repo_id', repo.id);
         state.realtime?.update?.({ nextRepoId: repo.id });
-        setBanner({ kind: 'ok', text: 'Project created. Indexing started…' });
-        window.location.hash = 'app';
+        setBanner({ kind: 'info', text: 'Project created. Indexing started…' });
+        // Stay on page and track indexing progress via WebSocket.
+        let navTimer = setTimeout(() => { unsub?.(); window.location.hash = 'app'; }, 90_000);
+        let unsub;
+        unsub = state.realtime?.subscribe?.((evt) => {
+          if (!evt || evt.repoId !== repo.id) return;
+          const t = String(evt?.type ?? '');
+          const pay = evt?.payload ?? {};
+          if (t === 'index:progress') {
+            const msg = pay?.message ?? pay?.phase ?? 'processing…';
+            setBanner({ kind: 'info', text: `Indexing: ${msg}` });
+          } else if (t === 'index:complete') {
+            clearTimeout(navTimer);
+            unsub?.();
+            setBanner({ kind: 'ok', text: 'Indexing complete. Opening workspace…' });
+            setTimeout(() => { window.location.hash = 'app'; }, 800);
+          } else if (t === 'index:error') {
+            clearTimeout(navTimer);
+            unsub?.();
+            setBanner({ kind: 'error', text: `Indexing failed: ${pay?.message ?? 'unknown error'}` });
+            updateCreateProjectGate();
+          }
+        });
         return;
       }
       await refresh();
@@ -631,8 +652,29 @@ export function renderOnboardingPage({ state, pageEl }) {
         state.repoId = repo.id;
         localStorage.setItem('graphfly_repo_id', repo.id);
         state.realtime?.update?.({ nextRepoId: repo.id });
-        setBanner({ kind: 'ok', text: 'Local project created. Indexing started…' });
-        window.location.hash = 'graph';
+        setBanner({ kind: 'info', text: 'Local project created. Indexing started…' });
+        // Stay on page and track indexing progress via WebSocket.
+        let navTimer = setTimeout(() => { unsub?.(); window.location.hash = 'graph'; }, 90_000);
+        let unsub;
+        unsub = state.realtime?.subscribe?.((evt) => {
+          if (!evt || evt.repoId !== repo.id) return;
+          const t = String(evt?.type ?? '');
+          const pay = evt?.payload ?? {};
+          if (t === 'index:progress') {
+            const msg = pay?.message ?? pay?.phase ?? 'processing…';
+            setBanner({ kind: 'info', text: `Indexing: ${msg}` });
+          } else if (t === 'index:complete') {
+            clearTimeout(navTimer);
+            unsub?.();
+            setBanner({ kind: 'ok', text: 'Indexing complete. Opening graph…' });
+            setTimeout(() => { window.location.hash = 'graph'; }, 800);
+          } else if (t === 'index:error') {
+            clearTimeout(navTimer);
+            unsub?.();
+            setBanner({ kind: 'error', text: `Indexing failed: ${pay?.message ?? 'unknown error'}` });
+            localCreateBtn.removeAttribute('disabled');
+          }
+        });
         return;
       }
       await refresh();

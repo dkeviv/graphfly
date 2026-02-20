@@ -4,6 +4,12 @@ import { validateDocBlockMarkdown } from '../../../packages/doc-blocks/src/valid
 import { traceFlow } from '../../../packages/cig/src/trace.js';
 import { redactSecrets } from '../../../packages/security/src/redact.js';
 
+function clampTraceDepth(raw, fallback = 5) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, 1), 10);
+}
+
 function safeString(v) {
   if (typeof v !== 'string') return null;
   const s = v.trim();
@@ -11,7 +17,7 @@ function safeString(v) {
   return redactSecrets(s);
 }
 
-function makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store }) {
+function makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store, traceDepth }) {
   let callCount = 0;
 
   return async ({ body }) => {
@@ -31,7 +37,7 @@ function makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store }) {
                 content: null,
                 tool_calls: [
                   { id: 'call_contracts', type: 'function', function: { name: 'contracts_get', arguments: JSON.stringify({ symbolUid }) } },
-                  { id: 'call_trace', type: 'function', function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: 3 }) } }
+                  { id: 'call_trace', type: 'function', function: { name: 'flows_trace', arguments: JSON.stringify({ startSymbolUid: symbolUid, depth: traceDepth }) } }
                 ]
               }
             }
@@ -93,6 +99,9 @@ export async function generateFlowDocWithLlm({
   const node = await store.getNodeBySymbolUid({ tenantId, repoId, symbolUid });
   if (!node) throw new Error('symbol_not_found');
 
+  const traceDepth = clampTraceDepth(process.env.GRAPHFLY_DOC_AGENT_TRACE_DEPTH, 5);
+  if (!node) throw new Error('symbol_not_found');
+
   const tools = [
     {
       name: 'contracts_get',
@@ -132,7 +141,7 @@ export async function generateFlowDocWithLlm({
         },
         required: ['startSymbolUid']
       },
-      handler: async ({ startSymbolUid, depth = 3 }) => {
+      handler: async ({ startSymbolUid, depth = traceDepth }) => {
         const out = await traceFlow({ store, tenantId, repoId, startSymbolUid, depth });
         return {
           startSymbolUid: out.startSymbolUid,
@@ -172,7 +181,7 @@ export async function generateFlowDocWithLlm({
     ? requestOverride
     : useRemote
       ? undefined
-      : makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store });
+      : makeLocalDocAgentProvider({ symbolUid, tenantId, repoId, store, traceDepth });
 
   const instructions = [
     'You are Graphfly Doc Agent.',
