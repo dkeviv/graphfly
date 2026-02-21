@@ -75,6 +75,32 @@ state.toast = createToastHub({ rootEl: toastsEl });
 state.realtime = createRealtimeClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, authToken: state.authToken });
 state.realtime.connect();
 
+// ─── Auth gate ─────────────────────────────────────────────────────────────
+// In dev/none mode: no gate (GRAPHFLY_AUTH_MODE=none, oauthConnected may be false).
+// In jwt mode: if no valid token in localStorage → redirect to sign-in.
+(async () => {
+  try {
+    const api = new ApiClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, mode: state.mode, authToken: state.authToken });
+    const authInfo = await api.getAuthMode().catch(() => null);
+    if (!authInfo) return; // Can't reach API — stay in app (offline/dev graceful degradation)
+
+    // If server is in oauth mode AND we have no token AND not already connected:
+    // check if a protected endpoint returns 401 → gate to sign-in.
+    if (!authInfo.oauthConnected && !state.authToken) {
+      try {
+        await api.getCurrentOrg();
+      } catch (e) {
+        if (e?.status === 401) {
+          window.location.href = './sign-in.html';
+        }
+      }
+    }
+  } catch {
+    // Network error or API down — allow app to load (dev/offline graceful degradation)
+  }
+})();
+// ────────────────────────────────────────────────────────────────────────────
+
 // ─── Global indexing banner + agent-complete notifications ──────────────────
 const indexingBannerEl = document.getElementById('indexingBanner');
 const indexingBannerTextEl = document.getElementById('indexingBannerText');

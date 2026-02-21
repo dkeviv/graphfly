@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="description" content="Graphfly keeps your documentation truthful, automatically. Every doc block is grounded in evidence from the live Code Intelligence Graph." />
+    <title>Graphfly — Documentation That Stays True</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- ─── Top Nav ─────────────────────────────────────────────────────────── -->
+    <header class="nav" role="banner">
+      <div class="nav__inner">
+        <a href="/" class="nav__logo" aria-label="Graphfly home">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="4" r="2.5" fill="#7AA2FF"/>
+            <circle cx="4" cy="18" r="2.5" fill="#2DD4BF"/>
+            <circle cx="20" cy="18" r="2.5" fill="#7AA2FF"/>
+            <line x1="12" y1="6.5" x2="4" y2="15.5" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.7"/>
+            <line x1="12" y1="6.5" x2="20" y2="15.5" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.7"/>
+            <line x1="6.5" y1="18" x2="17.5" y2="18" stroke="#2DD4BF" stroke-width="1.5" stroke-opacity="0.5"/>
+          </svg>
+          <span>Graphfly</span>
+        </a>
+        <nav class="nav__links" aria-label="Primary navigation">
+          <a href="#how-it-works" class="nav__link">How it works</a>
+          <a href="#features" class="nav__link">Features</a>
+          <a href="#pricing" class="nav__link">Pricing</a>
+          <a href="https://docs.graphfly.dev" class="nav__link" target="_blank" rel="noopener">Docs</a>
+        </nav>
+        <div class="nav__cta">
+          <a href="/app/sign-in.html" class="btn btn--ghost btn--sm">Sign in</a>
+          <a href="/app/sign-in.html" class="btn btn--primary btn--sm">Get started free</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- ─── Hero ──────────────────────────────────────────────────────────── -->
+      <section class="hero" aria-labelledby="hero-headline">
+        <div class="hero__inner">
+          <div class="hero__badge">
+            <span class="badge">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="#2DD4BF" opacity="0.3"/><circle cx="5" cy="5" r="2" fill="#2DD4BF"/></svg>
+              Now in beta — GitHub OAuth, instant indexing
+            </span>
+          </div>
+          <h1 id="hero-headline" class="hero__headline">
+            Documentation that<br />stays&nbsp;<span class="grad">provably true</span>.
+          </h1>
+          <p class="hero__sub">
+            Graphfly builds a live Code Intelligence Graph of your codebase and keeps every doc block grounded in evidence — signatures, schemas, constraints, call sites. When your code changes, docs update automatically via PR.
+          </p>
+          <div class="hero__actions">
+            <a href="/app/sign-in.html" class="btn btn--primary btn--lg">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+              Continue with GitHub
+            </a>
+            <a href="#how-it-works" class="btn btn--ghost btn--lg">See how it works</a>
+          </div>
+          <p class="hero__footnote">Free for open-source. No credit card required.</p>
+
+          <!-- Code graph preview -->
+          <div class="hero__preview" role="img" aria-label="Graphfly workspace preview showing a code intelligence graph and documentation panel">
+            <div class="preview__chrome">
+              <div class="preview__bar">
+                <span class="dot dot--red"></span>
+                <span class="dot dot--yellow"></span>
+                <span class="dot dot--green"></span>
+                <span class="preview__url">graphfly.dev/app/acme-api</span>
+              </div>
+              <div class="preview__body">
+                <!-- Mini graph -->
+                <div class="preview__graph" aria-hidden="true">
+                  <svg viewBox="0 0 480 220" fill="none" xmlns="http://www.w3.org/2000/svg" class="preview__svg">
+                    <!-- Edges -->
+                    <line x1="240" y1="50" x2="120" y2="120" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.4"/>
+                    <line x1="240" y1="50" x2="240" y2="130" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.4"/>
+                    <line x1="240" y1="50" x2="360" y2="120" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.4"/>
+                    <line x1="120" y1="120" x2="60" y2="185" stroke="#7AA2FF" stroke-width="1" stroke-opacity="0.25"/>
+                    <line x1="120" y1="120" x2="150" y2="185" stroke="#7AA2FF" stroke-width="1" stroke-opacity="0.25"/>
+                    <line x1="240" y1="130" x2="200" y2="185" stroke="#2DD4BF" stroke-width="1" stroke-opacity="0.25"/>
+                    <line x1="240" y1="130" x2="280" y2="185" stroke="#2DD4BF" stroke-width="1" stroke-opacity="0.25"/>
+                    <line x1="360" y1="120" x2="330" y2="185" stroke="#7AA2FF" stroke-width="1" stroke-opacity="0.25"/>
+                    <line x1="360" y1="120" x2="420" y2="185" stroke="#7AA2FF" stroke-width="1" stroke-opacity="0.25"/>
+                    <!-- Root node -->
+                    <circle cx="240" cy="50" r="18" fill="#7AA2FF" fill-opacity="0.18" stroke="#7AA2FF" stroke-width="1.5"/>
+                    <text x="240" y="54" text-anchor="middle" fill="#7AA2FF" font-size="9" font-family="JetBrains Mono, monospace">createOrder</text>
+                    <!-- Mid-level nodes -->
+                    <circle cx="120" cy="120" r="14" fill="#2DD4BF" fill-opacity="0.15" stroke="#2DD4BF" stroke-width="1.5"/>
+                    <text x="120" y="124" text-anchor="middle" fill="#2DD4BF" font-size="8" font-family="JetBrains Mono, monospace">validateCart</text>
+                    <circle cx="240" cy="130" r="14" fill="#7AA2FF" fill-opacity="0.12" stroke="#7AA2FF" stroke-width="1"/>
+                    <text x="240" y="134" text-anchor="middle" fill="#7AA2FF" font-size="8" font-family="JetBrains Mono, monospace">chargeCard</text>
+                    <circle cx="360" cy="120" r="14" fill="#7AA2FF" fill-opacity="0.12" stroke="#7AA2FF" stroke-width="1"/>
+                    <text x="360" y="124" text-anchor="middle" fill="#7AA2FF" font-size="8" font-family="JetBrains Mono, monospace">notifyUser</text>
+                    <!-- Leaf nodes -->
+                    <circle cx="60" cy="185" r="10" fill="#A9B7D6" fill-opacity="0.1" stroke="#A9B7D6" stroke-width="1"/>
+                    <circle cx="150" cy="185" r="10" fill="#A9B7D6" fill-opacity="0.1" stroke="#A9B7D6" stroke-width="1"/>
+                    <circle cx="200" cy="185" r="10" fill="#F59E0B" fill-opacity="0.1" stroke="#F59E0B" stroke-width="1"/>
+                    <circle cx="280" cy="185" r="10" fill="#A9B7D6" fill-opacity="0.1" stroke="#A9B7D6" stroke-width="1"/>
+                    <circle cx="330" cy="185" r="10" fill="#A9B7D6" fill-opacity="0.1" stroke="#A9B7D6" stroke-width="1"/>
+                    <circle cx="420" cy="185" r="10" fill="#A9B7D6" fill-opacity="0.1" stroke="#A9B7D6" stroke-width="1"/>
+                  </svg>
+                </div>
+                <!-- Doc preview panel -->
+                <div class="preview__doc" aria-hidden="true">
+                  <div class="preview__doc-header">
+                    <span class="preview__doc-file">api/orders.md</span>
+                    <span class="preview__doc-badge preview__doc-badge--fresh">fresh</span>
+                  </div>
+                  <div class="preview__doc-body">
+                    <div class="preview__doc-line preview__doc-line--h2">## POST /orders</div>
+                    <div class="preview__doc-line">Creates an order, validates the cart, charges the payment method, and sends a confirmation email.</div>
+                    <div class="preview__doc-line preview__doc-line--evidence">
+                      <span class="preview__evidence-dot"></span>
+                      <span>Evidence: <code>createOrder</code> · orders/service.ts:142</span>
+                    </div>
+                    <div class="preview__doc-line preview__doc-line--h3">### Parameters</div>
+                    <div class="preview__doc-line preview__doc-line--code"><code>cartId: string</code> — UUID of the pending cart</div>
+                    <div class="preview__doc-line preview__doc-line--code"><code>paymentMethodId: string</code> — Stripe payment method ID</div>
+                    <div class="preview__doc-line preview__doc-line--evidence">
+                      <span class="preview__evidence-dot preview__evidence-dot--stale"></span>
+                      <span>Evidence: <code>OrderInput</code> schema · stale</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Social proof ───────────────────────────────────────────────────── -->
+      <section class="logos" aria-label="Works with your stack">
+        <div class="logos__inner">
+          <p class="logos__label">Works with your stack</p>
+          <div class="logos__row" aria-hidden="true">
+            <span class="logo-chip">TypeScript</span>
+            <span class="logo-chip">JavaScript</span>
+            <span class="logo-chip">Python</span>
+            <span class="logo-chip">Go</span>
+            <span class="logo-chip">Rust</span>
+            <span class="logo-chip">Java</span>
+            <span class="logo-chip">Ruby</span>
+            <span class="logo-chip">+ more</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── How it works ──────────────────────────────────────────────────── -->
+      <section class="steps" id="how-it-works" aria-labelledby="steps-headline">
+        <div class="steps__inner">
+          <div class="section-label">How it works</div>
+          <h2 id="steps-headline" class="section-headline">Three steps to living documentation.</h2>
+          <p class="section-sub">Connect your repo once. Graphfly does the rest, forever.</p>
+          <ol class="steps__list" role="list">
+            <li class="step">
+              <div class="step__num" aria-hidden="true">01</div>
+              <div class="step__icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z" fill="#E7EEFC" fill-opacity="0.7"/></svg>
+              </div>
+              <div class="step__content">
+                <h3 class="step__title">Connect your GitHub repo</h3>
+                <p class="step__desc">Sign in with GitHub. Select your code repo and docs repo. No configuration files, no YAML. Done in 60 seconds.</p>
+              </div>
+            </li>
+            <li class="step">
+              <div class="step__num" aria-hidden="true">02</div>
+              <div class="step__icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="5" r="3" stroke="#7AA2FF" stroke-width="1.5"/><circle cx="5" cy="19" r="3" stroke="#2DD4BF" stroke-width="1.5"/><circle cx="19" cy="19" r="3" stroke="#7AA2FF" stroke-width="1.5"/><line x1="12" y1="8" x2="5" y2="16" stroke="#7AA2FF" stroke-width="1.2" stroke-opacity="0.6"/><line x1="12" y1="8" x2="19" y2="16" stroke="#7AA2FF" stroke-width="1.2" stroke-opacity="0.6"/><line x1="8" y1="19" x2="16" y2="19" stroke="#2DD4BF" stroke-width="1.2" stroke-opacity="0.5"/></svg>
+              </div>
+              <div class="step__content">
+                <h3 class="step__title">Graphfly indexes your codebase</h3>
+                <p class="step__desc">A Code Intelligence Graph is built from your AST — every function, class, module, schema, and the edges between them. No source code bodies leave your environment.</p>
+              </div>
+            </li>
+            <li class="step">
+              <div class="step__num" aria-hidden="true">03</div>
+              <div class="step__icon" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="4" rx="1" stroke="#E7EEFC" stroke-width="1.5" stroke-opacity="0.7"/><rect x="3" y="10" width="12" height="3" rx="1" stroke="#7AA2FF" stroke-width="1.5"/><rect x="3" y="16" width="8" height="3" rx="1" stroke="#2DD4BF" stroke-width="1.5"/><circle cx="20" cy="18" r="3" fill="#2DD4BF" fill-opacity="0.15" stroke="#2DD4BF" stroke-width="1.5"/><line x1="20" y1="17" x2="20" y2="18.5" stroke="#2DD4BF" stroke-width="1.5" stroke-linecap="round"/><circle cx="20" cy="19.5" r="0.5" fill="#2DD4BF"/></svg>
+              </div>
+              <div class="step__content">
+                <h3 class="step__title">Docs update automatically via PR</h3>
+                <p class="step__desc">Every push to your tracked branch triggers a surgical doc update. The agent opens a PR with only the blocks that changed — always grounded in contract evidence, never guessing.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ─── Features ──────────────────────────────────────────────────────── -->
+      <section class="features" id="features" aria-labelledby="features-headline">
+        <div class="features__inner">
+          <div class="section-label">Features</div>
+          <h2 id="features-headline" class="section-headline">Built for teams who care about accuracy.</h2>
+          <p class="section-sub">Not another AI doc generator that hallucinates. Every claim is provably true.</p>
+          <div class="features__grid">
+            <article class="feature-card">
+              <div class="feature-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#7AA2FF" stroke-width="1.5"/><path d="M12 7v5l3 3" stroke="#7AA2FF" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </div>
+              <h3 class="feature-card__title">Always up-to-date</h3>
+              <p class="feature-card__desc">Docs update on every push. No manual workflow, no reminders. Your team ships code — Graphfly ships the matching docs.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4" stroke="#2DD4BF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" stroke="#2DD4BF" stroke-width="1.5"/></svg>
+              </div>
+              <h3 class="feature-card__title">Provably accurate</h3>
+              <p class="feature-card__desc">Every doc block links to evidence: the exact function signature, schema definition, and call sites that support each claim. Developers trust docs they can verify.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" stroke="#7AA2FF" stroke-width="1.5"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="#7AA2FF" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </div>
+              <h3 class="feature-card__title">Zero code exposure</h3>
+              <p class="feature-card__desc">The graph captures contracts and structure — not source code bodies. Support and docs teams see what functions do, never the implementation.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M12 5l7 7-7 7" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <h3 class="feature-card__title">Surgical PR updates</h3>
+              <p class="feature-card__desc">Only changed doc blocks appear in each PR. Reviewers see exactly what shifted and why — not a full docs regeneration every commit.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="#7AA2FF" stroke-width="1.5"/><path d="M20 20l-3-3" stroke="#7AA2FF" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </div>
+              <h3 class="feature-card__title">Semantic graph search</h3>
+              <p class="feature-card__desc">Ask questions in plain English — "What calls createOrder?" — and Graphfly traces flows across your entire codebase in milliseconds.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-card__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" stroke="#2DD4BF" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="7" r="4" stroke="#2DD4BF" stroke-width="1.5"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" stroke="#2DD4BF" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </div>
+              <h3 class="feature-card__title">Team-scale access controls</h3>
+              <p class="feature-card__desc">Role-based permissions (owner / admin / member / viewer), team invites, and full audit logs. Enterprise SSO on the roadmap.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Quote ─────────────────────────────────────────────────────────── -->
+      <section class="quote-band" aria-labelledby="quote-headline">
+        <div class="quote-band__inner">
+          <blockquote class="quote">
+            <p class="quote__text">"Documentation rot is a $100k/year problem on my team. New engineers waste their first two weeks discovering that nothing in the docs is accurate. Graphfly solves this at the root."</p>
+            <footer class="quote__footer">
+              <div class="quote__avatar" aria-hidden="true">SR</div>
+              <div>
+                <div class="quote__name">Sam R.</div>
+                <div class="quote__role">Staff Engineer, Series B SaaS</div>
+              </div>
+            </footer>
+          </blockquote>
+        </div>
+      </section>
+
+      <!-- ─── Pricing ────────────────────────────────────────────────────────── -->
+      <section class="pricing" id="pricing" aria-labelledby="pricing-headline">
+        <div class="pricing__inner">
+          <div class="section-label">Pricing</div>
+          <h2 id="pricing-headline" class="section-headline">Simple, honest pricing.</h2>
+          <p class="section-sub">Start free. Pay as your team grows.</p>
+          <div class="pricing__grid">
+            <article class="pricing-card">
+              <div class="pricing-card__tier">Free</div>
+              <div class="pricing-card__price"><span class="pricing-card__amount">$0</span><span class="pricing-card__period">/month</span></div>
+              <p class="pricing-card__tagline">For open-source and solo projects</p>
+              <ul class="pricing-card__features" role="list">
+                <li class="pricing-feature pricing-feature--ok">1 project</li>
+                <li class="pricing-feature pricing-feature--ok">Unlimited indexing</li>
+                <li class="pricing-feature pricing-feature--ok">Basic doc generation</li>
+                <li class="pricing-feature pricing-feature--ok">GitHub OAuth</li>
+                <li class="pricing-feature pricing-feature--off">Multiple projects</li>
+                <li class="pricing-feature pricing-feature--off">GitHub Apps (fine-grained perms)</li>
+              </ul>
+              <a href="/app/sign-in.html" class="btn btn--outline btn--full">Get started free</a>
+            </article>
+            <article class="pricing-card pricing-card--pro">
+              <div class="pricing-card__badge">Most popular</div>
+              <div class="pricing-card__tier">Pro</div>
+              <div class="pricing-card__price"><span class="pricing-card__amount">$29</span><span class="pricing-card__period">/seat/month</span></div>
+              <p class="pricing-card__tagline">For engineering teams</p>
+              <ul class="pricing-card__features" role="list">
+                <li class="pricing-feature pricing-feature--ok">Unlimited projects</li>
+                <li class="pricing-feature pricing-feature--ok">Unlimited indexing</li>
+                <li class="pricing-feature pricing-feature--ok">Full doc agent (surgical updates)</li>
+                <li class="pricing-feature pricing-feature--ok">GitHub Apps support</li>
+                <li class="pricing-feature pricing-feature--ok">Coverage dashboard</li>
+                <li class="pricing-feature pricing-feature--ok">Team roles + invites</li>
+                <li class="pricing-feature pricing-feature--ok">Priority support</li>
+              </ul>
+              <a href="/app/sign-in.html" class="btn btn--primary btn--full">Start free trial</a>
+            </article>
+            <article class="pricing-card">
+              <div class="pricing-card__tier">Enterprise</div>
+              <div class="pricing-card__price"><span class="pricing-card__amount">Custom</span></div>
+              <p class="pricing-card__tagline">For large engineering orgs</p>
+              <ul class="pricing-card__features" role="list">
+                <li class="pricing-feature pricing-feature--ok">Everything in Pro</li>
+                <li class="pricing-feature pricing-feature--ok">Self-hosted option</li>
+                <li class="pricing-feature pricing-feature--ok">SSO / SAML</li>
+                <li class="pricing-feature pricing-feature--ok">SLA + dedicated support</li>
+                <li class="pricing-feature pricing-feature--ok">Custom LLM configuration</li>
+                <li class="pricing-feature pricing-feature--ok">Audit logs + compliance exports</li>
+              </ul>
+              <a href="mailto:sales@graphfly.dev" class="btn btn--outline btn--full">Contact sales</a>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── CTA strip ─────────────────────────────────────────────────────── -->
+      <section class="cta-strip" aria-labelledby="cta-headline">
+        <div class="cta-strip__inner">
+          <h2 id="cta-headline" class="cta-strip__headline">Your documentation is already out of date.</h2>
+          <p class="cta-strip__sub">Connect your repo and watch it fix itself.</p>
+          <a href="/app/sign-in.html" class="btn btn--primary btn--lg">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            Get started with GitHub
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <!-- ─── Footer ───────────────────────────────────────────────────────────── -->
+    <footer class="footer" role="contentinfo">
+      <div class="footer__inner">
+        <div class="footer__brand">
+          <a href="/" class="nav__logo" aria-label="Graphfly home">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="4" r="2.5" fill="#7AA2FF"/>
+              <circle cx="4" cy="18" r="2.5" fill="#2DD4BF"/>
+              <circle cx="20" cy="18" r="2.5" fill="#7AA2FF"/>
+              <line x1="12" y1="6.5" x2="4" y2="15.5" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.7"/>
+              <line x1="12" y1="6.5" x2="20" y2="15.5" stroke="#7AA2FF" stroke-width="1.5" stroke-opacity="0.7"/>
+              <line x1="6.5" y1="18" x2="17.5" y2="18" stroke="#2DD4BF" stroke-width="1.5" stroke-opacity="0.5"/>
+            </svg>
+            <span>Graphfly</span>
+          </a>
+          <p class="footer__tagline">Documentation that stays true.</p>
+        </div>
+        <nav class="footer__links" aria-label="Footer navigation">
+          <div class="footer__col">
+            <div class="footer__col-title">Product</div>
+            <a href="#features" class="footer__link">Features</a>
+            <a href="#pricing" class="footer__link">Pricing</a>
+            <a href="#how-it-works" class="footer__link">How it works</a>
+            <a href="https://docs.graphfly.dev" class="footer__link" target="_blank" rel="noopener">Documentation</a>
+          </div>
+          <div class="footer__col">
+            <div class="footer__col-title">Company</div>
+            <a href="/about" class="footer__link">About</a>
+            <a href="https://github.com/graphfly" class="footer__link" target="_blank" rel="noopener">GitHub</a>
+            <a href="mailto:hello@graphfly.dev" class="footer__link">Contact</a>
+          </div>
+          <div class="footer__col">
+            <div class="footer__col-title">Legal</div>
+            <a href="/privacy" class="footer__link">Privacy</a>
+            <a href="/terms" class="footer__link">Terms</a>
+            <a href="/security" class="footer__link">Security</a>
+          </div>
+        </nav>
+      </div>
+      <div class="footer__bottom">
+        <span>© 2026 Graphfly. All rights reserved.</span>
+      </div>
+    </footer>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
