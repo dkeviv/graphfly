@@ -75,6 +75,86 @@ state.toast = createToastHub({ rootEl: toastsEl });
 state.realtime = createRealtimeClient({ apiUrl: state.apiUrl, tenantId: state.tenantId, repoId: state.repoId, authToken: state.authToken });
 state.realtime.connect();
 
+// ─── Global indexing banner + agent-complete notifications ──────────────────
+const indexingBannerEl = document.getElementById('indexingBanner');
+const indexingBannerTextEl = document.getElementById('indexingBannerText');
+const indexingBannerBarEl = document.getElementById('indexingBannerBar');
+const indexingBannerMetaEl = document.getElementById('indexingBannerMeta');
+const indexingBannerSpinEl = document.getElementById('indexingBannerSpin');
+
+let indexingBannerTimer = null;
+
+function showIndexingBanner({ text, meta = '', pct = null }) {
+  if (!indexingBannerEl) return;
+  indexingBannerEl.classList.remove('ws__banner--hidden');
+  if (indexingBannerTextEl) indexingBannerTextEl.textContent = text;
+  if (indexingBannerMetaEl) indexingBannerMetaEl.textContent = meta;
+  if (indexingBannerBarEl) {
+    if (pct != null) {
+      indexingBannerBarEl.value = Math.min(100, Math.max(0, Number(pct) || 0));
+      indexingBannerBarEl.style.display = '';
+    } else {
+      indexingBannerBarEl.style.display = 'none';
+    }
+  }
+  if (indexingBannerSpinEl) indexingBannerSpinEl.textContent = '↻';
+}
+
+function hideIndexingBanner(delay = 0) {
+  clearTimeout(indexingBannerTimer);
+  if (delay > 0) {
+    indexingBannerTimer = setTimeout(() => {
+      indexingBannerEl?.classList.add('ws__banner--hidden');
+    }, delay);
+  } else {
+    indexingBannerEl?.classList.add('ws__banner--hidden');
+  }
+}
+
+state.realtime.subscribe((evt) => {
+  if (!evt) return;
+  const t = String(evt?.type ?? '');
+  const pay = evt?.payload ?? {};
+  // Only show for the active project (or any project if repoId matches)
+  const evtRepo = evt?.repoId ?? null;
+  if (evtRepo && evtRepo !== state.repoId) return;
+
+  if (t === 'index:progress') {
+    clearTimeout(indexingBannerTimer);
+    const phase = pay?.phase ?? pay?.message ?? 'Processing…';
+    const file = pay?.currentFile ? ` · ${String(pay.currentFile).split('/').slice(-1)[0]}` : '';
+    const nodes = pay?.nodes != null ? ` · ${pay.nodes} nodes` : '';
+    const edges = pay?.edges != null ? ` · ${pay.edges} edges` : '';
+    const pct = pay?.pct ?? pay?.percent ?? null;
+    showIndexingBanner({
+      text: `Indexing: ${phase}`,
+      meta: `${file}${nodes}${edges}`.replace(/^ · /, ''),
+      pct
+    });
+  } else if (t === 'index:complete') {
+    const nodes = pay?.nodes != null ? `${pay.nodes} nodes` : '';
+    const edges = pay?.edges != null ? ` · ${pay.edges} edges` : '';
+    if (indexingBannerSpinEl) indexingBannerSpinEl.textContent = '✓';
+    showIndexingBanner({ text: 'Indexing complete', meta: `${nodes}${edges}`.replace(/^ · /, ''), pct: 100 });
+    state.toast?.toast?.({ kind: 'ok', title: 'Indexing complete', message: `${nodes}${edges}`.replace(/^ · /, '') || 'Graph updated.' });
+    hideIndexingBanner(3000);
+  } else if (t === 'index:error') {
+    if (indexingBannerSpinEl) indexingBannerSpinEl.textContent = '✗';
+    showIndexingBanner({ text: `Indexing failed: ${pay?.message ?? 'unknown error'}`, meta: '', pct: null });
+    state.toast?.toast?.({ kind: 'error', title: 'Indexing failed', message: pay?.message ?? 'Check Git panel for details.' });
+    hideIndexingBanner(6000);
+  } else if (t === 'agent:complete') {
+    const prUrl = pay?.prUrl ?? null;
+    const prNum = pay?.prNumber ?? null;
+    state.toast?.toast?.({
+      kind: 'ok',
+      title: 'Docs PR opened',
+      message: prUrl ? prUrl : prNum ? `PR #${prNum}` : 'A docs PR was opened. Check the Git panel.'
+    });
+  }
+});
+// ────────────────────────────────────────────────────────────────────────────
+
 function normalizeLlmModel(v) {
   if (typeof v !== 'string') return null;
   const s = v.trim();

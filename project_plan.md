@@ -78,8 +78,11 @@
 | Billing | Stripe customer lifecycle | Auto-create + persist Stripe customer when missing; checkout/portal require stored customer | DONE | `npm test` |
 | Security | Secrets management hardening | Keyring-based secret key rotation + rewrap endpoint; no tokens in logs; RLS verified in CI | DONE | `npm test` + CI |
 | Observability | Metrics + tracing | Structured JSON logs (API) + request IDs + Prometheus `/metrics` (token protected) + Admin dashboard | DONE | `npm test` + integration |
-| UX | One-click onboarding | Sign in → create project (code repo + locked branch + docs repo) → auto index + docs PR | PARTIAL | manual QA |
-| UX | Citations + activity | Chat citations deep-link to docs/graph/flows/git; live agent/assistant activity visible in Chats | PARTIAL | `npm test` + manual QA |
+| UX | One-click onboarding | Sign in → create project (code repo + locked branch + docs repo) → auto index + docs PR | DONE | manual QA |
+| UX | Citations + activity | Chat citations deep-link to docs/graph/flows/git; live agent/assistant activity visible in Chats | DONE | `npm test` + manual QA |
+| UX | Global indexing banner | Sticky progress banner below top nav during index runs; live phase/file/node/edge counters; auto-dismiss on complete | DONE | manual QA |
+| UX | Agent-complete notification | Global toast fires with PR link when `agent:complete` event received; works across all panels | DONE | manual QA |
+| UX | Coverage tab in Graph canvas | Coverage dashboard (overall %, by type, undocumented entrypoints, unresolved imports) accessible as tab inside Graph canvas | DONE | `npm test` + manual QA |
 | UX | Feedback capture | Feedback form posts to `/api/v1/feedback` and is recorded in `audit_log` (best-effort) | DONE | `npm test` |
 
 ## Gaps (Tracked, Phase-1 Blockers)

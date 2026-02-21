@@ -28,6 +28,13 @@
         </div>
       </header>
 
+      <div id="indexingBanner" class="ws__banner ws__banner--hidden" role="status" aria-live="polite">
+        <span id="indexingBannerSpin">↻</span>
+        <span id="indexingBannerText">Indexing…</span>
+        <progress id="indexingBannerBar" class="ws__banner__progress" value="0" max="100"></progress>
+        <span id="indexingBannerMeta" class="small k"></span>
+      </div>
+
       <div class="ws__body">
         <nav class="rail" aria-label="Primary">
           <button class="rail__item" type="button" data-nav="chats" aria-label="Chats" title="Chats">💬</button>

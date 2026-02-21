@@ -79,11 +79,53 @@ body {
   gap: 10px;
 }
 
+.ws__banner {
+  border-bottom: 1px solid var(--border);
+  background: rgba(122, 162, 255, 0.06);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--text-secondary, #a9b7d6);
+  flex-shrink: 0;
+}
+
+.ws__banner--hidden {
+  display: none;
+}
+
+.ws__banner__progress {
+  flex: 1;
+  height: 4px;
+  appearance: none;
+  border: none;
+  border-radius: 4px;
+  background: rgba(122, 162, 255, 0.15);
+  max-width: 180px;
+}
+
+.ws__banner__progress::-webkit-progress-bar {
+  background: rgba(122, 162, 255, 0.15);
+  border-radius: 4px;
+}
+
+.ws__banner__progress::-webkit-progress-value {
+  background: #7aa2ff;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.ws__banner__progress::-moz-progress-bar {
+  background: #7aa2ff;
+  border-radius: 4px;
+}
+
 .ws__body {
   display: grid;
   grid-template-columns: 56px 360px 1fr;
-  height: calc(100% - 60px);
-  min-width: 0;
+  flex: 1;
+  min-height: 0;
 }
 
 .rail {
@@ -355,8 +397,22 @@ body {
   border-color: rgba(255, 95, 109, 0.45);
 }
 
+.banner--info {
+  border-color: rgba(122, 162, 255, 0.5);
+  background: rgba(122, 162, 255, 0.07);
+}
+
 .banner--hidden {
   display: none;
+}
+
+/* Activity list item state modifiers */
+.list__item--done .h {
+  color: var(--success, #2dd4bf);
+}
+
+.list__item--error .h {
+  color: var(--error, #ff5f6d);
 }
 
 .details {

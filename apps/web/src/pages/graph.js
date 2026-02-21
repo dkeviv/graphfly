@@ -645,7 +645,191 @@ export function renderGraphPage({ state, pageEl }) {
     // ignore
   }
 
-  pageEl.appendChild(
+  // ── Coverage sub-view ──────────────────────────────────────────────────────
+  function buildCoverageView() {
+    const pctText = (v) => `${Number.isFinite(Number(v)) ? Number(v) : 0}%`;
+    const statusEl = el('div', { class: 'small' }, ['Loading coverage…']);
+    const cardsEl = el('div', { class: 'grid4' });
+    const entrypointsEl = el('ul', { class: 'list' });
+    const unresolvedEl = el('ul', { class: 'list' });
+    const selected = new Set();
+    const documentBtn = el('button', { class: 'button', type: 'button' }, ['Document Selected']);
+    documentBtn.disabled = true;
+
+    documentBtn.addEventListener('click', async () => {
+      const symbolUids = Array.from(selected);
+      if (!symbolUids.length) return;
+      documentBtn.disabled = true;
+      statusEl.textContent = `Enqueuing ${symbolUids.length} doc targets…`;
+      try {
+        await api.coverageDocument({ symbolUids });
+        statusEl.textContent = 'Doc generation enqueued. Check Git → PR Runs.';
+        selected.clear();
+        await loadCoverage();
+      } catch (e) {
+        statusEl.textContent = `Document failed: ${String(e?.message ?? e)}`;
+      } finally {
+        documentBtn.disabled = selected.size === 0;
+      }
+    });
+
+    const view = el('div', { class: 'stack' }, [
+      el('div', { class: 'card' }, [
+        el('div', { class: 'row' }, [
+          el('div', {}, [el('div', { class: 'card__title' }, ['Documentation Coverage']), statusEl]),
+          el('div', { class: 'row__spacer' }, []),
+          el('button', { class: 'button', type: 'button', onclick: () => loadCoverage() }, ['Refresh'])
+        ]),
+        el('div', { class: 'divider' }),
+        cardsEl
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'row' }, [
+          el('div', {}, [
+            el('div', { class: 'card__title' }, ['Undocumented Entry Points']),
+            el('div', { class: 'small' }, ['Sorted by blast radius. Select to enqueue doc generation.'])
+          ]),
+          el('div', { class: 'row__spacer' }, []),
+          documentBtn
+        ]),
+        el('div', { class: 'divider' }),
+        entrypointsEl
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card__title' }, ['Unresolved Imports']),
+        el('div', { class: 'small' }, ['Internal/alias imports that could not be resolved to a known file.']),
+        el('div', { class: 'divider' }),
+        unresolvedEl
+      ])
+    ]);
+
+    async function loadCoverage() {
+      statusEl.textContent = 'Loading coverage…';
+      cardsEl.innerHTML = '';
+      entrypointsEl.innerHTML = '';
+      unresolvedEl.innerHTML = '';
+      try {
+        const [summary, eps, unresolved] = await Promise.all([
+          api.coverageSummary(),
+          api.coverageUndocumentedEntrypoints({ limit: 50 }),
+          api.coverageUnresolvedImports()
+        ]);
+
+        const overall = summary?.overall ?? { documented: 0, total: 0, pct: 0 };
+        const byType = summary?.byType ?? {};
+
+        const card = (label, value, sub) =>
+          el('div', { class: 'kpi' }, [
+            el('div', { class: 'kpi__label' }, [label]),
+            el('div', { class: 'kpi__value' }, [value]),
+            el('div', { class: 'kpi__sub' }, [sub])
+          ]);
+
+        cardsEl.innerHTML = '';
+        cardsEl.appendChild(card('Overall', pctText(overall.pct), `${overall.documented ?? 0} / ${overall.total ?? 0}`));
+        for (const [k, v] of Object.entries(byType)) {
+          cardsEl.appendChild(card(k, pctText(v?.pct ?? 0), `${v?.documented ?? 0} / ${v?.total ?? 0}`));
+        }
+        statusEl.textContent = `Coverage loaded.`;
+
+        const list = eps?.entrypoints ?? [];
+        if (!list.length) {
+          entrypointsEl.appendChild(el('li', { class: 'list__item' }, [el('div', { class: 'small' }, ['No undocumented entry points found.'])]));
+        } else {
+          for (const it of list) {
+            const uid = it.symbol_uid ?? it.symbolUid;
+            const cb = el('input', { type: 'checkbox' });
+            cb.addEventListener('change', () => {
+              if (cb.checked) selected.add(uid);
+              else selected.delete(uid);
+              documentBtn.disabled = selected.size === 0;
+            });
+            entrypointsEl.appendChild(
+              el('li', { class: 'list__item' }, [
+                el('div', { class: 'row' }, [
+                  cb,
+                  el('div', {}, [
+                    el('div', { class: 'h' }, [String(it.qualified_name ?? it.qualifiedName ?? uid ?? '')]),
+                    el('div', { class: 'small k' }, [
+                      `${String(it.node_type ?? it.nodeType ?? '')} • callers=${it.caller_count ?? it.callerCount ?? 0} • ${String(it.file_path ?? it.filePath ?? '')}`
+                    ])
+                  ]),
+                  el('div', { class: 'row__spacer' }),
+                  el('button', { class: 'button', type: 'button', onclick: () => setFocus(uid) }, ['Focus'])
+                ])
+              ])
+            );
+          }
+        }
+
+        const unresArr = unresolved?.imports ?? [];
+        if (!unresArr.length) {
+          unresolvedEl.appendChild(el('li', { class: 'list__item' }, [el('div', { class: 'small' }, ['No unresolved imports found.'])]));
+        } else {
+          for (const imp of unresArr.slice(0, 50)) {
+            unresolvedEl.appendChild(
+              el('li', { class: 'list__item' }, [
+                el('div', { class: 'h' }, [String(imp.importSpecifier ?? imp.import_specifier ?? imp.specifier ?? '')]),
+                el('div', { class: 'small k' }, [
+                  `from ${String(imp.sourceFile ?? imp.source_file ?? '')} • ${String(imp.category ?? 'unknown')}`
+                ])
+              ])
+            );
+          }
+          if (unresArr.length > 50) {
+            unresolvedEl.appendChild(el('li', { class: 'list__item' }, [el('div', { class: 'small k' }, [`… +${unresArr.length - 50} more`])]));
+          }
+        }
+      } catch (e) {
+        statusEl.textContent = `Coverage load failed: ${String(e?.message ?? e)}`;
+      }
+    }
+
+    loadCoverage();
+    return view;
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // ── Tab bar: Graph | Coverage ─────────────────────────────────────────────
+  let activeTab = 'graph';
+  const graphTabBtn = el('button', { class: 'button button--primary', type: 'button' }, ['Graph']);
+  const coverageTabBtn = el('button', { class: 'button', type: 'button' }, ['Coverage']);
+  const tabBarEl = el('div', { class: 'card' }, [
+    el('div', { class: 'row' }, [
+      el('div', { class: 'card__title' }, ['Code Graph']),
+      el('div', { class: 'row__spacer' }),
+      graphTabBtn,
+      coverageTabBtn
+    ])
+  ]);
+
+  const graphViewEl = el('div', { class: 'stack' }, []);
+  const coverageViewEl = el('div', { class: 'stack' }, []);
+  coverageViewEl.style.display = 'none';
+
+  function switchTab(tab) {
+    activeTab = tab;
+    graphTabBtn.className = tab === 'graph' ? 'button button--primary' : 'button';
+    coverageTabBtn.className = tab === 'coverage' ? 'button button--primary' : 'button';
+    graphViewEl.style.display = tab === 'graph' ? '' : 'none';
+    coverageViewEl.style.display = tab === 'coverage' ? '' : 'none';
+  }
+
+  graphTabBtn.addEventListener('click', () => switchTab('graph'));
+  coverageTabBtn.addEventListener('click', () => {
+    if (activeTab !== 'coverage') {
+      // Build coverage view lazily on first open
+      if (!coverageViewEl.children.length) {
+        coverageViewEl.appendChild(buildCoverageView());
+      }
+      switchTab('coverage');
+    }
+  });
+
+  pageEl.appendChild(tabBarEl);
+
+  // Graph view contents
+  graphViewEl.appendChild(
     el('div', { class: 'grid2' }, [
       el('div', { class: 'card' }, [
         el('div', { class: 'card__title' }, ['Search + Focus Mode']),
@@ -663,7 +847,8 @@ export function renderGraphPage({ state, pageEl }) {
       el('div', { class: 'stack' }, [evidenceEl, focusEl])
     ])
   );
-
+  pageEl.appendChild(graphViewEl);
+  pageEl.appendChild(coverageViewEl);
   pageEl.prepend(bannerEl);
 
   const initialFocus = state.graphFocusSymbolUid ? String(state.graphFocusSymbolUid).trim() : '';
