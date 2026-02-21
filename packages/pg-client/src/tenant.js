@@ -13,7 +13,7 @@ export async function withTenantClient({ pool, tenantId, searchPath = null }, fn
     if (typeof searchPath === 'string' && searchPath.length > 0) {
       await client.query(`SET search_path TO ${searchPath}`);
     }
-    await client.query('SET app.tenant_id = $1', [tenantId]);
+    await client.query(`SET app.tenant_id = '${tenantId}'`);
     return await fn(client);
   } finally {
     try {

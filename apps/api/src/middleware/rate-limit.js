@@ -5,8 +5,8 @@ export function makeRateLimitMiddleware({ entitlementsStore, limiter = null } = 
   const bucket = limiter ?? new TokenBucketLimiter({ capacity: 120, refillPerSecond: 2 });
 
   return async (ctx) => {
-    const tenantId = ctx.query?.tenantId ?? ctx.body?.tenantId ?? 't-1';
-    const plan = await Promise.resolve(entitlementsStore?.getPlan?.(tenantId) ?? 'free');
+    const tenantId = ctx.auth?.tenantId ?? ctx.query?.tenantId ?? ctx.body?.tenantId ?? '00000000-0000-0000-0000-000000000001';
+    const plan = await Promise.resolve(entitlementsStore?.getPlan?.(tenantId) ?? 'free').catch(() => 'free');
     const { rpm } = limitsForPlan(plan);
 
     // Convert rpm to refill/sec while keeping a small burst capacity.
